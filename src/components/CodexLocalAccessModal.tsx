@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next';
 import type { CodexAccount } from '../types/codex';
 import type { CodexAccountGroup } from '../services/codexAccountGroupService';
 import type {
+  CodexLocalAccessApiKey,
   CodexLocalAccessRoutingStrategy,
   CodexLocalAccessState,
   CodexLocalAccessStatsWindow,
@@ -70,7 +71,20 @@ interface CodexLocalAccessModalProps {
   onUpdateRoutingStrategy: (
     strategy: CodexLocalAccessRoutingStrategy,
   ) => Promise<unknown> | unknown;
-  onRotateApiKey: () => Promise<unknown> | unknown;
+  onCreateApiKey: (payload: {
+    name: string;
+    monthlyTokenLimit: number | null;
+  }) => Promise<unknown> | unknown;
+  onUpdateApiKey: (
+    apiKeyId: string,
+    payload: {
+      name: string;
+      enabled: boolean;
+      monthlyTokenLimit: number | null;
+    },
+  ) => Promise<unknown> | unknown;
+  onRotateApiKey: (apiKeyId: string) => Promise<unknown> | unknown;
+  onDeleteApiKey: (apiKeyId: string) => Promise<unknown> | unknown;
   onKillPort: () => Promise<unknown> | unknown;
   onToggleEnabled: () => Promise<unknown> | unknown;
   onTest: () => Promise<number> | number;
@@ -81,7 +95,12 @@ interface CodexLocalAccessModalProps {
 }
 
 type StatsRangeKey = 'daily' | 'weekly' | 'monthly';
-type CopyableField = 'apiPortUrl' | 'baseUrl' | 'apiKey' | 'modelId';
+type CopyableField = 'apiPortUrl' | 'baseUrl' | 'modelId' | `apiKey:${string}`;
+type ApiKeyDraft = {
+  name: string;
+  enabled: boolean;
+  monthlyTokenLimit: string;
+};
 const CODEX_LOCAL_ACCESS_STATS_RANGE_STORAGE_KEY =
   'agtools.codex.local_access.stats_range.v1';
 
@@ -121,6 +140,34 @@ function formatLatencyMs(value: number): string {
   return `${Math.round(value)}ms`;
 }
 
+function formatLocalDateTime(value: number | null | undefined): string {
+  if (!value) return '--';
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(value));
+  } catch {
+    return '--';
+  }
+}
+
+function formatApiKeyValue(apiKey: string, visible: boolean): string {
+  if (visible) return apiKey;
+  if (apiKey.length <= 14) return '••••••••••••';
+  return `${apiKey.slice(0, 10)}••••••••••••`;
+}
+
+function draftFromApiKey(apiKey: CodexLocalAccessApiKey): ApiKeyDraft {
+  return {
+    name: apiKey.name,
+    enabled: apiKey.enabled,
+    monthlyTokenLimit: apiKey.monthlyTokenLimit ? String(apiKey.monthlyTokenLimit) : '',
+  };
+}
+
 function formatQuotaPoolLabel(
   baseLabel: string,
   pool: CodexQuotaPoolItem,
@@ -152,7 +199,10 @@ export function CodexLocalAccessModal({
   onRefreshStats,
   onUpdatePort,
   onUpdateRoutingStrategy,
+  onCreateApiKey,
+  onUpdateApiKey,
   onRotateApiKey,
+  onDeleteApiKey,
   onKillPort,
   onToggleEnabled,
   onTest,
@@ -171,7 +221,10 @@ export function CodexLocalAccessModal({
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [portInput, setPortInput] = useState('');
-  const [keyVisible, setKeyVisible] = useState(false);
+  const [visibleApiKeyIds, setVisibleApiKeyIds] = useState<Set<string>>(new Set());
+  const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, ApiKeyDraft>>({});
+  const [newApiKeyName, setNewApiKeyName] = useState('');
+  const [newApiKeyLimit, setNewApiKeyLimit] = useState('');
   const [copiedField, setCopiedField] = useState<CopyableField | null>(null);
   const [selectedModelId, setSelectedModelId] = useState('');
   const [statsRange, setStatsRange] = useState<StatsRangeKey>(() => readStoredStatsRange());
@@ -179,6 +232,7 @@ export function CodexLocalAccessModal({
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const collection = state?.collection ?? null;
+  const apiKeys = useMemo(() => collection?.apiKeys ?? [], [collection?.apiKeys]);
   const apiPortUrl = state?.apiPortUrl ?? '';
   const baseUrl = state?.baseUrl ?? '';
   const modelIds = state?.modelIds ?? [];
@@ -297,7 +351,9 @@ export function CodexLocalAccessModal({
     setRestrictFreeAccounts(collection?.restrictFreeAccounts ?? true);
     setError('');
     setNotice('');
-    setKeyVisible(false);
+    setVisibleApiKeyIds(new Set());
+    setNewApiKeyName('');
+    setNewApiKeyLimit('');
     setCopiedField(null);
     setPortInput(collection?.port ? String(collection.port) : '');
     if (mode === 'members') {
@@ -306,6 +362,15 @@ export function CodexLocalAccessModal({
       }, 0);
     }
   }, [collection?.port, collection?.restrictFreeAccounts, isOpen, mode, normalizedInitialSelectedIds]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const nextDrafts: Record<string, ApiKeyDraft> = {};
+    apiKeys.forEach((apiKey) => {
+      nextDrafts[apiKey.id] = draftFromApiKey(apiKey);
+    });
+    setApiKeyDrafts(nextDrafts);
+  }, [apiKeys, isOpen]);
 
   useEffect(() => {
     if (modelIds.length === 0) {
@@ -548,6 +613,18 @@ export function CodexLocalAccessModal({
     return next;
   }, [selectedStatsWindow?.accounts]);
 
+  const windowStatsByApiKeyId = useMemo(() => {
+    const next = new Map<string, NonNullable<CodexLocalAccessState['stats']>['apiKeys'][number]>();
+    selectedStatsWindow?.apiKeys.forEach((item) => next.set(item.apiKeyId, item));
+    return next;
+  }, [selectedStatsWindow?.apiKeys]);
+
+  const monthlyStatsByApiKeyId = useMemo(() => {
+    const next = new Map<string, NonNullable<CodexLocalAccessState['stats']>['apiKeys'][number]>();
+    stats?.monthly.apiKeys.forEach((item) => next.set(item.apiKeyId, item));
+    return next;
+  }, [stats?.monthly.apiKeys]);
+
   const currentMemberStats = useMemo(() => {
     const currentIds = collection?.accountIds ?? [];
     return currentIds
@@ -745,7 +822,84 @@ export function CodexLocalAccessModal({
     );
   };
 
-  const handleResetKey = async () => {
+  const parseMonthlyTokenLimit = (value: string): number | null => {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = Number(trimmed);
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+      throw new Error(
+        t('codex.localAccess.apiKeyLimitInvalid', '请输入大于 0 的整数 Token 上限'),
+      );
+    }
+    return parsed;
+  };
+
+  const updateApiKeyDraft = (apiKeyId: string, patch: Partial<ApiKeyDraft>) => {
+    setApiKeyDrafts((prev) => {
+      const apiKey = apiKeys.find((item) => item.id === apiKeyId);
+      const current = prev[apiKeyId] ?? (apiKey ? draftFromApiKey(apiKey) : null);
+      if (!current) return prev;
+      return {
+        ...prev,
+        [apiKeyId]: {
+          ...current,
+          ...patch,
+        },
+      };
+    });
+  };
+
+  const isApiKeyDraftDirty = (apiKey: CodexLocalAccessApiKey): boolean => {
+    const draft = apiKeyDrafts[apiKey.id];
+    if (!draft) return false;
+    return (
+      draft.name !== apiKey.name ||
+      draft.enabled !== apiKey.enabled ||
+      draft.monthlyTokenLimit !== (apiKey.monthlyTokenLimit ? String(apiKey.monthlyTokenLimit) : '')
+    );
+  };
+
+  const handleCreateApiKey = async () => {
+    await runAction(
+      async () => {
+        await onCreateApiKey({
+          name: newApiKeyName.trim() || t('codex.localAccess.apiKeyDefaultName', 'API Key'),
+          monthlyTokenLimit: parseMonthlyTokenLimit(newApiKeyLimit),
+        });
+        setNewApiKeyName('');
+        setNewApiKeyLimit('');
+      },
+      t('codex.localAccess.apiKeyCreateSuccess', 'API 服务密钥已创建'),
+    );
+  };
+
+  const handleSaveApiKey = async (apiKey: CodexLocalAccessApiKey) => {
+    const draft = apiKeyDrafts[apiKey.id] ?? draftFromApiKey(apiKey);
+    await runAction(
+      async () => {
+        await onUpdateApiKey(apiKey.id, {
+          name: draft.name.trim() || apiKey.name,
+          enabled: draft.enabled,
+          monthlyTokenLimit: parseMonthlyTokenLimit(draft.monthlyTokenLimit),
+        });
+      },
+      t('codex.localAccess.apiKeyUpdateSuccess', 'API 服务密钥已更新'),
+    );
+  };
+
+  const toggleApiKeyVisible = (apiKeyId: string) => {
+    setVisibleApiKeyIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(apiKeyId)) {
+        next.delete(apiKeyId);
+      } else {
+        next.add(apiKeyId);
+      }
+      return next;
+    });
+  };
+
+  const handleResetKey = async (apiKey: CodexLocalAccessApiKey) => {
     const confirmed = await confirmDialog(
       t(
         'codex.localAccess.rotateConfirmMessage',
@@ -765,10 +919,36 @@ export function CodexLocalAccessModal({
 
     await runAction(
       async () => {
-        await onRotateApiKey();
-        setKeyVisible(true);
+        await onRotateApiKey(apiKey.id);
+        setVisibleApiKeyIds((prev) => new Set(prev).add(apiKey.id));
       },
       t('codex.localAccess.rotateSuccess', 'API 服务密钥已重置'),
+    );
+  };
+
+  const handleDeleteApiKey = async (apiKey: CodexLocalAccessApiKey) => {
+    const confirmed = await confirmDialog(
+      t('codex.localAccess.apiKeyDeleteConfirm', {
+        name: apiKey.name,
+        defaultValue: '确定要删除 API 服务密钥 {{name}} 吗？删除后该密钥会立即失效。',
+      }),
+      {
+        title: t('codex.localAccess.apiKeyDelete', '删除密钥'),
+        kind: 'warning',
+        okLabel: t('common.delete'),
+        cancelLabel: t('common.cancel'),
+      },
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    await runAction(
+      async () => {
+        await onDeleteApiKey(apiKey.id);
+      },
+      t('codex.localAccess.apiKeyDeleteSuccess', 'API 服务密钥已删除'),
     );
   };
 
@@ -1094,52 +1274,191 @@ export function CodexLocalAccessModal({
                       </code>
                     </div>
 
-                    <div className="codex-local-access-config-card codex-local-access-config-card-key">
+                    <div className="codex-local-access-config-card codex-local-access-api-key-create-card">
                       <div className="codex-local-access-config-head">
                         <span className="codex-local-access-config-label">
-                          {t('codex.localAccess.apiKey', '密钥')}
+                          {t('codex.localAccess.apiKeysTitle', 'API Keys')}
                         </span>
-                        <div className="codex-local-access-config-actions">
-                          <button
-                            type="button"
-                            className="folder-icon-btn"
-                            onClick={() => setKeyVisible((prev) => !prev)}
-                            title={
-                              keyVisible
-                                ? t('codex.localAccess.hideKey', '隐藏密钥')
-                                : t('codex.localAccess.showKey', '显示密钥')
-                            }
-                          >
-                            {keyVisible ? <EyeOff size={14} /> : <Eye size={14} />}
-                          </button>
-                          <button
-                            type="button"
-                            className="folder-icon-btn"
-                            onClick={() => void handleCopy('apiKey', collection.apiKey)}
-                            title={t('common.copy', '复制')}
-                          >
-                            {copiedField === 'apiKey' ? <Check size={14} /> : <Copy size={14} />}
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => void handleResetKey()}
-                            disabled={saving || testing || starting}
-                          >
-                            {saving ? (
-                              <RefreshCw size={14} className="loading-spinner" />
-                            ) : (
-                              <RefreshCw size={14} />
-                            )}
-                            {t('codex.localAccess.rotateKey', '重置密钥')}
-                          </button>
-                        </div>
+                        <span className="codex-local-access-view-only-badge">
+                          {t('codex.localAccess.apiKeysCount', {
+                            count: apiKeys.length,
+                            defaultValue: '{{count}} 个',
+                          })}
+                        </span>
                       </div>
-                      <code className="codex-local-access-code" title={collection.apiKey}>
-                        {keyVisible
-                          ? collection.apiKey
-                          : `${collection.apiKey.slice(0, 10)}••••••••••••`}
-                      </code>
+                      <div className="codex-local-access-api-key-create-row">
+                        <input
+                          type="text"
+                          value={newApiKeyName}
+                          onChange={(event) => setNewApiKeyName(event.target.value)}
+                          placeholder={t('codex.localAccess.apiKeyNamePlaceholder', '用户或用途')}
+                          disabled={actionBusy}
+                        />
+                        <input
+                          type="number"
+                          min={1}
+                          value={newApiKeyLimit}
+                          onChange={(event) => setNewApiKeyLimit(event.target.value)}
+                          placeholder={t('codex.localAccess.apiKeyLimitPlaceholder', '30天 Token 上限')}
+                          disabled={actionBusy}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => void handleCreateApiKey()}
+                          disabled={actionBusy}
+                        >
+                          <KeyRound size={14} />
+                          {t('codex.localAccess.apiKeyCreate', '新增密钥')}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="codex-local-access-api-key-list">
+                      {apiKeys.map((apiKey) => {
+                        const draft = apiKeyDrafts[apiKey.id] ?? draftFromApiKey(apiKey);
+                        const copyField = `apiKey:${apiKey.id}` as const;
+                        const visible = visibleApiKeyIds.has(apiKey.id);
+                        const monthlyStats = monthlyStatsByApiKeyId.get(apiKey.id)?.usage;
+                        const usedTokens = monthlyStats?.totalTokens ?? 0;
+                        const limit = apiKey.monthlyTokenLimit;
+                        const remaining =
+                          limit && limit > 0 ? Math.max(0, limit - usedTokens) : null;
+                        const overLimit = Boolean(limit && usedTokens >= limit);
+
+                        return (
+                          <div
+                            key={apiKey.id}
+                            className={`codex-local-access-api-key-row${
+                              apiKey.enabled ? '' : ' is-disabled'
+                            }${overLimit ? ' is-over-limit' : ''}`}
+                          >
+                            <div className="codex-local-access-api-key-main">
+                              <div className="codex-local-access-api-key-fields">
+                                <label>
+                                  <span>{t('codex.localAccess.apiKeyName', '名称')}</span>
+                                  <input
+                                    type="text"
+                                    value={draft.name}
+                                    onChange={(event) =>
+                                      updateApiKeyDraft(apiKey.id, { name: event.target.value })
+                                    }
+                                    disabled={actionBusy}
+                                  />
+                                </label>
+                                <label>
+                                  <span>{t('codex.localAccess.apiKeyMonthlyLimit', '30天 Token 上限')}</span>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    value={draft.monthlyTokenLimit}
+                                    onChange={(event) =>
+                                      updateApiKeyDraft(apiKey.id, {
+                                        monthlyTokenLimit: event.target.value,
+                                      })
+                                    }
+                                    placeholder={t('codex.localAccess.apiKeyUnlimited', '不限')}
+                                    disabled={actionBusy}
+                                  />
+                                </label>
+                              </div>
+                              <code
+                                className="codex-local-access-code codex-local-access-api-key-code"
+                                title={visible ? apiKey.key : t('codex.localAccess.apiKeyHiddenHint', 'API Key 已隐藏，点击显示')}
+                              >
+                                {formatApiKeyValue(apiKey.key, visible)}
+                              </code>
+                              <div className="codex-local-access-api-key-meta">
+                                <span className={apiKey.enabled ? 'enabled' : 'disabled'}>
+                                  {apiKey.enabled
+                                    ? t('codex.localAccess.apiKeyEnabled', '启用')
+                                    : t('codex.localAccess.apiKeyDisabled', '停用')}
+                                </span>
+                                <span>
+                                  {t('codex.localAccess.apiKeyUsedMonthly', {
+                                    used: formatCompactNumber(usedTokens),
+                                    defaultValue: '近30天 {{used}} Tokens',
+                                  })}
+                                </span>
+                                <span>
+                                  {remaining == null
+                                    ? t('codex.localAccess.apiKeyUnlimited', '不限')
+                                    : t('codex.localAccess.apiKeyRemaining', {
+                                        remaining: formatCompactNumber(remaining),
+                                        defaultValue: '剩余 {{remaining}}',
+                                      })}
+                                </span>
+                                <span>
+                                  {t('codex.localAccess.apiKeyLastUsed', {
+                                    time: formatLocalDateTime(apiKey.lastUsedAt),
+                                    defaultValue: '最近使用 {{time}}',
+                                  })}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="codex-local-access-api-key-actions">
+                              <label className="codex-local-access-api-key-toggle">
+                                <input
+                                  type="checkbox"
+                                  checked={draft.enabled}
+                                  onChange={(event) =>
+                                    updateApiKeyDraft(apiKey.id, { enabled: event.target.checked })
+                                  }
+                                  disabled={actionBusy}
+                                />
+                                <span>{t('common.enabled', '启用')}</span>
+                              </label>
+                              <button
+                                type="button"
+                                className="folder-icon-btn"
+                                onClick={() => toggleApiKeyVisible(apiKey.id)}
+                                title={
+                                  visible
+                                    ? t('codex.localAccess.hideKey', '隐藏密钥')
+                                    : t('codex.localAccess.showKey', '显示密钥')
+                                }
+                              >
+                                {visible ? <EyeOff size={14} /> : <Eye size={14} />}
+                              </button>
+                              <button
+                                type="button"
+                                className="folder-icon-btn"
+                                onClick={() => void handleCopy(copyField, apiKey.key)}
+                                title={t('common.copy', '复制')}
+                              >
+                                {copiedField === copyField ? <Check size={14} /> : <Copy size={14} />}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => void handleSaveApiKey(apiKey)}
+                                disabled={actionBusy || !isApiKeyDraftDirty(apiKey)}
+                              >
+                                <Check size={14} />
+                                {t('common.save', '保存')}
+                              </button>
+                              <button
+                                type="button"
+                                className="folder-icon-btn"
+                                onClick={() => void handleResetKey(apiKey)}
+                                disabled={actionBusy}
+                                title={t('codex.localAccess.rotateKey', '重置密钥')}
+                              >
+                                <RefreshCw size={14} className={saving ? 'loading-spinner' : ''} />
+                              </button>
+                              <button
+                                type="button"
+                                className="folder-icon-btn codex-local-access-danger-icon"
+                                onClick={() => void handleDeleteApiKey(apiKey)}
+                                disabled={actionBusy || apiKeys.length <= 1}
+                                title={t('codex.localAccess.apiKeyDelete', '删除密钥')}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
 
                     <div className="codex-local-access-config-card codex-local-access-config-card-port codex-local-access-port-card">
@@ -1249,6 +1568,84 @@ export function CodexLocalAccessModal({
                     ) : null}
                   </div>
                 ) : null}
+              </section>
+
+              <section className="codex-local-access-section codex-local-access-section-surface codex-local-access-key-stats-section">
+                <div className="codex-local-access-section-title">
+                  <KeyRound size={16} />
+                  <span>{t('codex.localAccess.apiKeyStatsTitle', '按密钥统计')}</span>
+                </div>
+                <div className="codex-local-access-account-stats">
+                  {apiKeys.length === 0 ? (
+                    <div className="group-account-empty">
+                      {t('codex.localAccess.apiKeyEmpty', '当前还没有 API Key')}
+                    </div>
+                  ) : (
+                    apiKeys.map((apiKey) => {
+                      const keyStats = windowStatsByApiKeyId.get(apiKey.id)?.usage;
+                      const monthlyStats = monthlyStatsByApiKeyId.get(apiKey.id)?.usage;
+                      const usedTokens = monthlyStats?.totalTokens ?? 0;
+                      const limit = apiKey.monthlyTokenLimit;
+                      const remaining =
+                        limit && limit > 0 ? Math.max(0, limit - usedTokens) : null;
+                      const overLimit = Boolean(limit && usedTokens >= limit);
+
+                      return (
+                        <div
+                          key={apiKey.id}
+                          className={`codex-local-access-account-stat-row codex-local-access-key-stat-row${
+                            apiKey.enabled ? '' : ' is-disabled'
+                          }${overLimit ? ' is-over-limit' : ''}`}
+                        >
+                          <div className="codex-local-access-account-stat-top">
+                            <div className="codex-local-access-account-stat-main">
+                              <span className="group-account-email" title={apiKey.name}>
+                                {apiKey.name}
+                              </span>
+                              <span className={`tier-badge ${apiKey.enabled ? 'valid' : 'error'}`}>
+                                {apiKey.enabled
+                                  ? t('codex.localAccess.apiKeyEnabled', '启用')
+                                  : t('codex.localAccess.apiKeyDisabled', '停用')}
+                              </span>
+                            </div>
+                            <div className="codex-local-access-account-stat-block codex-local-access-account-stat-block-metrics">
+                              <div className="codex-local-access-account-stat-metrics">
+                                <span className="codex-local-access-account-stat-pill">
+                                  {t('codex.localAccess.stats.accountResult', {
+                                    success: keyStats?.successCount ?? 0,
+                                    failed: keyStats?.failureCount ?? 0,
+                                    defaultValue: '成功 {{success}} / 失败 {{failed}}',
+                                  })}
+                                </span>
+                                <span className="codex-local-access-account-stat-pill">
+                                  {t('codex.localAccess.stats.tokensDetail', {
+                                    input: formatCompactNumber(keyStats?.inputTokens ?? 0),
+                                    output: formatCompactNumber(keyStats?.outputTokens ?? 0),
+                                    defaultValue: '输入 {{input}} / 输出 {{output}}',
+                                  })}
+                                </span>
+                                <span className="codex-local-access-account-stat-pill">
+                                  {t('codex.localAccess.stats.accountTokensCompact', {
+                                    value: formatCompactNumber(keyStats?.totalTokens ?? 0),
+                                    defaultValue: '{{value}}',
+                                  })}
+                                </span>
+                                <span className="codex-local-access-account-stat-pill">
+                                  {remaining == null
+                                    ? t('codex.localAccess.apiKeyUnlimited', '不限')
+                                    : t('codex.localAccess.apiKeyRemaining', {
+                                        remaining: formatCompactNumber(remaining),
+                                        defaultValue: '剩余 {{remaining}}',
+                                      })}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
               </section>
 
               <section className="codex-local-access-section codex-local-access-section-surface codex-local-access-account-stats-section">

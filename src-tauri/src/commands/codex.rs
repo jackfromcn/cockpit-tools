@@ -729,8 +729,41 @@ pub async fn codex_local_access_remove_account(
 }
 
 #[tauri::command]
-pub async fn codex_local_access_rotate_api_key() -> Result<CodexLocalAccessState, String> {
-    codex_local_access::rotate_local_access_api_key().await
+pub async fn codex_local_access_create_api_key(
+    name: String,
+    monthly_token_limit: Option<u64>,
+) -> Result<CodexLocalAccessState, String> {
+    codex_local_access::create_local_access_api_key(name, monthly_token_limit).await
+}
+
+#[tauri::command]
+pub async fn codex_local_access_update_api_key(
+    api_key_id: String,
+    name: String,
+    enabled: bool,
+    monthly_token_limit: Option<u64>,
+) -> Result<CodexLocalAccessState, String> {
+    codex_local_access::update_local_access_api_key(
+        api_key_id,
+        name,
+        enabled,
+        monthly_token_limit,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn codex_local_access_rotate_api_key(
+    api_key_id: Option<String>,
+) -> Result<CodexLocalAccessState, String> {
+    codex_local_access::rotate_local_access_api_key(api_key_id.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn codex_local_access_delete_api_key(
+    api_key_id: String,
+) -> Result<CodexLocalAccessState, String> {
+    codex_local_access::delete_local_access_api_key(api_key_id).await
 }
 
 #[tauri::command]

@@ -1,8 +1,9 @@
 use crate::models::codex::{CodexAccount, CodexApiProviderMode};
 use crate::models::codex_local_access::{
-    CodexLocalAccessAccountStats, CodexLocalAccessCollection, CodexLocalAccessPortCleanupResult,
-    CodexLocalAccessRoutingStrategy, CodexLocalAccessState, CodexLocalAccessStats,
-    CodexLocalAccessStatsWindow, CodexLocalAccessUsageEvent, CodexLocalAccessUsageStats,
+    CodexLocalAccessAccountStats, CodexLocalAccessApiKey, CodexLocalAccessApiKeyStats,
+    CodexLocalAccessCollection, CodexLocalAccessPortCleanupResult, CodexLocalAccessRoutingStrategy,
+    CodexLocalAccessState, CodexLocalAccessStats, CodexLocalAccessStatsWindow,
+    CodexLocalAccessUsageEvent, CodexLocalAccessUsageStats,
 };
 use crate::modules::atomic_write::write_string_atomic;
 use crate::modules::{codex_account, codex_oauth, codex_wakeup, logger, process};
@@ -2568,23 +2569,27 @@ fn empty_stats_snapshot() -> CodexLocalAccessStats {
         updated_at: now,
         totals: CodexLocalAccessUsageStats::default(),
         accounts: Vec::new(),
+        api_keys: Vec::new(),
         daily: CodexLocalAccessStatsWindow {
             since: day_since,
             updated_at: now,
             totals: CodexLocalAccessUsageStats::default(),
             accounts: Vec::new(),
+            api_keys: Vec::new(),
         },
         weekly: CodexLocalAccessStatsWindow {
             since: week_since,
             updated_at: now,
             totals: CodexLocalAccessUsageStats::default(),
             accounts: Vec::new(),
+            api_keys: Vec::new(),
         },
         monthly: CodexLocalAccessStatsWindow {
             since: month_since,
             updated_at: now,
             totals: CodexLocalAccessUsageStats::default(),
             accounts: Vec::new(),
+            api_keys: Vec::new(),
         },
         events: Vec::new(),
     }
@@ -2596,6 +2601,7 @@ fn empty_stats_window(since: i64, updated_at: i64) -> CodexLocalAccessStatsWindo
         updated_at,
         totals: CodexLocalAccessUsageStats::default(),
         accounts: Vec::new(),
+        api_keys: Vec::new(),
     }
 }
 
@@ -2607,6 +2613,17 @@ fn sort_usage_accounts(accounts: &mut [CodexLocalAccessAccountStats]) {
             .cmp(&left.usage.request_count)
             .then_with(|| right.updated_at.cmp(&left.updated_at))
             .then_with(|| left.account_id.cmp(&right.account_id))
+    });
+}
+
+fn sort_usage_api_keys(api_keys: &mut [CodexLocalAccessApiKeyStats]) {
+    api_keys.sort_by(|left, right| {
+        right
+            .usage
+            .request_count
+            .cmp(&left.usage.request_count)
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| left.api_key_id.cmp(&right.api_key_id))
     });
 }
 
@@ -2624,6 +2641,8 @@ fn append_usage_event(
     now: i64,
     account_id: Option<&str>,
     account_email: Option<&str>,
+    api_key_id: Option<&str>,
+    api_key_name: Option<&str>,
     success: bool,
     latency_ms: u64,
     usage: Option<&UsageCapture>,
@@ -2633,6 +2652,8 @@ fn append_usage_event(
         timestamp: now,
         account_id: account_id.unwrap_or_default().trim().to_string(),
         email: account_email.unwrap_or_default().trim().to_string(),
+        api_key_id: api_key_id.unwrap_or_default().trim().to_string(),
+        api_key_name: api_key_name.unwrap_or_default().trim().to_string(),
         success,
         latency_ms,
         input_tokens: usage.input_tokens,
@@ -2669,6 +2690,15 @@ fn apply_usage_event_to_window(
         Some(&usage),
         event.timestamp,
     );
+    upsert_api_key_usage_stats(
+        &mut window.api_keys,
+        Some(event.api_key_id.as_str()),
+        Some(event.api_key_name.as_str()),
+        event.success,
+        event.latency_ms,
+        Some(&usage),
+        event.timestamp,
+    );
     window.updated_at = window.updated_at.max(event.timestamp);
 }
 
@@ -2698,6 +2728,9 @@ fn recompute_time_windows(stats: &mut CodexLocalAccessStats, now: i64) {
     sort_usage_accounts(&mut daily.accounts);
     sort_usage_accounts(&mut weekly.accounts);
     sort_usage_accounts(&mut monthly.accounts);
+    sort_usage_api_keys(&mut daily.api_keys);
+    sort_usage_api_keys(&mut weekly.api_keys);
+    sort_usage_api_keys(&mut monthly.api_keys);
 
     stats.daily = daily;
     stats.weekly = weekly;
@@ -2733,6 +2766,112 @@ fn generate_local_api_key() -> String {
         .map(char::from)
         .collect();
     format!("agt_codex_{}", suffix)
+}
+
+fn generate_local_api_key_id() -> String {
+    let suffix: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(12)
+        .map(char::from)
+        .collect();
+    format!("key_{}", suffix)
+}
+
+fn normalize_local_api_key_name(name: &str) -> String {
+    let normalized = name.trim();
+    if normalized.is_empty() {
+        "API Key".to_string()
+    } else {
+        normalized.chars().take(80).collect()
+    }
+}
+
+fn normalize_monthly_token_limit(limit: Option<u64>) -> Option<u64> {
+    limit.filter(|value| *value > 0)
+}
+
+fn build_local_api_key(
+    name: &str,
+    key: Option<String>,
+    monthly_token_limit: Option<u64>,
+) -> CodexLocalAccessApiKey {
+    let now = now_ms();
+    CodexLocalAccessApiKey {
+        id: generate_local_api_key_id(),
+        name: normalize_local_api_key_name(name),
+        key: key.unwrap_or_else(generate_local_api_key),
+        enabled: true,
+        monthly_token_limit: normalize_monthly_token_limit(monthly_token_limit),
+        created_at: now,
+        updated_at: now,
+        last_used_at: None,
+    }
+}
+
+fn new_default_collection() -> Result<CodexLocalAccessCollection, String> {
+    let now = now_ms();
+    Ok(CodexLocalAccessCollection {
+        enabled: false,
+        port: allocate_random_local_port()?,
+        api_keys: vec![CodexLocalAccessApiKey {
+            id: generate_local_api_key_id(),
+            name: "Default".to_string(),
+            key: generate_local_api_key(),
+            enabled: true,
+            monthly_token_limit: None,
+            created_at: now,
+            updated_at: now,
+            last_used_at: None,
+        }],
+        legacy_api_key: None,
+        routing_strategy: CodexLocalAccessRoutingStrategy::default(),
+        restrict_free_accounts: true,
+        account_ids: Vec::new(),
+        created_at: now,
+        updated_at: now,
+    })
+}
+
+fn first_enabled_api_key(collection: &CodexLocalAccessCollection) -> Option<&CodexLocalAccessApiKey> {
+    collection
+        .api_keys
+        .iter()
+        .find(|api_key| api_key.enabled && !api_key.key.trim().is_empty())
+}
+
+fn find_enabled_api_key(
+    collection: &CodexLocalAccessCollection,
+    provided_key: &str,
+) -> Option<CodexLocalAccessApiKey> {
+    let provided_key = provided_key.trim();
+    if provided_key.is_empty() {
+        return None;
+    }
+    collection
+        .api_keys
+        .iter()
+        .find(|api_key| api_key.enabled && api_key.key.trim() == provided_key)
+        .cloned()
+}
+
+fn monthly_tokens_for_api_key(stats: &CodexLocalAccessStats, api_key_id: &str) -> u64 {
+    stats
+        .monthly
+        .api_keys
+        .iter()
+        .find(|item| item.api_key_id == api_key_id)
+        .map(|item| item.usage.total_tokens)
+        .unwrap_or(0)
+}
+
+fn is_api_key_over_monthly_limit(
+    stats: &CodexLocalAccessStats,
+    api_key: &CodexLocalAccessApiKey,
+) -> bool {
+    match api_key.monthly_token_limit {
+        Some(limit) if limit > 0 => monthly_tokens_for_api_key(stats, &api_key.id) >= limit,
+        _ => false,
+    }
 }
 
 fn allocate_random_local_port() -> Result<u16, String> {
@@ -2773,6 +2912,7 @@ fn normalize_stats(stats: &mut CodexLocalAccessStats) {
         stats.updated_at = stats.since;
     }
     sort_usage_accounts(&mut stats.accounts);
+    sort_usage_api_keys(&mut stats.api_keys);
     recompute_time_windows(stats, now);
 }
 
@@ -2940,6 +3080,82 @@ fn is_local_access_eligible_account(account: &CodexAccount, restrict_free_accoun
     true
 }
 
+fn sanitize_collection_api_keys(collection: &mut CodexLocalAccessCollection) -> bool {
+    let mut changed = false;
+    if collection.api_keys.is_empty() {
+        let migrated_key = collection
+            .legacy_api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .unwrap_or_else(generate_local_api_key);
+        let now = now_ms();
+        collection.api_keys.push(CodexLocalAccessApiKey {
+            id: generate_local_api_key_id(),
+            name: "Default".to_string(),
+            key: migrated_key,
+            enabled: true,
+            monthly_token_limit: None,
+            created_at: now,
+            updated_at: now,
+            last_used_at: None,
+        });
+        changed = true;
+    }
+    if collection.legacy_api_key.is_some() {
+        collection.legacy_api_key = None;
+        changed = true;
+    }
+    let mut seen_ids = HashSet::new();
+    let mut seen_keys = HashSet::new();
+    for (index, api_key) in collection.api_keys.iter_mut().enumerate() {
+        let normalized_id = api_key.id.trim().to_string();
+        if normalized_id != api_key.id {
+            api_key.id = normalized_id;
+            changed = true;
+        }
+        if api_key.id.is_empty() || !seen_ids.insert(api_key.id.clone()) {
+            api_key.id = generate_local_api_key_id();
+            seen_ids.insert(api_key.id.clone());
+            changed = true;
+        }
+        let normalized_name = normalize_local_api_key_name(&api_key.name);
+        if normalized_name != api_key.name {
+            api_key.name = if normalized_name == "API Key" && index == 0 {
+                "Default".to_string()
+            } else {
+                normalized_name
+            };
+            changed = true;
+        }
+        let normalized_key = api_key.key.trim().to_string();
+        if normalized_key != api_key.key {
+            api_key.key = normalized_key;
+            changed = true;
+        }
+        if api_key.key.is_empty() || !seen_keys.insert(api_key.key.clone()) {
+            api_key.key = generate_local_api_key();
+            seen_keys.insert(api_key.key.clone());
+            changed = true;
+        }
+        let normalized_limit = normalize_monthly_token_limit(api_key.monthly_token_limit);
+        if normalized_limit != api_key.monthly_token_limit {
+            api_key.monthly_token_limit = normalized_limit;
+            changed = true;
+        }
+        if api_key.created_at <= 0 {
+            api_key.created_at = now_ms();
+            changed = true;
+        }
+        if api_key.updated_at <= 0 {
+            api_key.updated_at = api_key.created_at;
+            changed = true;
+        }
+    }
+    changed
+}
+
 fn sanitize_collection(
     collection: &mut CodexLocalAccessCollection,
 ) -> Result<(bool, HashSet<String>), String> {
@@ -2949,10 +3165,7 @@ fn sanitize_collection(
         collection.port = allocate_random_local_port()?;
         changed = true;
     }
-    if collection.api_key.trim().is_empty() {
-        collection.api_key = generate_local_api_key();
-        changed = true;
-    }
+    changed = sanitize_collection_api_keys(collection) || changed;
     if collection.created_at <= 0 {
         collection.created_at = now_ms();
         changed = true;
@@ -3005,16 +3218,7 @@ async fn ensure_runtime_loaded_without_start() -> Result<(), String> {
     let mut persist_after_load = false;
 
     if next_collection.is_none() {
-        next_collection = Some(CodexLocalAccessCollection {
-            enabled: false,
-            port: allocate_random_local_port()?,
-            api_key: generate_local_api_key(),
-            routing_strategy: CodexLocalAccessRoutingStrategy::default(),
-            restrict_free_accounts: true,
-            account_ids: Vec::new(),
-            created_at: now_ms(),
-            updated_at: now_ms(),
-        });
+        next_collection = Some(new_default_collection()?);
         persist_after_load = true;
     }
 
@@ -3261,9 +3465,49 @@ fn upsert_account_usage_stats(
     accounts.push(account_stats);
 }
 
+fn upsert_api_key_usage_stats(
+    api_keys: &mut Vec<CodexLocalAccessApiKeyStats>,
+    api_key_id: Option<&str>,
+    api_key_name: Option<&str>,
+    success: bool,
+    latency_ms: u64,
+    usage: Option<&UsageCapture>,
+    updated_at: i64,
+) {
+    let Some(api_key_id) = api_key_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let normalized_name = api_key_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("API Key")
+        .to_string();
+
+    if let Some(api_key_stats) = api_keys
+        .iter_mut()
+        .find(|item| item.api_key_id == api_key_id)
+    {
+        api_key_stats.api_key_name = normalized_name;
+        api_key_stats.updated_at = updated_at;
+        apply_usage_stats(&mut api_key_stats.usage, success, latency_ms, usage);
+        return;
+    }
+
+    let mut api_key_stats = CodexLocalAccessApiKeyStats {
+        api_key_id: api_key_id.to_string(),
+        api_key_name: normalized_name,
+        usage: CodexLocalAccessUsageStats::default(),
+        updated_at,
+    };
+    apply_usage_stats(&mut api_key_stats.usage, success, latency_ms, usage);
+    api_keys.push(api_key_stats);
+}
+
 async fn record_request_stats(
     account_id: Option<&str>,
     account_email: Option<&str>,
+    api_key_id: Option<&str>,
+    api_key_name: Option<&str>,
     success: bool,
     latency_ms: u64,
     usage: Option<UsageCapture>,
@@ -3286,11 +3530,22 @@ async fn record_request_stats(
             usage_ref,
             now,
         );
+        upsert_api_key_usage_stats(
+            &mut runtime.stats.api_keys,
+            api_key_id,
+            api_key_name,
+            success,
+            latency_ms,
+            usage_ref,
+            now,
+        );
         append_usage_event(
             &mut runtime.stats.events,
             now,
             account_id,
             account_email,
+            api_key_id,
+            api_key_name,
             success,
             latency_ms,
             usage_ref,
@@ -3302,6 +3557,51 @@ async fn record_request_stats(
 
     schedule_stats_flush_if_needed().await;
     Ok(())
+}
+
+async fn touch_local_access_api_key(api_key_id: &str) {
+    let normalized_id = api_key_id.trim();
+    if normalized_id.is_empty() {
+        return;
+    }
+
+    let maybe_collection = {
+        let runtime = gateway_runtime().lock().await;
+        runtime.collection.clone()
+    };
+    let Some(mut collection) = maybe_collection else {
+        return;
+    };
+    let now = now_ms();
+    let Some(api_key) = collection
+        .api_keys
+        .iter_mut()
+        .find(|item| item.id == normalized_id)
+    else {
+        return;
+    };
+
+    if api_key
+        .last_used_at
+        .map(|last_used_at| now.saturating_sub(last_used_at) < 60_000)
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    api_key.last_used_at = Some(now);
+    api_key.updated_at = now;
+    collection.updated_at = now;
+    if let Err(err) = save_collection_to_disk(&collection) {
+        logger::log_codex_api_warn(&format!(
+            "[CodexLocalAccess] 写入 API Key 最近使用时间失败: {}",
+            err
+        ));
+        return;
+    }
+
+    let mut runtime = gateway_runtime().lock().await;
+    sync_runtime_collection(&mut runtime, collection);
 }
 
 fn build_state_snapshot(runtime: &GatewayRuntime) -> CodexLocalAccessState {
@@ -3357,7 +3657,9 @@ pub async fn activate_local_access_for_dir(
         .base_url
         .clone()
         .unwrap_or_else(|| build_base_url(collection.port));
-    let runtime_account = build_runtime_account(base_url, collection.api_key.clone());
+    let api_key = first_enabled_api_key(&collection)
+        .ok_or_else(|| "API 服务没有可用密钥，请先启用或创建一个密钥".to_string())?;
+    let runtime_account = build_runtime_account(base_url, api_key.key.clone());
     codex_account::write_account_bundle_to_dir(profile_dir, &runtime_account)?;
     Ok(state)
 }
@@ -3370,19 +3672,10 @@ pub async fn save_local_access_accounts(
 
     let mut collection = {
         let runtime = gateway_runtime().lock().await;
-        runtime
-            .collection
-            .clone()
-            .unwrap_or(CodexLocalAccessCollection {
-                enabled: false,
-                port: allocate_random_local_port()?,
-                api_key: generate_local_api_key(),
-                routing_strategy: CodexLocalAccessRoutingStrategy::default(),
-                restrict_free_accounts: true,
-                account_ids: Vec::new(),
-                created_at: now_ms(),
-                updated_at: now_ms(),
-            })
+        match runtime.collection.clone() {
+            Some(collection) => collection,
+            None => new_default_collection()?,
+        }
     };
 
     let valid_account_ids: HashSet<String> = codex_account::list_accounts_checked()?
@@ -3482,7 +3775,89 @@ pub async fn remove_local_access_account(
     snapshot_state().await
 }
 
-pub async fn rotate_local_access_api_key() -> Result<CodexLocalAccessState, String> {
+pub async fn create_local_access_api_key(
+    name: String,
+    monthly_token_limit: Option<u64>,
+) -> Result<CodexLocalAccessState, String> {
+    ensure_runtime_loaded().await?;
+
+    let mut collection = {
+        let runtime = gateway_runtime().lock().await;
+        match runtime.collection.clone() {
+            Some(collection) => collection,
+            None => new_default_collection()?,
+        }
+    };
+
+    let fallback_name = format!("API Key {}", collection.api_keys.len().saturating_add(1));
+    let api_key = build_local_api_key(
+        if name.trim().is_empty() {
+            fallback_name.as_str()
+        } else {
+            name.as_str()
+        },
+        None,
+        monthly_token_limit,
+    );
+    collection.api_keys.push(api_key);
+    collection.updated_at = now_ms();
+    let (changed, _) = sanitize_collection(&mut collection)?;
+    if changed {
+        collection.updated_at = now_ms();
+    }
+    save_collection_to_disk(&collection)?;
+
+    {
+        let mut runtime = gateway_runtime().lock().await;
+        sync_runtime_collection(&mut runtime, collection);
+    }
+
+    snapshot_state().await
+}
+
+pub async fn update_local_access_api_key(
+    api_key_id: String,
+    name: String,
+    enabled: bool,
+    monthly_token_limit: Option<u64>,
+) -> Result<CodexLocalAccessState, String> {
+    ensure_runtime_loaded().await?;
+
+    let maybe_collection = {
+        let runtime = gateway_runtime().lock().await;
+        runtime.collection.clone()
+    };
+
+    let Some(mut collection) = maybe_collection else {
+        return Err("本地接入集合尚未创建".to_string());
+    };
+    let normalized_id = api_key_id.trim();
+    let Some(api_key) = collection
+        .api_keys
+        .iter_mut()
+        .find(|item| item.id == normalized_id)
+    else {
+        return Err("API 服务密钥不存在".to_string());
+    };
+
+    api_key.name = normalize_local_api_key_name(&name);
+    api_key.enabled = enabled;
+    api_key.monthly_token_limit = normalize_monthly_token_limit(monthly_token_limit);
+    api_key.updated_at = now_ms();
+    collection.updated_at = now_ms();
+    save_collection_to_disk(&collection)?;
+
+    {
+        let mut runtime = gateway_runtime().lock().await;
+        sync_runtime_collection(&mut runtime, collection);
+    }
+
+    snapshot_state().await
+}
+
+pub async fn rotate_local_access_api_key(
+    api_key_id: Option<&str>,
+) -> Result<CodexLocalAccessState, String> {
     ensure_runtime_loaded().await?;
 
     let maybe_collection = {
@@ -3494,7 +3869,58 @@ pub async fn rotate_local_access_api_key() -> Result<CodexLocalAccessState, Stri
         return Err("本地接入集合尚未创建".to_string());
     };
 
-    collection.api_key = generate_local_api_key();
+    let target_id = api_key_id.map(str::trim).filter(|value| !value.is_empty());
+    let target_index = match target_id {
+        Some(target_id) => collection
+            .api_keys
+            .iter()
+            .position(|item| item.id == target_id),
+        None => collection
+            .api_keys
+            .iter()
+            .position(|item| item.enabled)
+            .or_else(|| (!collection.api_keys.is_empty()).then_some(0)),
+    }
+    .ok_or_else(|| "API 服务密钥不存在".to_string())?;
+
+    collection.api_keys[target_index].key = generate_local_api_key();
+    collection.api_keys[target_index].last_used_at = None;
+    collection.api_keys[target_index].updated_at = now_ms();
+    collection.updated_at = now_ms();
+    save_collection_to_disk(&collection)?;
+
+    {
+        let mut runtime = gateway_runtime().lock().await;
+        sync_runtime_collection(&mut runtime, collection);
+    }
+
+    snapshot_state().await
+}
+
+pub async fn delete_local_access_api_key(
+    api_key_id: String,
+) -> Result<CodexLocalAccessState, String> {
+    ensure_runtime_loaded().await?;
+
+    let maybe_collection = {
+        let runtime = gateway_runtime().lock().await;
+        runtime.collection.clone()
+    };
+
+    let Some(mut collection) = maybe_collection else {
+        return Err("本地接入集合尚未创建".to_string());
+    };
+    if collection.api_keys.len() <= 1 {
+        return Err("至少保留一个 API 服务密钥".to_string());
+    }
+
+    let normalized_id = api_key_id.trim();
+    let before_len = collection.api_keys.len();
+    collection.api_keys.retain(|item| item.id != normalized_id);
+    if collection.api_keys.len() == before_len {
+        return Err("API 服务密钥不存在".to_string());
+    }
+
     collection.updated_at = now_ms();
     save_collection_to_disk(&collection)?;
 
@@ -5513,21 +5939,56 @@ async fn handle_connection(
         return Ok(());
     }
 
-    if api_key != collection.api_key {
+    let Some(validated_api_key) = find_enabled_api_key(&collection, &api_key) else {
         write_json_error_response(
             &mut stream,
             Some(&addr),
             Some(&parsed),
             401,
             "Unauthorized",
-            "本地访问秘钥无效",
+            "本地访问秘钥无效或已停用",
             None,
             None,
             None,
         )
         .await?;
         return Ok(());
-    }
+    };
+
+    touch_local_access_api_key(&validated_api_key.id).await;
+
+    let started_at = Instant::now();
+    if is_api_key_over_monthly_limit(&state.stats, &validated_api_key) {
+        write_json_error_response(
+            &mut stream,
+            Some(&addr),
+            Some(&parsed),
+            429,
+            "Too Many Requests",
+            "API 服务密钥近 30 天 Token 配额已用完",
+            None,
+            None,
+            Some(started_at.elapsed().as_millis() as u64),
+        )
+        .await?;
+        if let Err(err) = record_request_stats(
+            None,
+            None,
+            Some(validated_api_key.id.as_str()),
+            Some(validated_api_key.name.as_str()),
+            false,
+            started_at.elapsed().as_millis() as u64,
+            None,
+        )
+        .await
+        {
+            logger::log_codex_api_warn(&format!(
+                "[CodexLocalAccess] 写入配额拦截统计失败: {}",
+                err
+            ));
+        }
+        return Ok(());
+    };
 
     if is_local_models_request(&parsed.target) {
         if collection.account_ids.is_empty() {
@@ -5554,7 +6015,6 @@ async fn handle_connection(
         return Ok(());
     }
 
-    let started_at = Instant::now();
     let (prepared_request, response_adapter) = match prepare_gateway_request(parsed) {
         Ok(prepared) => prepared,
         Err(err) => {
@@ -5585,6 +6045,8 @@ async fn handle_connection(
             if let Err(err) = record_request_stats(
                 Some(success.account_id.as_str()),
                 Some(success.account_email.as_str()),
+                Some(validated_api_key.id.as_str()),
+                Some(validated_api_key.name.as_str()),
                 true,
                 latency_ms,
                 response_capture.usage,
@@ -5632,6 +6094,8 @@ async fn handle_connection(
             if let Err(err) = record_request_stats(
                 account_id.as_deref(),
                 account_email.as_deref(),
+                Some(validated_api_key.id.as_str()),
+                Some(validated_api_key.name.as_str()),
                 false,
                 latency_ms,
                 None,
@@ -5651,17 +6115,50 @@ async fn handle_connection(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_chat_completion_payload, build_chat_completion_stream_body, build_images_api_payload,
-        build_local_models_response, build_ordered_account_ids, build_request_routing_hint,
-        extract_usage_capture, parse_codex_retry_after, parse_responses_payload_from_upstream,
-        prepare_gateway_request, resolve_supported_model_alias,
+        append_usage_event, build_chat_completion_payload, build_chat_completion_stream_body,
+        build_images_api_payload, build_local_models_response, build_ordered_account_ids,
+        build_request_routing_hint, empty_stats_snapshot, extract_usage_capture,
+        find_enabled_api_key, is_api_key_over_monthly_limit, parse_codex_retry_after,
+        parse_responses_payload_from_upstream, prepare_gateway_request, recompute_time_windows,
+        resolve_supported_model_alias, sanitize_collection_api_keys,
         should_retry_single_account_upstream_status, should_treat_response_as_stream,
         should_try_next_account, GatewayResponseAdapter, ParsedRequest, ResponseUsageCollector,
+        UsageCapture,
+    };
+    use crate::models::codex_local_access::{
+        CodexLocalAccessApiKey, CodexLocalAccessCollection, CodexLocalAccessRoutingStrategy,
     };
     use reqwest::StatusCode;
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use tokio::time::Duration;
+
+    fn test_api_key(id: &str, name: &str, key: &str, enabled: bool) -> CodexLocalAccessApiKey {
+        CodexLocalAccessApiKey {
+            id: id.to_string(),
+            name: name.to_string(),
+            key: key.to_string(),
+            enabled,
+            monthly_token_limit: None,
+            created_at: 1,
+            updated_at: 1,
+            last_used_at: None,
+        }
+    }
+
+    fn test_collection(api_keys: Vec<CodexLocalAccessApiKey>) -> CodexLocalAccessCollection {
+        CodexLocalAccessCollection {
+            enabled: true,
+            port: 34567,
+            api_keys,
+            legacy_api_key: None,
+            routing_strategy: CodexLocalAccessRoutingStrategy::Auto,
+            restrict_free_accounts: true,
+            account_ids: vec!["acc-1".to_string()],
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
 
     #[test]
     fn extracts_usage_from_codex_response_completed_payload() {
@@ -5745,6 +6242,117 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         .expect("retry after should be parsed");
 
         assert_eq!(wait, Duration::from_secs(12));
+    }
+
+    #[test]
+    fn migrates_legacy_single_api_key_to_default_key() {
+        let mut collection: CodexLocalAccessCollection = serde_json::from_value(json!({
+            "enabled": true,
+            "port": 34567,
+            "apiKey": "agt_codex_legacy",
+            "routingStrategy": "auto",
+            "restrictFreeAccounts": true,
+            "accountIds": [],
+            "createdAt": 1,
+            "updatedAt": 1
+        }))
+        .expect("legacy collection should parse");
+
+        assert!(collection.api_keys.is_empty());
+        assert_eq!(collection.legacy_api_key.as_deref(), Some("agt_codex_legacy"));
+        assert!(sanitize_collection_api_keys(&mut collection));
+        assert_eq!(collection.api_keys.len(), 1);
+        assert_eq!(collection.api_keys[0].name, "Default");
+        assert_eq!(collection.api_keys[0].key, "agt_codex_legacy");
+        assert!(collection.api_keys[0].enabled);
+        assert!(collection.api_keys[0].monthly_token_limit.is_none());
+        assert!(collection.legacy_api_key.is_none());
+
+        let serialized = serde_json::to_value(&collection).expect("collection should serialize");
+        assert!(serialized.get("apiKey").is_none());
+        assert!(serialized.get("apiKeys").is_some());
+    }
+
+    #[test]
+    fn finds_only_enabled_local_api_keys() {
+        let collection = test_collection(vec![
+            test_api_key("key-a", "Alice", "agt_codex_a", true),
+            test_api_key("key-b", "Bob", "agt_codex_b", false),
+        ]);
+
+        let matched = find_enabled_api_key(&collection, "agt_codex_a")
+            .expect("enabled key should match");
+        assert_eq!(matched.id, "key-a");
+        assert!(find_enabled_api_key(&collection, "agt_codex_b").is_none());
+        assert!(find_enabled_api_key(&collection, "agt_codex_missing").is_none());
+    }
+
+    #[test]
+    fn enforces_monthly_token_limit_from_api_key_stats() {
+        let mut api_key = test_api_key("key-a", "Alice", "agt_codex_a", true);
+        api_key.monthly_token_limit = Some(10);
+        let mut stats = empty_stats_snapshot();
+        let now = stats.updated_at.saturating_add(1);
+        let usage = UsageCapture {
+            input_tokens: 6,
+            output_tokens: 4,
+            total_tokens: 10,
+            cached_tokens: 0,
+            reasoning_tokens: 0,
+        };
+        append_usage_event(
+            &mut stats.events,
+            now,
+            Some("acc-1"),
+            Some("alice@example.com"),
+            Some(api_key.id.as_str()),
+            Some(api_key.name.as_str()),
+            true,
+            20,
+            Some(&usage),
+        );
+        recompute_time_windows(&mut stats, now);
+
+        assert!(is_api_key_over_monthly_limit(&stats, &api_key));
+        api_key.monthly_token_limit = Some(11);
+        assert!(!is_api_key_over_monthly_limit(&stats, &api_key));
+        api_key.monthly_token_limit = None;
+        assert!(!is_api_key_over_monthly_limit(&stats, &api_key));
+    }
+
+    #[test]
+    fn usage_windows_include_account_and_api_key_stats() {
+        let mut stats = empty_stats_snapshot();
+        let now = stats.updated_at.saturating_add(1);
+        let usage = UsageCapture {
+            input_tokens: 7,
+            output_tokens: 3,
+            total_tokens: 10,
+            cached_tokens: 2,
+            reasoning_tokens: 1,
+        };
+        append_usage_event(
+            &mut stats.events,
+            now,
+            Some("acc-1"),
+            Some("alice@example.com"),
+            Some("key-a"),
+            Some("Alice"),
+            true,
+            42,
+            Some(&usage),
+        );
+        recompute_time_windows(&mut stats, now);
+
+        assert_eq!(stats.monthly.totals.request_count, 1);
+        assert_eq!(stats.monthly.totals.total_tokens, 10);
+        assert_eq!(stats.monthly.accounts.len(), 1);
+        assert_eq!(stats.monthly.accounts[0].account_id, "acc-1");
+        assert_eq!(stats.monthly.accounts[0].usage.input_tokens, 7);
+        assert_eq!(stats.monthly.api_keys.len(), 1);
+        assert_eq!(stats.monthly.api_keys[0].api_key_id, "key-a");
+        assert_eq!(stats.monthly.api_keys[0].api_key_name, "Alice");
+        assert_eq!(stats.monthly.api_keys[0].usage.output_tokens, 3);
     }
 
     #[test]

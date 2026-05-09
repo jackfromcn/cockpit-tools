@@ -6,15 +6,31 @@ export type CodexLocalAccessRoutingStrategy =
   | 'plan_low_first'
   | 'expiry_soon_first';
 
+export interface CodexLocalAccessApiKey {
+  id: string;
+  name: string;
+  key: string;
+  enabled: boolean;
+  monthlyTokenLimit: number | null;
+  createdAt: number;
+  updatedAt: number;
+  lastUsedAt: number | null;
+}
+
 export interface CodexLocalAccessCollection {
   enabled: boolean;
   port: number;
-  apiKey: string;
+  apiKeys: CodexLocalAccessApiKey[];
   routingStrategy: CodexLocalAccessRoutingStrategy;
   restrictFreeAccounts: boolean;
   accountIds: string[];
   createdAt: number;
   updatedAt: number;
+}
+
+export interface CodexLocalAccessApiKeyInput {
+  name: string;
+  monthlyTokenLimit: number | null;
 }
 
 export interface CodexLocalAccessUsageStats {
@@ -36,11 +52,19 @@ export interface CodexLocalAccessAccountStats {
   updatedAt: number;
 }
 
+export interface CodexLocalAccessApiKeyStats {
+  apiKeyId: string;
+  apiKeyName: string;
+  usage: CodexLocalAccessUsageStats;
+  updatedAt: number;
+}
+
 export interface CodexLocalAccessStatsWindow {
   since: number;
   updatedAt: number;
   totals: CodexLocalAccessUsageStats;
   accounts: CodexLocalAccessAccountStats[];
+  apiKeys: CodexLocalAccessApiKeyStats[];
 }
 
 export interface CodexLocalAccessStats {
@@ -48,6 +72,7 @@ export interface CodexLocalAccessStats {
   updatedAt: number;
   totals: CodexLocalAccessUsageStats;
   accounts: CodexLocalAccessAccountStats[];
+  apiKeys: CodexLocalAccessApiKeyStats[];
   daily: CodexLocalAccessStatsWindow;
   weekly: CodexLocalAccessStatsWindow;
   monthly: CodexLocalAccessStatsWindow;
