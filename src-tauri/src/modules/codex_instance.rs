@@ -1040,4 +1040,28 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn windows_directory_shared_link_copies_when_link_methods_fail() {
+        let root = make_temp_dir("codex-dir-copy-fallback-test");
+        let source = root.join("global-skills");
+        let nested = source.join("nested");
+        let target = root.join("instance-skills");
+        fs::create_dir_all(&nested).expect("create nested source dir");
+        fs::write(nested.join("probe.txt"), "shared").expect("write source probe");
+
+        create_directory_shared_link_or_copy(
+            &source,
+            &target,
+            |_, _| Err("symlink denied".to_string()),
+            |_, _| Err("junction denied".to_string()),
+        )
+        .expect("copy directory fallback");
+
+        let content =
+            fs::read_to_string(target.join("nested").join("probe.txt")).expect("read copied file");
+        assert_eq!(content, "shared");
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }
