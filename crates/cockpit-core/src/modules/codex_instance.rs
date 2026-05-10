@@ -138,7 +138,50 @@ fn create_directory_symlink(source: &Path, target: &Path) -> Result<(), String> 
 
 #[cfg(windows)]
 fn create_directory_symlink(source: &Path, target: &Path) -> Result<(), String> {
-    match std::os::windows::fs::symlink_dir(source, target) {
+    create_directory_shared_link_or_copy(
+        source,
+        target,
+        |source, target| {
+            std::os::windows::fs::symlink_dir(source, target).map_err(|e| e.to_string())
+        },
+        create_directory_junction,
+    )
+}
+
+#[cfg(windows)]
+fn create_directory_junction(source: &Path, target: &Path) -> Result<(), String> {
+    let output = std::process::Command::new("cmd")
+        .arg("/C")
+        .arg("mklink")
+        .arg("/J")
+        .arg(target)
+        .arg(source)
+        .output()
+        .map_err(|e| format!("创建目录 junction 失败: {}", e))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(format!(
+        "junction_status={}, stdout={}, stderr={}",
+        output.status, stdout, stderr
+    ))
+}
+
+#[cfg(windows)]
+fn create_directory_shared_link_or_copy<S, J>(
+    source: &Path,
+    target: &Path,
+    create_symlink: S,
+    create_junction: J,
+) -> Result<(), String>
+where
+    S: FnOnce(&Path, &Path) -> Result<(), String>,
+    J: FnOnce(&Path, &Path) -> Result<(), String>,
+{
+    match create_symlink(source, target) {
         Ok(()) => Ok(()),
         Err(symlink_err) => {
             modules::logger::log_warn(&format!(
@@ -147,24 +190,58 @@ fn create_directory_symlink(source: &Path, target: &Path) -> Result<(), String> 
                 target.display(),
                 symlink_err
             ));
-            let status = std::process::Command::new("cmd")
-                .arg("/C")
-                .arg("mklink")
-                .arg("/J")
-                .arg(target)
-                .arg(source)
-                .status()
-                .map_err(|e| format!("创建目录 junction 失败: {}", e))?;
-            if status.success() {
-                Ok(())
-            } else {
-                Err(format!(
-                    "创建目录共享链接失败: symlink_error={}, junction_status={}",
-                    symlink_err, status
-                ))
+            match create_junction(source, target) {
+                Ok(()) => Ok(()),
+                Err(junction_err) => {
+                    modules::logger::log_warn(&format!(
+                        "Windows directory junction failed, copying shared directory instead: source={}, target={}, error={}",
+                        source.display(),
+                        target.display(),
+                        junction_err
+                    ));
+                    prepare_directory_copy_fallback_target(target)?;
+                    instance_store::copy_dir_recursive(source, target).map_err(|copy_err| {
+                        format!(
+                            "创建目录共享链接失败: symlink_error={}, junction_error={}, copy_error={}",
+                            symlink_err, junction_err, copy_err
+                        )
+                    })
+                }
             }
         }
     }
+}
+
+#[cfg(windows)]
+fn prepare_directory_copy_fallback_target(target: &Path) -> Result<(), String> {
+    if !target.exists() {
+        return Ok(());
+    }
+
+    let metadata = fs::symlink_metadata(target).map_err(|e| {
+        format!(
+            "读取目录复制回退目标失败 ({}): {}",
+            display_abs_path(target),
+            e
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        return remove_symlink(target);
+    }
+    if metadata.is_dir() && is_directory_empty(target)? {
+        return fs::remove_dir(target).map_err(|e| {
+            format!(
+                "清理空目录复制回退目标失败 ({}): {}",
+                display_abs_path(target),
+                e
+            )
+        });
+    }
+
+    Err(format!(
+        "目录复制回退目标已存在且不为空: {}",
+        display_abs_path(target)
+    ))
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -954,6 +1031,30 @@ mod tests {
         create_file_symlink(&source, &target).expect("create shared file link");
 
         let content = fs::read_to_string(&target).expect("read through link");
+        assert_eq!(content, "shared");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn windows_directory_shared_link_copies_when_link_methods_fail() {
+        let root = make_temp_dir("codex-dir-copy-fallback-test");
+        let source = root.join("global-skills");
+        let nested = source.join("nested");
+        let target = root.join("instance-skills");
+        fs::create_dir_all(&nested).expect("create nested source dir");
+        fs::write(nested.join("probe.txt"), "shared").expect("write source probe");
+
+        create_directory_shared_link_or_copy(
+            &source,
+            &target,
+            |_, _| Err("symlink denied".to_string()),
+            |_, _| Err("junction denied".to_string()),
+        )
+        .expect("copy directory fallback");
+
+        let content =
+            fs::read_to_string(target.join("nested").join("probe.txt")).expect("read copied file");
         assert_eq!(content, "shared");
 
         let _ = fs::remove_dir_all(&root);
