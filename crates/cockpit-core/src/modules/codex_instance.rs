@@ -22,6 +22,8 @@ const CODEX_SHARED_SESSIONS_DIR_NAME: &str = "sessions";
 const CODEX_SHARED_ARCHIVED_SESSIONS_DIR_NAME: &str = "archived_sessions";
 const CODEX_SHARED_SESSION_INDEX_FILE_NAME: &str = "session_index.jsonl";
 const CODEX_SHARED_GLOBAL_STATE_FILE_NAME: &str = ".codex-global-state.json";
+const CODEX_ELECTRON_USER_DATA_DIR_NAME: &str = "electron-user-data";
+const CODEX_ELECTRON_AUTH_MARKER_FILE_NAME: &str = ".cockpit_codex_electron_auth.json";
 
 #[derive(Debug, Clone)]
 pub struct CreateInstanceParams {
@@ -133,6 +135,107 @@ pub fn get_instance_defaults() -> Result<InstanceDefaults, String> {
         root_dir: root_dir.to_string_lossy().to_string(),
         default_user_data_dir: default_user_data_dir.to_string_lossy().to_string(),
     })
+}
+
+fn remove_path_safely(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let metadata = fs::symlink_metadata(path).map_err(|e| {
+        format!(
+            "read path metadata failed ({}): {}",
+            display_abs_path(path),
+            e
+        )
+    })?;
+    if metadata.file_type().is_symlink() || metadata.is_file() {
+        return fs::remove_file(path)
+            .map_err(|e| format!("remove file failed ({}): {}", display_abs_path(path), e));
+    }
+    if metadata.is_dir() {
+        return fs::remove_dir_all(path).map_err(|e| {
+            format!(
+                "remove directory failed ({}): {}",
+                display_abs_path(path),
+                e
+            )
+        });
+    }
+    Ok(())
+}
+
+fn electron_auth_marker_matches(electron_user_data_dir: &Path, account_id: &str) -> bool {
+    let marker_path = electron_user_data_dir.join(CODEX_ELECTRON_AUTH_MARKER_FILE_NAME);
+    let Ok(content) = fs::read_to_string(marker_path) else {
+        return false;
+    };
+    content.contains(&format!(
+        "\"account_id\":\"{}\"",
+        account_id.replace('"', "\\\"")
+    )) || content.contains(&format!(
+        "\"account_id\": \"{}\"",
+        account_id.replace('"', "\\\"")
+    ))
+}
+
+fn write_electron_auth_marker(
+    electron_user_data_dir: &Path,
+    account_id: &str,
+) -> Result<(), String> {
+    fs::create_dir_all(electron_user_data_dir).map_err(|e| {
+        format!(
+            "create Electron user-data directory failed ({}): {}",
+            display_abs_path(electron_user_data_dir),
+            e
+        )
+    })?;
+    let escaped_account_id = account_id.replace('\\', "\\\\").replace('"', "\\\"");
+    let content = format!(
+        "{{\"account_id\":\"{}\",\"prepared_at\":{}}}\n",
+        escaped_account_id,
+        Utc::now().timestamp_millis()
+    );
+    fs::write(
+        electron_user_data_dir.join(CODEX_ELECTRON_AUTH_MARKER_FILE_NAME),
+        content,
+    )
+    .map_err(|e| format!("write Electron auth marker failed: {}", e))
+}
+
+pub fn clear_electron_user_data_auth_state(
+    profile_dir: &Path,
+    account_id: &str,
+) -> Result<(), String> {
+    let electron_user_data_dir = profile_dir.join(CODEX_ELECTRON_USER_DATA_DIR_NAME);
+    if electron_auth_marker_matches(&electron_user_data_dir, account_id) {
+        return Ok(());
+    }
+
+    let paths_to_remove = [
+        "Local Storage",
+        "Session Storage",
+        "IndexedDB",
+        "Network",
+        "Service Worker",
+        "Cache",
+        "Code Cache",
+        "DawnGraphiteCache",
+        "DawnWebGPUCache",
+        "GPUCache",
+        "Shared Dictionary",
+        "blob_storage",
+        "databases",
+        "DIPS",
+        "Local State",
+        "Preferences",
+    ];
+
+    for relative in paths_to_remove {
+        remove_path_safely(&electron_user_data_dir.join(relative))?;
+    }
+
+    write_electron_auth_marker(&electron_user_data_dir, account_id)
 }
 
 #[cfg(unix)]
@@ -1073,6 +1176,7 @@ pub fn create_instance(params: CreateInstanceParams) -> Result<InstanceProfile, 
         }
 
         instance_store::copy_dir_recursive(&source_dir, &user_dir_path)?;
+        remove_path_safely(&user_dir_path.join(CODEX_ELECTRON_USER_DATA_DIR_NAME))?;
     }
 
     ensure_instance_shared_skills(&user_dir_path)?;

@@ -91,7 +91,8 @@ async fn inject_bound_account_to_profile(
         return Ok(());
     }
 
-    modules::codex_instance::inject_account_to_profile(profile_dir, bind_account_id).await
+    modules::codex_instance::inject_account_to_profile(profile_dir, bind_account_id).await?;
+    modules::codex_instance::clear_electron_user_data_auth_state(profile_dir, bind_account_id)
 }
 
 fn default_instance_view(
