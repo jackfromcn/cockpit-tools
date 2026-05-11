@@ -4,7 +4,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use rusqlite::{params_from_iter, types::Value, Connection, OpenFlags};
@@ -188,6 +188,8 @@ struct ThreadSnapshot {
     updated_at: Option<i64>,
     archived: bool,
     rollout_path: PathBuf,
+    rollout_len: Option<u64>,
+    rollout_modified_at_ms: Option<i64>,
     row_data: ThreadRowData,
     session_index_entry: JsonValue,
     source_root: PathBuf,
@@ -252,7 +254,11 @@ struct SharedChatMapping {
     local_rollout_path: String,
     archived: bool,
     last_source_updated_at: Option<i64>,
+    last_source_rollout_len: Option<u64>,
+    last_source_rollout_modified_at_ms: Option<i64>,
     local_materialized_updated_at: Option<i64>,
+    local_materialized_rollout_len: Option<u64>,
+    local_materialized_rollout_modified_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -317,6 +323,20 @@ fn read_token_stats_from_rollout(rollout_path: &Path) -> Option<(u64, u64, u64)>
         },
     );
     stats
+}
+
+fn rollout_file_fingerprint(rollout_path: &Path) -> (Option<u64>, Option<i64>) {
+    let Ok(metadata) = fs::metadata(rollout_path) else {
+        return (None, None);
+    };
+    (
+        Some(metadata.len()),
+        metadata
+            .modified()
+            .ok()
+            .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64),
+    )
 }
 
 fn read_token_stats_from_rollout_uncached(
@@ -961,7 +981,19 @@ fn ensure_shared_chat_visibility_for_instances(
         }
 
         if accounts_match(&owner.instance.account_id, &target.account_id) {
-            if current_ids.contains(&owner.snapshot.id) {
+            if let Some(local_snapshot) = current_snapshots
+                .iter()
+                .find(|snapshot| snapshot.id == owner.snapshot.id)
+            {
+                if snapshot_content_is_newer(&owner.snapshot, local_snapshot) {
+                    if backup_dir.is_none() {
+                        backup_dir = Some(backup_shared_chat_target_files(&target.data_dir, &[])?);
+                    }
+                    copy_snapshot_to_target(&target, &owner, &owner.snapshot.id, None)?;
+                    copied_same_account_count += 1;
+                    current_snapshots = load_thread_snapshots(&target)?;
+                }
+                current_ids.insert(owner.snapshot.id.clone());
                 continue;
             }
             if backup_dir.is_none() {
@@ -1053,6 +1085,13 @@ fn promote_materialized_shared_chat_updates_to_sources(
         .iter()
         .map(|instance| (instance.id.as_str(), instance))
         .collect::<HashMap<_, _>>();
+    let catalogs_by_instance = instances
+        .iter()
+        .map(|instance| {
+            let catalog = load_shared_chat_catalog(&instance.data_dir).unwrap_or_default();
+            (instance.id.clone(), catalog)
+        })
+        .collect::<HashMap<_, _>>();
     let mut source_by_key = HashMap::<String, OwnedThreadSnapshot>::new();
     for instance in instances {
         let Some(snapshots) = snapshots_by_instance.get(&instance.id) else {
@@ -1096,7 +1135,7 @@ fn promote_materialized_shared_chat_updates_to_sources(
             let replace = newest_materialized_by_key
                 .get(&key)
                 .map(|(_, current)| {
-                    snapshot_updated_at_is_newer(&candidate.snapshot, &current.snapshot)
+                    snapshot_content_is_newer(&candidate.snapshot, &current.snapshot)
                 })
                 .unwrap_or(true);
             if replace {
@@ -1107,10 +1146,10 @@ fn promote_materialized_shared_chat_updates_to_sources(
 
     let mut promoted = 0usize;
     for (key, (identity, candidate)) in newest_materialized_by_key {
-        let Some(source) = source_by_key.get(&key) else {
+        if !source_by_key.contains_key(&key) {
             continue;
-        };
-        if !snapshot_updated_at_is_newer(&candidate.snapshot, &source.snapshot) {
+        }
+        if !materialized_snapshot_has_local_updates(&catalogs_by_instance, &identity, &candidate) {
             continue;
         }
         let Some(source_instance) = instance_by_id.get(identity.source_instance_id.as_str()) else {
@@ -1128,8 +1167,48 @@ fn promote_materialized_shared_chat_updates_to_sources(
     Ok(promoted)
 }
 
-fn snapshot_updated_at_is_newer(candidate: &ThreadSnapshot, current: &ThreadSnapshot) -> bool {
-    candidate.updated_at.unwrap_or_default() > current.updated_at.unwrap_or_default()
+fn materialized_snapshot_has_local_updates(
+    catalogs_by_instance: &HashMap<String, SharedChatCatalogFile>,
+    identity: &SharedChatSourceIdentity,
+    candidate: &OwnedThreadSnapshot,
+) -> bool {
+    let Some(catalog) = catalogs_by_instance.get(&candidate.instance.id) else {
+        return false;
+    };
+    let key = identity.key();
+    let Some(mapping) = catalog
+        .mappings
+        .iter()
+        .find(|mapping| mapping.key == key && mapping.local_session_id == candidate.snapshot.id)
+    else {
+        return false;
+    };
+
+    let candidate_updated_at = candidate.snapshot.updated_at.unwrap_or_default();
+    let mapped_updated_at = mapping.local_materialized_updated_at.unwrap_or_default();
+
+    candidate_updated_at > mapped_updated_at
+        || mapping.local_materialized_rollout_len != candidate.snapshot.rollout_len
+        || mapping.local_materialized_rollout_modified_at_ms
+            != candidate.snapshot.rollout_modified_at_ms
+}
+
+fn snapshot_content_is_newer(candidate: &ThreadSnapshot, current: &ThreadSnapshot) -> bool {
+    let candidate_updated_at = candidate.updated_at.unwrap_or_default();
+    let current_updated_at = current.updated_at.unwrap_or_default();
+    if candidate_updated_at != current_updated_at {
+        return candidate_updated_at > current_updated_at;
+    }
+
+    match (candidate.rollout_len, current.rollout_len) {
+        (Some(candidate_len), Some(current_len)) if candidate_len != current_len => {
+            return candidate_len > current_len;
+        }
+        (Some(_), None) => return true,
+        _ => {}
+    }
+
+    false
 }
 
 fn shared_chat_source_identity_from_snapshot(
@@ -1172,12 +1251,20 @@ fn collect_owned_thread_snapshots(
             if snapshot.materialized_foreign || !snapshot.rollout_path.exists() {
                 continue;
             }
-            owners_by_id
-                .entry(snapshot.id.clone())
-                .or_insert_with(|| OwnedThreadSnapshot {
-                    instance: instance.clone(),
-                    snapshot,
-                });
+            let candidate = OwnedThreadSnapshot {
+                instance: instance.clone(),
+                snapshot,
+            };
+            match owners_by_id.entry(candidate.snapshot.id.clone()) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    if snapshot_content_is_newer(&candidate.snapshot, &entry.get().snapshot) {
+                        entry.insert(candidate);
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(candidate);
+                }
+            }
         }
     }
     let mut owners = owners_by_id.into_values().collect::<Vec<_>>();
@@ -1443,6 +1530,8 @@ fn ensure_foreign_snapshot_materialized(
         "forked_at": Utc::now().to_rfc3339(),
     });
     let target_rollout_path = copy_snapshot_to_target(target, owner, &local_id, Some(&metadata))?;
+    let (local_rollout_len, local_rollout_modified_at_ms) =
+        rollout_file_fingerprint(&target_rollout_path);
 
     let mapping = SharedChatMapping {
         key: key.clone(),
@@ -1457,7 +1546,11 @@ fn ensure_foreign_snapshot_materialized(
         local_rollout_path: target_rollout_path.to_string_lossy().to_string(),
         archived: owner.snapshot.archived,
         last_source_updated_at: owner.snapshot.updated_at,
+        last_source_rollout_len: owner.snapshot.rollout_len,
+        last_source_rollout_modified_at_ms: owner.snapshot.rollout_modified_at_ms,
         local_materialized_updated_at: owner.snapshot.updated_at,
+        local_materialized_rollout_len: local_rollout_len,
+        local_materialized_rollout_modified_at_ms: local_rollout_modified_at_ms,
     };
 
     if let Some(slot) = catalog
@@ -1502,9 +1595,14 @@ fn shared_chat_mapping_needs_refresh(
     let mapped_local_updated_at = mapping.local_materialized_updated_at.unwrap_or_default();
     let source_rollout_path = owner.snapshot.rollout_path.to_string_lossy().to_string();
     let local_rollout_path = local_snapshot.rollout_path.to_string_lossy().to_string();
+    let source_rollout_len_changed = mapping.last_source_rollout_len != owner.snapshot.rollout_len;
+    let source_rollout_modified_at_changed =
+        mapping.last_source_rollout_modified_at_ms != owner.snapshot.rollout_modified_at_ms;
 
     mapped_source_updated_at < source_updated_at
         || mapped_local_updated_at < source_updated_at
+        || source_rollout_len_changed
+        || source_rollout_modified_at_changed
         || mapping.source_rollout_path != source_rollout_path
         || mapping.local_rollout_path != local_rollout_path
         || mapping.archived != owner.snapshot.archived
@@ -1964,6 +2062,8 @@ fn load_thread_snapshots(instance: &CodexSyncInstance) -> Result<Vec<ThreadSnaps
             .unwrap_or_else(|| "未知工作目录".to_string());
         let updated_at = row_data.get_i64("updated_at");
         let archived = row_data.get_i64("archived").unwrap_or_default() != 0;
+        let rollout_path = PathBuf::from(rollout_path);
+        let (rollout_len, rollout_modified_at_ms) = rollout_file_fingerprint(&rollout_path);
         let session_index_entry = session_index_map
             .get(&id)
             .cloned()
@@ -1978,7 +2078,9 @@ fn load_thread_snapshots(instance: &CodexSyncInstance) -> Result<Vec<ThreadSnaps
             cwd,
             updated_at,
             archived,
-            rollout_path: PathBuf::from(rollout_path),
+            rollout_path,
+            rollout_len,
+            rollout_modified_at_ms,
             row_data,
             session_index_entry,
             source_root: instance.data_dir.clone(),
@@ -3208,6 +3310,87 @@ mod tests {
         assert_eq!(mapping.local_session_id, local_id);
         assert_eq!(mapping.last_source_updated_at, Some(200));
         assert_eq!(mapping.local_materialized_updated_at, Some(200));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn shared_chat_sync_refreshes_same_account_copy_when_rollout_grows_without_timestamp_change() {
+        let root = make_temp_dir("codex-shared-same-account-live-refresh-test");
+        let source_root = root.join("default");
+        let target_root = root.join("second");
+        create_threads_db(&source_root);
+        create_threads_db(&target_root);
+        write_thread(&source_root, "source-thread", "Source title", false, 100);
+        let instances = vec![
+            test_instance("__default__", "Default", "account-a", source_root.clone()),
+            test_instance("second", "Second", "account-a", target_root.clone()),
+        ];
+
+        ensure_shared_chat_visibility_for_instances(&instances, "second")
+            .expect("initial same-account sync");
+        append_rollout_json_line(
+            &source_root,
+            "source-thread",
+            &json!({
+                "type": "event_msg",
+                "payload": {"type": "agent_message", "message": "streamed final answer"}
+            }),
+        );
+
+        ensure_shared_chat_visibility_for_instances(&instances, "second")
+            .expect("refresh same-account sync");
+
+        let refreshed = fs::read_to_string(rollout_path_for_thread(&target_root, "source-thread"))
+            .expect("read refreshed same-account rollout");
+        assert!(refreshed.contains("streamed final answer"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn shared_chat_sync_refreshes_foreign_materialization_when_rollout_grows_without_timestamp_change(
+    ) {
+        let root = make_temp_dir("codex-shared-foreign-live-refresh-test");
+        let source_root = root.join("default");
+        let target_root = root.join("second");
+        create_threads_db(&source_root);
+        create_threads_db(&target_root);
+        write_thread(&source_root, "source-thread", "Source title", false, 100);
+        let instances = vec![
+            test_instance("__default__", "Default", "account-a", source_root.clone()),
+            test_instance("second", "Second", "account-b", target_root.clone()),
+        ];
+
+        ensure_shared_chat_visibility_for_instances(&instances, "second")
+            .expect("initial foreign sync");
+        let local_id = thread_ids(&target_root)
+            .into_iter()
+            .next()
+            .expect("initial local fork id");
+        append_rollout_json_line(
+            &source_root,
+            "source-thread",
+            &json!({
+                "type": "event_msg",
+                "payload": {"type": "agent_message", "message": "foreign streamed final answer"}
+            }),
+        );
+
+        ensure_shared_chat_visibility_for_instances(&instances, "second")
+            .expect("refresh foreign sync");
+
+        assert_eq!(thread_ids(&target_root), vec![local_id.clone()]);
+        let refreshed = fs::read_to_string(rollout_path_for_thread(&target_root, &local_id))
+            .expect("read refreshed foreign rollout");
+        assert!(refreshed.contains("foreign streamed final answer"));
+        let catalog = load_shared_chat_catalog(&target_root).expect("load catalog");
+        let mapping = catalog
+            .mappings
+            .iter()
+            .find(|item| item.source_session_id == "source-thread")
+            .expect("mapping");
+        assert!(mapping.last_source_rollout_len.is_some());
 
         let _ = fs::remove_dir_all(&root);
     }
