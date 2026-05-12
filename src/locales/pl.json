@@ -1014,10 +1014,14 @@
         "empty": "Tag nie może być pusty",
         "tooLong": "Tag nie może mieć więcej niż {{max}} znaków",
         "duplicate": "Tag już istnieje",
-        "tooMany": "Możesz dodać maksymalnie {{max}} tagów"
+        "tooMany": "Możesz dodać maksymalnie {{max}} tagów",
+        "globalDeleteFailed": "Globalne usuwanie nie powiodło się: {{error}}"
       },
       "notesLabel": "Notatka",
-      "notesPlaceholder": "Wpisz notatkę. Pozostaw puste, aby wyczyścić"
+      "notesPlaceholder": "Wpisz notatkę. Pozostaw puste, aby wyczyścić",
+      "confirmGlobalDeleteTitle": "Usuń tag",
+      "confirmGlobalDeleteMessage": "Usunąć tag „{{tag}}” ze wszystkich kont? Tej operacji nie można cofnąć.",
+      "confirmGlobalDeleteAction": "Usuń"
     },
     "groupByTag": "Grupuj według taga",
     "untagged": "Bez taga",
@@ -1779,7 +1783,10 @@
         "accountRequests": "{{count}} żądań",
         "accountTokens": "{{count}} tokenów",
         "accountResult": "Sukces {{success}} / Błąd {{failed}}",
-        "accountTokensCompact": "{{value}}"
+        "accountTokensCompact": "{{value}}",
+        "totalCost": "Łączny koszt",
+        "accountRequestsCompact": "Żądania {{value}}",
+        "totalTokensCompact": "Razem {{value}}"
       },
       "routingLabel": "Trasowanie",
       "routingSaveSuccess": "Zaktualizowano trasowanie usługi API",
@@ -1844,6 +1851,27 @@
         "viewFull": "Pokaż pełne statystyki",
         "modalTitle": "Pula limitów usługi API",
         "empty": "Brak statystyk limitów"
+      },
+      "pricing": {
+        "title": "Szacowany koszt",
+        "sync": "Synchronizuj ceny oficjalne",
+        "syncNoPrices": "Nie odczytano cen modeli z oficjalnej strony cen",
+        "syncSuccess": "Zsynchronizowano {{count}} oficjalnych cen modeli",
+        "reset": "Resetuj",
+        "resetSuccess": "Ceny modeli przywrócono do wartości wbudowanych",
+        "openSource": "Otwórz źródło cen",
+        "model": "Model usługi",
+        "input": "Wejście $/1M",
+        "cachedInput": "Wejście z cache $/1M",
+        "output": "Wyjście $/1M",
+        "source": "Źródło",
+        "sourceOpenAi": "Oficjalne",
+        "sourceBuiltin": "Wbudowane",
+        "sourceManual": "Ręczne",
+        "sameAsInput": "Tak samo jak wejście",
+        "costPill": "Koszt {{cost}}",
+        "estimatedWithCurrentPrices": "Szacowane według bieżących cen",
+        "unknownModels": "Brak ceny: {{models}}"
       }
     },
     "local": {
@@ -1859,7 +1887,8 @@
       "hourly": "Limit 5 godzin",
       "weekly": "Limit tygodniowy",
       "reset": "Resetuj",
-      "weeklyBlocksHourly": "Limit tygodniowy wynosi 0, więc limit 5-godzinny jest niedostępny"
+      "weeklyBlocksHourly": "Limit tygodniowy wynosi 0, więc limit 5-godzinny jest niedostępny",
+      "apiKeyUnsupported": "Ten typ konta nie obsługuje odczytu limitu"
     },
     "quotaError": {
       "badge": "Błąd limitu",
@@ -2114,7 +2143,8 @@
         "collapse": "Zwiń",
         "repairVisibility": "Napraw widoczność",
         "restoreSessions": "Przywróć sesje",
-        "copySessionId": "Kopiuj ID sesji"
+        "copySessionId": "Kopiuj ID sesji",
+        "copyToInstance": "Kopiuj do instancji"
       },
       "confirm": {
         "title": "Przenieś do kosza",
@@ -2147,6 +2177,15 @@
         "emptyTitle": "Kosz jest pusty",
         "emptyDesc": "Sesje przeniesione do kosza pojawią się tutaj.",
         "restoreAction": "Przywróć wybrane sesje"
+      },
+      "targetModal": {
+        "title": "Kopiuj do instancji",
+        "hint": "Kopiuje wybrane sesje do instancji docelowej. Sesje z tym samym ID już obecne w celu są pomijane. Działające instancje mogą wymagać restartu.",
+        "targetInstance": "Instancja docelowa",
+        "pickTarget": "Wybierz instancję docelową",
+        "selectedCount": "Wybrano {{count}} sesji",
+        "existingCount": "{{count}} już istnieje w celu",
+        "confirm": "Kopiuj sesje"
       }
     },
     "api": {
@@ -2617,7 +2656,9 @@
     "cursorRefreshInterval": "Automatyczne odświeżanie limitu",
     "gemini": {
       "title": "Ustawienia Gemini Cli",
-      "appPath": "Ścieżka Gemini Cli"
+      "appPath": "Ścieżka Gemini Cli",
+      "syncWsl": "Synchronizuj konfigurację WSL",
+      "syncWslDesc": "Automatycznie nadpisuj konfigurację .gemini w WSL podczas zmiany konta"
     },
     "geminiRefreshInterval": "Automatyczne odświeżanie limitu",
     "codebuddy": {

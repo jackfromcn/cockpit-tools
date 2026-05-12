@@ -1014,10 +1014,14 @@
         "empty": "Le tag ne peut pas être vide",
         "tooLong": "Le tag ne peut pas dépasser {{max}} caractères",
         "duplicate": "Le tag existe déjà",
-        "tooMany": "Vous pouvez ajouter jusqu'à {{max}} tags"
+        "tooMany": "Vous pouvez ajouter jusqu'à {{max}} tags",
+        "globalDeleteFailed": "Échec de la suppression globale : {{error}}"
       },
       "notesLabel": "Notes",
-      "notesPlaceholder": "Saisissez une note. Laissez vide pour effacer"
+      "notesPlaceholder": "Saisissez une note. Laissez vide pour effacer",
+      "confirmGlobalDeleteTitle": "Supprimer le tag",
+      "confirmGlobalDeleteMessage": "Retirer le tag « {{tag}} » de tous les comptes ? Cette action est irréversible.",
+      "confirmGlobalDeleteAction": "Supprimer"
     },
     "groupByTag": "Grouper par tag",
     "untagged": "Sans tag",
@@ -1779,7 +1783,10 @@
         "accountRequests": "{{count}} requêtes",
         "accountTokens": "{{count}} jetons",
         "accountResult": "Succès {{success}} / Échec {{failed}}",
-        "accountTokensCompact": "{{value}}"
+        "accountTokensCompact": "{{value}}",
+        "totalCost": "Coût total",
+        "accountRequestsCompact": "Requêtes {{value}}",
+        "totalTokensCompact": "Somme {{value}}"
       },
       "routingLabel": "Routage",
       "routingSaveSuccess": "Le routage du service API a été mis à jour",
@@ -1844,6 +1851,27 @@
         "viewFull": "Voir les stats complètes",
         "modalTitle": "Pool de quotas du service API",
         "empty": "Aucune statistique de quota pour l’instant"
+      },
+      "pricing": {
+        "title": "Estimation du coût",
+        "sync": "Synchroniser les prix officiels",
+        "syncNoPrices": "Aucun prix de modèle n’a été extrait de la page officielle",
+        "syncSuccess": "{{count}} prix de modèles officiels synchronisés",
+        "reset": "Réinitialiser",
+        "resetSuccess": "Prix des modèles réinitialisés aux valeurs intégrées",
+        "openSource": "Ouvrir la source des prix",
+        "model": "Modèle",
+        "input": "Entrée $/1M",
+        "cachedInput": "Entrée en cache $/1M",
+        "output": "Sortie $/1M",
+        "source": "Source",
+        "sourceOpenAi": "Officiel",
+        "sourceBuiltin": "Intégré",
+        "sourceManual": "Manuel",
+        "sameAsInput": "Identique à l’entrée",
+        "costPill": "Coût {{cost}}",
+        "estimatedWithCurrentPrices": "Estimé avec les prix actuels",
+        "unknownModels": "Prix manquant : {{models}}"
       }
     },
     "local": {
@@ -1859,7 +1887,8 @@
       "hourly": "Quota de 5 heures",
       "weekly": "Quota hebdomadaire",
       "reset": "Réinitialiser",
-      "weeklyBlocksHourly": "Le quota hebdomadaire est à 0 ; le quota de 5 heures est donc indisponible"
+      "weeklyBlocksHourly": "Le quota hebdomadaire est à 0 ; le quota de 5 heures est donc indisponible",
+      "apiKeyUnsupported": "La consultation du quota n’est pas prise en charge pour ce type de compte"
     },
     "quotaError": {
       "badge": "Erreur de quota",
@@ -2114,7 +2143,8 @@
         "collapse": "Réduire",
         "repairVisibility": "Réparer la visibilité",
         "restoreSessions": "Restaurer les sessions",
-        "copySessionId": "Copier l'ID de session"
+        "copySessionId": "Copier l'ID de session",
+        "copyToInstance": "Copier vers l’instance"
       },
       "confirm": {
         "title": "Déplacer vers la corbeille",
@@ -2147,6 +2177,15 @@
         "emptyTitle": "La corbeille est vide",
         "emptyDesc": "Les sessions déplacées dans la corbeille apparaîtront ici.",
         "restoreAction": "Restaurer les sessions sélectionnées"
+      },
+      "targetModal": {
+        "title": "Copier vers l’instance",
+        "hint": "Copie les sessions sélectionnées vers l’instance cible. Les sessions avec le même ID déjà présentes sont ignorées. Les instances en cours peuvent nécessiter un redémarrage.",
+        "targetInstance": "Instance cible",
+        "pickTarget": "Sélectionner une instance cible",
+        "selectedCount": "{{count}} session(s) sélectionnée(s)",
+        "existingCount": "{{count}} déjà dans la cible",
+        "confirm": "Copier les sessions"
       }
     },
     "api": {
@@ -2617,7 +2656,9 @@
     "cursorRefreshInterval": "Actualisation auto du quota",
     "gemini": {
       "title": "Paramètres Gemini Cli",
-      "appPath": "Chemin Gemini Cli"
+      "appPath": "Chemin Gemini Cli",
+      "syncWsl": "Synchroniser la configuration WSL",
+      "syncWslDesc": "Remplacer automatiquement la configuration .gemini dans WSL lors du changement de compte"
     },
     "geminiRefreshInterval": "Actualisation auto du quota",
     "codebuddy": {

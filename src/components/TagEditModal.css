@@ -248,6 +248,20 @@
   color: var(--danger);
 }
 
+.tag-delete-confirm-overlay {
+  z-index: 12000;
+}
+
+.tag-delete-confirm-modal {
+  max-width: 440px;
+}
+
+.tag-delete-confirm-body p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
 .tag-edit-footer {
   display: flex;
   justify-content: flex-end;

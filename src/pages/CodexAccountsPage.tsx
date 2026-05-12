@@ -1441,7 +1441,6 @@ export function CodexAccountsPage() {
     fetchAccounts,
     fetchCurrentAccount,
     switchAccount,
-    refreshQuota,
     hydrateAccountProfilesIfNeeded,
     updateAccountName,
     updateApiKeyCredentials,
@@ -2634,46 +2633,6 @@ export function CodexAccountsPage() {
     });
   };
 
-  const resolveCodexCliInstanceForApiService = async (
-    workingDir: string,
-  ): Promise<InstanceProfile> => {
-    const normalizedWorkingDir = normalizePathForCompare(workingDir);
-    const instances = await codexInstanceService.listInstances();
-    const existing = instances.find(
-      (instance) =>
-        !instance.isDefault &&
-        (instance.launchMode ?? "app") === "cli" &&
-        instance.bindAccountId === CODEX_API_SERVICE_BIND_ID &&
-        normalizePathForCompare(instance.workingDir) === normalizedWorkingDir,
-    );
-    if (existing) {
-      return existing;
-    }
-
-    const defaults = await codexInstanceService.getInstanceDefaults();
-    const instanceHash = md5(
-      `${CODEX_API_SERVICE_BIND_ID}|${normalizedWorkingDir}`,
-    ).substring(0, 12);
-    const instanceName = sanitizeCodexCliInstanceName(
-      `${t("codex.localAccess.title", "API 服务")} CLI ${instanceHash.substring(0, 6)}`,
-    );
-    const userDataDir = joinFilePath(
-      defaults.rootDir,
-      `cli-api-service-${instanceHash}`,
-    );
-
-    return await codexInstanceService.createInstance({
-      name: instanceName,
-      userDataDir,
-      workingDir: normalizedWorkingDir,
-      extraArgs: "",
-      bindAccountId: CODEX_API_SERVICE_BIND_ID,
-      launchMode: "cli",
-      copySourceInstanceId: "__default__",
-      initMode: "copy",
-    });
-  };
-
   const handleLaunchCodexCli = async (account: CodexAccount) => {
     if (cliLaunchingAccountId) return;
     setMessage(null);
@@ -2692,50 +2651,6 @@ export function CodexAccountsPage() {
         account,
         selected,
       );
-      const prepared = await codexInstanceService.startInstance(instance.id);
-      const result =
-        await codexInstanceService.executeCodexInstanceLaunchCommand(
-          prepared.id,
-        );
-      await codexInstanceStore.refreshInstances();
-      setMessage({
-        text: result || t("codex.cli.launchSuccess", "已启动 Codex CLI"),
-      });
-    } catch (e) {
-      setMessage({
-        text: t(
-          "codex.cli.launchFailed",
-          "启动 Codex CLI 失败: {{error}}",
-        ).replace("{{error}}", String(e).replace(/^Error:\s*/, "")),
-        tone: "error",
-      });
-    } finally {
-      setCliLaunchingAccountId(null);
-    }
-  };
-
-  const handleLaunchLocalAccessCli = async () => {
-    if (cliLaunchingAccountId) return;
-    if (!localAccessCollection) {
-      setMessage({
-        text: t("codex.localAccess.testUnavailable", "当前 API 服务地址不可用"),
-        tone: "error",
-      });
-      return;
-    }
-    setMessage(null);
-    setCliLaunchingAccountId(CODEX_API_SERVICE_BIND_ID);
-    try {
-      const selected = await openFileDialog({
-        directory: true,
-        multiple: false,
-        title: t("codex.cli.selectWorkingDir", "选择 Codex CLI 工作目录"),
-      });
-      if (!selected || typeof selected !== "string") {
-        return;
-      }
-
-      const instance = await resolveCodexCliInstanceForApiService(selected);
       const prepared = await codexInstanceService.startInstance(instance.id);
       const result =
         await codexInstanceService.executeCodexInstanceLaunchCommand(
@@ -5334,7 +5249,12 @@ export function CodexAccountsPage() {
           <div className="codex-quota-section">
             {isApiKeyAccount && !isNewApiAccount ? (
               <div className="quota-empty">
-                <span>{t("common.shared.quota.noData", "暂无配额数据")}</span>
+                <span>
+                  {t(
+                    "codex.quota.apiKeyUnsupported",
+                    "当前账号类型暂不支持配额查询",
+                  )}
+                </span>
               </div>
             ) : (
               <>
@@ -5919,7 +5839,12 @@ export function CodexAccountsPage() {
           </td>
           <td>
             {isApiKeyAccount && !isNewApiAccount ? (
-              <span className="codex-subscription-table-empty">-</span>
+              <span className="codex-subscription-table-empty">
+                {t(
+                  "codex.quota.apiKeyUnsupported",
+                  "当前账号类型暂不支持配额查询",
+                )}
+              </span>
             ) : (
               <>
                 <div className="quota-grid">
@@ -8533,10 +8458,16 @@ export function CodexAccountsPage() {
                                   ))
                                 ) : (
                                   <span className="codex-custom-sort-quota-empty">
-                                    {t(
-                                      "common.shared.quota.noData",
-                                      "暂无配额数据",
-                                    )}
+                                    {isCodexApiKeyAccount(account) &&
+                                    !isCodexNewApiAccount(account)
+                                      ? t(
+                                          "codex.quota.apiKeyUnsupported",
+                                          "当前账号类型暂不支持配额查询",
+                                        )
+                                      : t(
+                                          "common.shared.quota.noData",
+                                          "暂无配额数据",
+                                        )}
                                   </span>
                                 )}
                               </div>

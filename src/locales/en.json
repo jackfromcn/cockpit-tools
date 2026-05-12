@@ -1056,11 +1056,15 @@
       "inputDisabledPlaceholder": "Tag limit reached",
       "add": "Add",
       "save": "Save Tags",
+      "confirmGlobalDeleteTitle": "Delete tag",
+      "confirmGlobalDeleteMessage": "Remove tag \"{{tag}}\" from all accounts? This cannot be undone.",
+      "confirmGlobalDeleteAction": "Delete",
       "error": {
         "empty": "Tag cannot be empty",
         "tooLong": "Tag must be no longer than {{max}} characters",
         "duplicate": "Tag already exists",
-        "tooMany": "You can add up to {{max}} tags"
+        "tooMany": "You can add up to {{max}} tags",
+        "globalDeleteFailed": "Global delete failed: {{error}}"
       },
       "notesLabel": "Notes",
       "notesPlaceholder": "Enter notes. Leave empty to clear"
@@ -2174,7 +2178,8 @@
       "hourly": "5-hour quota",
       "weekly": "Weekly quota",
       "weeklyBlocksHourly": "Weekly quota is 0, so the 5-hour quota is unavailable",
-      "reset": "Reset"
+      "reset": "Reset",
+      "apiKeyUnsupported": "Quota lookup is not supported for this account type"
     },
     "usage": {
       "open": "Open OpenAI usage",

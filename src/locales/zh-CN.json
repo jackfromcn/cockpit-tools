@@ -1056,11 +1056,15 @@
       "inputDisabledPlaceholder": "已达到标签上限",
       "add": "添加",
       "save": "保存标签",
+      "confirmGlobalDeleteTitle": "删除标签",
+      "confirmGlobalDeleteMessage": "确定要从所有账号中移除标签 \"{{tag}}\" 吗？此操作不可撤销。",
+      "confirmGlobalDeleteAction": "删除",
       "error": {
         "empty": "标签不能为空",
         "tooLong": "标签长度不能超过 {{max}} 个字符",
         "duplicate": "标签已存在",
-        "tooMany": "标签数量不能超过 {{max}} 个"
+        "tooMany": "标签数量不能超过 {{max}} 个",
+        "globalDeleteFailed": "全局删除失败：{{error}}"
       },
       "notesLabel": "备注",
       "notesPlaceholder": "输入备注，留空表示不设置"
@@ -2174,7 +2178,8 @@
       "hourly": "5小时配额",
       "weekly": "周配额",
       "weeklyBlocksHourly": "周额度为 0，5小时额度已不可用",
-      "reset": "重置"
+      "reset": "重置",
+      "apiKeyUnsupported": "当前账号类型暂不支持配额查询"
     },
     "usage": {
       "open": "查看 OpenAI 用量",
@@ -2806,7 +2811,9 @@
     },
     "gemini": {
       "title": "Gemini Cli 设置",
-      "appPath": "Gemini Cli 路径"
+      "appPath": "Gemini Cli 路径",
+      "syncWsl": "同步 WSL 配置",
+      "syncWslDesc": "切换账号时自动覆盖 WSL 中的 .gemini 配置"
     },
     "geminiRefreshInterval": "配额自动刷新",
     "error": {

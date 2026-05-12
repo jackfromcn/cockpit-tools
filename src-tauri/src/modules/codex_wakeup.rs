@@ -1437,6 +1437,70 @@ fn normalize_task(raw: &CodexWakeupTask) -> CodexWakeupTask {
     }
 }
 
+fn normalize_account_id_set(account_ids: &[String]) -> HashSet<String> {
+    account_ids
+        .iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+fn remove_account_refs_from_state(
+    state: &mut CodexWakeupState,
+    removed_account_ids: &HashSet<String>,
+) -> (usize, usize) {
+    if removed_account_ids.is_empty() {
+        return (0, 0);
+    }
+
+    let now = now_ts();
+    let mut removed_refs = 0;
+    for task in &mut state.tasks {
+        let before_count = task.account_ids.len();
+        task.account_ids
+            .retain(|account_id| !removed_account_ids.contains(account_id));
+        let task_removed_refs = before_count.saturating_sub(task.account_ids.len());
+        if task_removed_refs > 0 {
+            removed_refs += task_removed_refs;
+            task.updated_at = now;
+        }
+    }
+
+    let before_task_count = state.tasks.len();
+    state.tasks.retain(|task| !task.account_ids.is_empty());
+    let removed_tasks = before_task_count.saturating_sub(state.tasks.len());
+    if removed_tasks > 0 {
+        state.enabled = state.tasks.iter().any(|task| task.enabled);
+    }
+
+    (removed_refs, removed_tasks)
+}
+
+pub fn remove_account_refs(account_ids: &[String]) -> Result<(), String> {
+    let removed_account_ids = normalize_account_id_set(account_ids);
+    if removed_account_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut state = load_state_inner(false, None)?;
+    let (removed_refs, removed_tasks) =
+        remove_account_refs_from_state(&mut state, &removed_account_ids);
+    if removed_refs == 0 && removed_tasks == 0 {
+        return Ok(());
+    }
+
+    refresh_next_run_at(&mut state);
+    let _lock = TASKS_LOCK.lock().map_err(|_| "获取 Codex 唤醒任务锁失败")?;
+    save_json_atomic(&tasks_path()?, &state)?;
+    logger::log_info(&format!(
+        "[CodexWakeup] 已清理删除账号的任务引用: account_count={}, removed_refs={}, removed_tasks={}",
+        removed_account_ids.len(),
+        removed_refs,
+        removed_tasks
+    ));
+    Ok(())
+}
+
 fn disable_tasks_when_cli_missing_with_runtime(
     state: &mut CodexWakeupState,
     runtime_available: bool,
@@ -2382,4 +2446,92 @@ pub fn get_task(task_id: &str) -> Result<Option<CodexWakeupTask>, String> {
         .tasks
         .into_iter()
         .find(|item| item.id == task_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        normalize_account_id_set, remove_account_refs_from_state, CodexWakeupSchedule,
+        CodexWakeupState, CodexWakeupTask,
+    };
+
+    fn make_task(id: &str, enabled: bool, account_ids: &[&str]) -> CodexWakeupTask {
+        CodexWakeupTask {
+            id: id.to_string(),
+            name: id.to_string(),
+            enabled,
+            account_ids: account_ids.iter().map(|item| item.to_string()).collect(),
+            prompt: None,
+            model: None,
+            model_display_name: None,
+            model_reasoning_effort: None,
+            schedule: CodexWakeupSchedule {
+                kind: "daily".to_string(),
+                daily_time: Some("09:00".to_string()),
+                weekly_days: Vec::new(),
+                weekly_time: None,
+                interval_hours: None,
+                quota_reset_window: None,
+                startup_delay_minutes: None,
+            },
+            created_at: 1,
+            updated_at: 1,
+            last_run_at: None,
+            last_status: None,
+            last_message: None,
+            last_success_count: None,
+            last_failure_count: None,
+            last_duration_ms: None,
+            next_run_at: None,
+        }
+    }
+
+    #[test]
+    fn remove_account_refs_drops_deleted_ids_and_empty_tasks() {
+        let removed_account_ids = normalize_account_id_set(&[
+            " removed-account ".to_string(),
+            "removed-account".to_string(),
+        ]);
+        let mut state = CodexWakeupState {
+            enabled: true,
+            tasks: vec![
+                make_task("keep-partial", true, &["kept-account", "removed-account"]),
+                make_task("drop-empty", true, &["removed-account"]),
+                make_task("keep-disabled", false, &["disabled-account"]),
+            ],
+            ..CodexWakeupState::default()
+        };
+
+        let (removed_refs, removed_tasks) =
+            remove_account_refs_from_state(&mut state, &removed_account_ids);
+
+        assert_eq!((removed_refs, removed_tasks), (2, 1));
+        assert_eq!(state.tasks.len(), 2);
+        assert_eq!(state.tasks[0].id, "keep-partial");
+        assert_eq!(state.tasks[0].account_ids, vec!["kept-account"]);
+        assert!(state.tasks[0].updated_at > 1);
+        assert_eq!(state.tasks[1].id, "keep-disabled");
+        assert!(state.enabled);
+    }
+
+    #[test]
+    fn remove_account_refs_disables_state_when_last_enabled_task_is_removed() {
+        let removed_account_ids = normalize_account_id_set(&["removed-account".to_string()]);
+        let mut state = CodexWakeupState {
+            enabled: true,
+            tasks: vec![
+                make_task("drop-empty", true, &["removed-account"]),
+                make_task("keep-disabled", false, &["disabled-account"]),
+            ],
+            ..CodexWakeupState::default()
+        };
+
+        let (removed_refs, removed_tasks) =
+            remove_account_refs_from_state(&mut state, &removed_account_ids);
+
+        assert_eq!((removed_refs, removed_tasks), (1, 1));
+        assert_eq!(state.tasks.len(), 1);
+        assert_eq!(state.tasks[0].id, "keep-disabled");
+        assert!(!state.enabled);
+    }
 }

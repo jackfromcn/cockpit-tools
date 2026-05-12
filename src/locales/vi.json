@@ -1014,10 +1014,14 @@
         "empty": "Thẻ không được để trống",
         "tooLong": "Thẻ không được dài quá {{max}} ký tự",
         "duplicate": "Thẻ đã tồn tại",
-        "tooMany": "Bạn chỉ có thể thêm tối đa {{max}} thẻ"
+        "tooMany": "Bạn chỉ có thể thêm tối đa {{max}} thẻ",
+        "globalDeleteFailed": "Xóa toàn cục thất bại: {{error}}"
       },
       "notesLabel": "Ghi chú",
-      "notesPlaceholder": "Nhập ghi chú. Để trống để xóa"
+      "notesPlaceholder": "Nhập ghi chú. Để trống để xóa",
+      "confirmGlobalDeleteTitle": "Xóa thẻ",
+      "confirmGlobalDeleteMessage": "Xóa thẻ \"{{tag}}\" khỏi tất cả tài khoản? Không thể hoàn tác thao tác này.",
+      "confirmGlobalDeleteAction": "Xóa"
     },
     "groupByTag": "Nhóm theo thẻ",
     "untagged": "Chưa gắn thẻ",
@@ -1779,7 +1783,10 @@
         "accountRequests": "{{count}} yêu cầu",
         "accountTokens": "{{count}} token",
         "accountResult": "Thành công {{success}} / Thất bại {{failed}}",
-        "accountTokensCompact": "{{value}}"
+        "accountTokensCompact": "{{value}}",
+        "totalCost": "Tổng chi phí",
+        "accountRequestsCompact": "Yêu cầu {{value}}",
+        "totalTokensCompact": "Tổng {{value}}"
       },
       "routingLabel": "Định tuyến",
       "routingSaveSuccess": "Đã cập nhật định tuyến dịch vụ API",
@@ -1844,6 +1851,27 @@
         "viewFull": "Xem thống kê đầy đủ",
         "modalTitle": "Nhóm hạn mức dịch vụ API",
         "empty": "Chưa có thống kê hạn mức"
+      },
+      "pricing": {
+        "title": "Ước tính chi phí",
+        "sync": "Đồng bộ giá chính thức",
+        "syncNoPrices": "Không đọc được giá mô hình từ trang giá chính thức",
+        "syncSuccess": "Đã đồng bộ {{count}} giá mô hình chính thức",
+        "reset": "Đặt lại",
+        "resetSuccess": "Giá mô hình đã về mặc định tích hợp",
+        "openSource": "Mở nguồn giá",
+        "model": "Mô hình",
+        "input": "Đầu vào $/1M",
+        "cachedInput": "Đầu vào cache $/1M",
+        "output": "Đầu ra $/1M",
+        "source": "Nguồn",
+        "sourceOpenAi": "Chính thức",
+        "sourceBuiltin": "Tích hợp",
+        "sourceManual": "Thủ công",
+        "sameAsInput": "Giống đầu vào",
+        "costPill": "Chi phí {{cost}}",
+        "estimatedWithCurrentPrices": "Ước tính theo giá hiện tại",
+        "unknownModels": "Thiếu giá: {{models}}"
       }
     },
     "local": {
@@ -1859,7 +1887,8 @@
       "hourly": "Hạn mức 5 giờ",
       "weekly": "Hạn mức tuần",
       "reset": "Đặt lại",
-      "weeklyBlocksHourly": "Hạn mức tuần là 0 nên hạn mức 5 giờ không khả dụng"
+      "weeklyBlocksHourly": "Hạn mức tuần là 0 nên hạn mức 5 giờ không khả dụng",
+      "apiKeyUnsupported": "Loại tài khoản này không hỗ trợ tra cứu hạn mức"
     },
     "quotaError": {
       "badge": "Lỗi quota",
@@ -2114,7 +2143,8 @@
         "collapse": "Thu gọn",
         "repairVisibility": "Sửa hiển thị",
         "restoreSessions": "Khôi phục phiên",
-        "copySessionId": "Sao chép ID phiên"
+        "copySessionId": "Sao chép ID phiên",
+        "copyToInstance": "Sao chép sang phiên bản"
       },
       "confirm": {
         "title": "Chuyển vào thùng rác",
@@ -2147,6 +2177,15 @@
         "emptyTitle": "Thùng rác trống",
         "emptyDesc": "Các phiên đã chuyển vào thùng rác sẽ xuất hiện ở đây.",
         "restoreAction": "Khôi phục các phiên đã chọn"
+      },
+      "targetModal": {
+        "title": "Sao chép sang phiên bản",
+        "hint": "Sao chép các phiên đã chọn vào phiên bản đích. Phiên có cùng ID đã tồn tại sẽ được bỏ qua. Phiên bản đích đang chạy có thể cần khởi động lại.",
+        "targetInstance": "Phiên bản đích",
+        "pickTarget": "Chọn phiên bản đích",
+        "selectedCount": "Đã chọn {{count}} phiên",
+        "existingCount": "{{count}} đã có ở đích",
+        "confirm": "Sao chép phiên"
       }
     },
     "api": {
@@ -2617,7 +2656,9 @@
     "cursorRefreshInterval": "Tự động làm mới hạn mức",
     "gemini": {
       "title": "Cài đặt Gemini Cli",
-      "appPath": "Đường dẫn Gemini Cli"
+      "appPath": "Đường dẫn Gemini Cli",
+      "syncWsl": "Đồng bộ cấu hình WSL",
+      "syncWslDesc": "Tự động ghi đè cấu hình .gemini trong WSL khi đổi tài khoản"
     },
     "geminiRefreshInterval": "Tự động làm mới hạn ngạch",
     "codebuddy": {

@@ -1060,10 +1060,14 @@
         "empty": "Tag tidak boleh kosong",
         "tooLong": "Tag tidak boleh lebih dari {{max}} karakter",
         "duplicate": "Tag sudah ada",
-        "tooMany": "Anda dapat menambahkan maksimal {{max}} tag"
+        "tooMany": "Anda dapat menambahkan maksimal {{max}} tag",
+        "globalDeleteFailed": "Gagal menghapus secara global: {{error}}"
       },
       "notesLabel": "Catatan",
-      "notesPlaceholder": "Masukkan catatan. Kosongkan untuk menghapus"
+      "notesPlaceholder": "Masukkan catatan. Kosongkan untuk menghapus",
+      "confirmGlobalDeleteTitle": "Hapus tag",
+      "confirmGlobalDeleteMessage": "Hapus tag \"{{tag}}\" dari semua akun? Tindakan ini tidak dapat dibatalkan.",
+      "confirmGlobalDeleteAction": "Hapus"
     },
     "groupByTag": "Kelompokkan berdasarkan tag",
     "untagged": "Tanpa Tag",
@@ -1828,7 +1832,10 @@
         "accountRequests": "{{count}} permintaan",
         "accountTokens": "{{count}} token",
         "accountResult": "Berhasil {{success}} / Gagal {{failed}}",
-        "accountTokensCompact": "{{value}}"
+        "accountTokensCompact": "{{value}}",
+        "totalCost": "Total biaya",
+        "accountRequestsCompact": "Permintaan {{value}}",
+        "totalTokensCompact": "Jumlah {{value}}"
       },
       "routingLabel": "Rute",
       "routingSaveSuccess": "Rute layanan API diperbarui",
@@ -1893,6 +1900,27 @@
         "viewFull": "Lihat statistik lengkap",
         "modalTitle": "Kumpulan kuota layanan API",
         "empty": "Belum ada statistik kuota"
+      },
+      "pricing": {
+        "title": "Estimasi biaya",
+        "sync": "Sinkronkan harga resmi",
+        "syncNoPrices": "Tidak ada harga model yang terbaca dari halaman harga resmi",
+        "syncSuccess": "Berhasil menyinkronkan {{count}} harga model resmi",
+        "reset": "Reset",
+        "resetSuccess": "Harga model dikembalikan ke bawaan",
+        "openSource": "Buka sumber harga",
+        "model": "Model layanan",
+        "input": "Masukan $/1M",
+        "cachedInput": "Input cache $/1M",
+        "output": "Keluaran $/1M",
+        "source": "Sumber",
+        "sourceOpenAi": "Resmi",
+        "sourceBuiltin": "Bawaan",
+        "sourceManual": "Diatur manual",
+        "sameAsInput": "Sama dengan input",
+        "costPill": "Biaya {{cost}}",
+        "estimatedWithCurrentPrices": "Diestimasi dengan harga saat ini",
+        "unknownModels": "Harga hilang: {{models}}"
       }
     },
     "api": {
@@ -1999,7 +2027,8 @@
       "hourly": "Kuota 5 jam",
       "weekly": "Kuota mingguan",
       "reset": "Setel ulang",
-      "weeklyBlocksHourly": "Kuota mingguan 0, jadi kuota 5 jam tidak tersedia"
+      "weeklyBlocksHourly": "Kuota mingguan 0, jadi kuota 5 jam tidak tersedia",
+      "apiKeyUnsupported": "Pencarian kuota tidak didukung untuk jenis akun ini"
     },
     "usage": {
       "open": "Buka penggunaan OpenAI",
@@ -2251,7 +2280,8 @@
         "collapse": "Ciutkan",
         "repairVisibility": "Perbaiki visibilitas",
         "restoreSessions": "Pulihkan sesi",
-        "copySessionId": "Salin ID sesi"
+        "copySessionId": "Salin ID sesi",
+        "copyToInstance": "Salin ke instans"
       },
       "confirm": {
         "title": "Pindahkan ke Sampah",
@@ -2284,6 +2314,15 @@
         "emptyTitle": "Trash kosong",
         "emptyDesc": "Sesi yang dipindahkan ke Trash akan muncul di sini.",
         "restoreAction": "Pulihkan sesi terpilih"
+      },
+      "targetModal": {
+        "title": "Salin ke instans",
+        "hint": "Menyalin sesi yang dipilih ke instans tujuan. Sesi dengan ID yang sudah ada akan dilewati. Instans yang berjalan mungkin perlu dimulai ulang.",
+        "targetInstance": "Instans tujuan",
+        "pickTarget": "Pilih instans tujuan",
+        "selectedCount": "{{count}} sesi dipilih",
+        "existingCount": "{{count}} sudah ada di tujuan",
+        "confirm": "Salin sesi"
       }
     },
     "modelProviders": {
@@ -2767,7 +2806,9 @@
     },
     "gemini": {
       "title": "Gemini Cli Settings",
-      "appPath": "Gemini Cli Path"
+      "appPath": "Gemini Cli Path",
+      "syncWsl": "Sinkronkan konfigurasi WSL",
+      "syncWslDesc": "Timpa otomatis konfigurasi .gemini di WSL saat mengganti akun"
     },
     "geminiRefreshInterval": "Quota Auto Refresh",
     "error": {

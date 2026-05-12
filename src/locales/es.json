@@ -1014,10 +1014,14 @@
         "empty": "La etiqueta no puede estar vacía",
         "tooLong": "La etiqueta no puede tener más de {{max}} caracteres",
         "duplicate": "La etiqueta ya existe",
-        "tooMany": "Puedes agregar hasta {{max}} etiquetas"
+        "tooMany": "Puedes agregar hasta {{max}} etiquetas",
+        "globalDeleteFailed": "Error al eliminar globalmente: {{error}}"
       },
       "notesLabel": "Notas",
-      "notesPlaceholder": "Introduce notas. Déjalo vacío para borrar"
+      "notesPlaceholder": "Introduce notas. Déjalo vacío para borrar",
+      "confirmGlobalDeleteTitle": "Eliminar etiqueta",
+      "confirmGlobalDeleteMessage": "¿Quitar la etiqueta \"{{tag}}\" de todas las cuentas? Esta acción no se puede deshacer.",
+      "confirmGlobalDeleteAction": "Eliminar"
     },
     "groupByTag": "Agrupar por etiqueta",
     "untagged": "Sin etiqueta",
@@ -1779,7 +1783,10 @@
         "accountRequests": "{{count}} solicitudes",
         "accountTokens": "{{count}} tokens totales",
         "accountResult": "Correctas {{success}} / Fallidas {{failed}}",
-        "accountTokensCompact": "{{value}}"
+        "accountTokensCompact": "{{value}}",
+        "totalCost": "Coste total",
+        "accountRequestsCompact": "Solicitudes {{value}}",
+        "totalTokensCompact": "Suma {{value}}"
       },
       "routingLabel": "Enrutamiento",
       "routingSaveSuccess": "Se actualizó el enrutamiento del servicio API",
@@ -1844,6 +1851,27 @@
         "viewFull": "Ver estadísticas completas",
         "modalTitle": "Bolsa de cuota del servicio API",
         "empty": "Aún no hay estadísticas de cuota"
+      },
+      "pricing": {
+        "title": "Estimación de coste",
+        "sync": "Sincronizar precios oficiales",
+        "syncNoPrices": "No se pudieron leer precios de modelos en la página oficial",
+        "syncSuccess": "Se sincronizaron {{count}} precios oficiales de modelos",
+        "reset": "Restablecer",
+        "resetSuccess": "Los precios de modelos volvieron a los valores integrados",
+        "openSource": "Abrir fuente de precios",
+        "model": "Modelo",
+        "input": "Entrada $/1M",
+        "cachedInput": "Entrada en caché $/1M",
+        "output": "Salida $/1M",
+        "source": "Fuente",
+        "sourceOpenAi": "Oficial",
+        "sourceBuiltin": "Integrado",
+        "sourceManual": "Configurado manualmente",
+        "sameAsInput": "Igual que entrada",
+        "costPill": "Coste {{cost}}",
+        "estimatedWithCurrentPrices": "Estimado con precios actuales",
+        "unknownModels": "Falta precio: {{models}}"
       }
     },
     "local": {
@@ -1859,7 +1887,8 @@
       "hourly": "Cuota de 5 horas",
       "weekly": "Cuota semanal",
       "reset": "Reinicio",
-      "weeklyBlocksHourly": "La cuota semanal es 0, por eso la cuota de 5 horas no está disponible"
+      "weeklyBlocksHourly": "La cuota semanal es 0, por eso la cuota de 5 horas no está disponible",
+      "apiKeyUnsupported": "La consulta de cuota no es compatible con este tipo de cuenta"
     },
     "quotaError": {
       "badge": "Error de cuota",
@@ -2114,7 +2143,8 @@
         "collapse": "Contraer",
         "repairVisibility": "Reparar visibilidad",
         "restoreSessions": "Restaurar sesiones",
-        "copySessionId": "Copiar ID de sesión"
+        "copySessionId": "Copiar ID de sesión",
+        "copyToInstance": "Copiar a instancia"
       },
       "confirm": {
         "title": "Mover a la papelera",
@@ -2147,6 +2177,15 @@
         "emptyTitle": "La papelera está vacía",
         "emptyDesc": "Las sesiones movidas a la papelera aparecerán aquí.",
         "restoreAction": "Restaurar sesiones seleccionadas"
+      },
+      "targetModal": {
+        "title": "Copiar a instancia",
+        "hint": "Copia las sesiones seleccionadas en la instancia de destino. Se omiten las sesiones con el mismo ID ya existentes. Las instancias en ejecución pueden requerir reinicio.",
+        "targetInstance": "Instancia destino",
+        "pickTarget": "Selecciona una instancia destino",
+        "selectedCount": "{{count}} sesión(es) seleccionadas",
+        "existingCount": "{{count}} ya existen en destino",
+        "confirm": "Copiar sesiones"
       }
     },
     "api": {
@@ -2617,7 +2656,9 @@
     "cursorRefreshInterval": "Actualización automática de cuota",
     "gemini": {
       "title": "Ajustes de Gemini Cli",
-      "appPath": "Ruta de Gemini Cli"
+      "appPath": "Ruta de Gemini Cli",
+      "syncWsl": "Sincronizar configuración WSL",
+      "syncWslDesc": "Sobrescribir automáticamente la configuración .gemini en WSL al cambiar de cuenta"
     },
     "geminiRefreshInterval": "Actualización automática de cuota",
     "codebuddy": {

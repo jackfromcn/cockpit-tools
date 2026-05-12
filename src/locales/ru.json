@@ -1014,10 +1014,14 @@
         "empty": "Тег не может быть пустым",
         "tooLong": "Тег не может быть длиннее {{max}} символов",
         "duplicate": "Тег уже существует",
-        "tooMany": "Можно добавить не более {{max}} тегов"
+        "tooMany": "Можно добавить не более {{max}} тегов",
+        "globalDeleteFailed": "Глобальное удаление не удалось: {{error}}"
       },
       "notesLabel": "Заметка",
-      "notesPlaceholder": "Введите заметку. Оставьте пустым, чтобы очистить"
+      "notesPlaceholder": "Введите заметку. Оставьте пустым, чтобы очистить",
+      "confirmGlobalDeleteTitle": "Удалить тег",
+      "confirmGlobalDeleteMessage": "Удалить тег «{{tag}}» из всех аккаунтов? Это действие нельзя отменить.",
+      "confirmGlobalDeleteAction": "Удалить"
     },
     "groupByTag": "Группировать по тегу",
     "untagged": "Без тега",
@@ -1779,7 +1783,10 @@
         "accountRequests": "{{count}} запросов",
         "accountTokens": "{{count}} токенов",
         "accountResult": "Успех {{success}} / Ошибка {{failed}}",
-        "accountTokensCompact": "{{value}}"
+        "accountTokensCompact": "{{value}}",
+        "totalCost": "Итоговая стоимость",
+        "accountRequestsCompact": "Запросы {{value}}",
+        "totalTokensCompact": "Всего {{value}}"
       },
       "routingLabel": "Маршрутизация",
       "routingSaveSuccess": "Маршрутизация API-сервиса обновлена",
@@ -1844,6 +1851,27 @@
         "viewFull": "Показать полную статистику",
         "modalTitle": "Пул квот сервиса API",
         "empty": "Статистики квот пока нет"
+      },
+      "pricing": {
+        "title": "Оценка стоимости",
+        "sync": "Синхронизировать официальные цены",
+        "syncNoPrices": "На официальной странице цен не найдены цены моделей",
+        "syncSuccess": "Синхронизировано официальных цен моделей: {{count}}",
+        "reset": "Сбросить",
+        "resetSuccess": "Цены моделей сброшены к встроенным значениям",
+        "openSource": "Открыть источник цен",
+        "model": "Модель",
+        "input": "Ввод $/1M",
+        "cachedInput": "Кэшированный ввод $/1M",
+        "output": "Вывод $/1M",
+        "source": "Источник",
+        "sourceOpenAi": "Официальный",
+        "sourceBuiltin": "Встроенный",
+        "sourceManual": "Вручную",
+        "sameAsInput": "Как ввод",
+        "costPill": "Стоимость {{cost}}",
+        "estimatedWithCurrentPrices": "Оценено по текущим ценам",
+        "unknownModels": "Нет цены: {{models}}"
       }
     },
     "local": {
@@ -1859,7 +1887,8 @@
       "hourly": "Квота 5 часов",
       "weekly": "Недельная квота",
       "reset": "Сброс",
-      "weeklyBlocksHourly": "Недельная квота равна 0, поэтому 5-часовая квота недоступна"
+      "weeklyBlocksHourly": "Недельная квота равна 0, поэтому 5-часовая квота недоступна",
+      "apiKeyUnsupported": "Для этого типа аккаунта просмотр квоты не поддерживается"
     },
     "quotaError": {
       "badge": "Ошибка квоты",
@@ -2114,7 +2143,8 @@
         "collapse": "Свернуть",
         "repairVisibility": "Исправить видимость",
         "restoreSessions": "Восстановить сессии",
-        "copySessionId": "Копировать ID сессии"
+        "copySessionId": "Копировать ID сессии",
+        "copyToInstance": "Копировать в экземпляр"
       },
       "confirm": {
         "title": "Переместить в корзину",
@@ -2147,6 +2177,15 @@
         "emptyTitle": "Корзина пуста",
         "emptyDesc": "Сессии, перемещённые в корзину, появятся здесь.",
         "restoreAction": "Восстановить выбранные сессии"
+      },
+      "targetModal": {
+        "title": "Копировать в экземпляр",
+        "hint": "Копирует выбранные сеансы в целевой экземпляр. Сеансы с уже существующим ID пропускаются. Работающий целевой экземпляр может потребовать перезапуска.",
+        "targetInstance": "Целевой экземпляр",
+        "pickTarget": "Выберите целевой экземпляр",
+        "selectedCount": "Выбрано сеансов: {{count}}",
+        "existingCount": "Уже есть в цели: {{count}}",
+        "confirm": "Копировать сеансы"
       }
     },
     "api": {
@@ -2617,7 +2656,9 @@
     "cursorRefreshInterval": "Автообновление квоты",
     "gemini": {
       "title": "Настройки Gemini Cli",
-      "appPath": "Путь Gemini Cli"
+      "appPath": "Путь Gemini Cli",
+      "syncWsl": "Синхронизировать конфигурацию WSL",
+      "syncWslDesc": "Автоматически перезаписывать конфигурацию .gemini в WSL при смене аккаунта"
     },
     "geminiRefreshInterval": "Автоматическое обновление квоты",
     "codebuddy": {

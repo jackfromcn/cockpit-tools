@@ -1014,10 +1014,14 @@
         "empty": "Tag darf nicht leer sein",
         "tooLong": "Tag darf maximal {{max}} Zeichen lang sein",
         "duplicate": "Tag existiert bereits",
-        "tooMany": "Sie können bis zu {{max}} Tags hinzufügen"
+        "tooMany": "Sie können bis zu {{max}} Tags hinzufügen",
+        "globalDeleteFailed": "Globales Löschen fehlgeschlagen: {{error}}"
       },
       "notesLabel": "Notiz",
-      "notesPlaceholder": "Notiz eingeben. Leer lassen, um sie zu löschen"
+      "notesPlaceholder": "Notiz eingeben. Leer lassen, um sie zu löschen",
+      "confirmGlobalDeleteTitle": "Tag löschen",
+      "confirmGlobalDeleteMessage": "Tag „{{tag}}“ aus allen Konten entfernen? Dies kann nicht rückgängig gemacht werden.",
+      "confirmGlobalDeleteAction": "Löschen"
     },
     "groupByTag": "Nach Tag gruppieren",
     "untagged": "Ohne Tag",
@@ -1779,7 +1783,10 @@
         "accountRequests": "{{count}} Anfragen",
         "accountTokens": "{{count}} Token",
         "accountResult": "Erfolg {{success}} / Fehler {{failed}}",
-        "accountTokensCompact": "{{value}}"
+        "accountTokensCompact": "{{value}}",
+        "totalCost": "Gesamtkosten",
+        "accountRequestsCompact": "Anfragen {{value}}",
+        "totalTokensCompact": "Gesamt {{value}}"
       },
       "routingLabel": "Routing",
       "routingSaveSuccess": "API-Service-Routing wurde aktualisiert",
@@ -1844,6 +1851,27 @@
         "viewFull": "Vollständige Statistik anzeigen",
         "modalTitle": "Kontingentpool des API-Dienstes",
         "empty": "Noch keine Kontingentstatistik"
+      },
+      "pricing": {
+        "title": "Kostenschätzung",
+        "sync": "Offizielle Preise synchronisieren",
+        "syncNoPrices": "Auf der offiziellen Preisseite wurden keine Modellpreise erkannt",
+        "syncSuccess": "{{count}} offizielle Modellpreise synchronisiert",
+        "reset": "Zurücksetzen",
+        "resetSuccess": "Modellpreise auf integrierte Standardwerte zurückgesetzt",
+        "openSource": "Preisquelle öffnen",
+        "model": "Modell",
+        "input": "Eingabe $/1M",
+        "cachedInput": "Cache-Eingabe $/1M",
+        "output": "Ausgabe $/1M",
+        "source": "Quelle",
+        "sourceOpenAi": "Offiziell",
+        "sourceBuiltin": "Integriert",
+        "sourceManual": "Manuell",
+        "sameAsInput": "Wie Eingabe",
+        "costPill": "Kosten {{cost}}",
+        "estimatedWithCurrentPrices": "Mit aktuellen Preisen geschätzt",
+        "unknownModels": "Preis fehlt: {{models}}"
       }
     },
     "local": {
@@ -1859,7 +1887,8 @@
       "hourly": "5-Stunden-Kontingent",
       "weekly": "Wöchentliches Kontingent",
       "reset": "Zurücksetzen",
-      "weeklyBlocksHourly": "Das Wochenkontingent ist 0, daher ist das 5-Stunden-Kontingent nicht verfügbar"
+      "weeklyBlocksHourly": "Das Wochenkontingent ist 0, daher ist das 5-Stunden-Kontingent nicht verfügbar",
+      "apiKeyUnsupported": "Für diesen Kontotyp wird keine Kontingentabfrage unterstützt"
     },
     "quotaError": {
       "badge": "Kontingentfehler",
@@ -2114,7 +2143,8 @@
         "collapse": "Einklappen",
         "repairVisibility": "Sichtbarkeit reparieren",
         "restoreSessions": "Sitzungen wiederherstellen",
-        "copySessionId": "Sitzungs-ID kopieren"
+        "copySessionId": "Sitzungs-ID kopieren",
+        "copyToInstance": "In Instanz kopieren"
       },
       "confirm": {
         "title": "In den Papierkorb verschieben",
@@ -2147,6 +2177,15 @@
         "emptyTitle": "Papierkorb ist leer",
         "emptyDesc": "In den Papierkorb verschobene Sitzungen erscheinen hier.",
         "restoreAction": "Ausgewählte Sitzungen wiederherstellen"
+      },
+      "targetModal": {
+        "title": "In Instanz kopieren",
+        "hint": "Kopiert die ausgewählten Sitzungen in die Zielinstanz. Sitzungen mit bereits vorhandener ID werden übersprungen. Laufende Zielinstanzen müssen eventuell neu gestartet werden.",
+        "targetInstance": "Zielinstanz",
+        "pickTarget": "Zielinstanz auswählen",
+        "selectedCount": "{{count}} Sitzung(en) ausgewählt",
+        "existingCount": "{{count}} bereits im Ziel",
+        "confirm": "Sitzungen kopieren"
       }
     },
     "api": {
@@ -2617,7 +2656,9 @@
     "cursorRefreshInterval": "Kontingent automatisch aktualisieren",
     "gemini": {
       "title": "Gemini Cli-Einstellungen",
-      "appPath": "Gemini Cli-Pfad"
+      "appPath": "Gemini Cli-Pfad",
+      "syncWsl": "WSL-Konfiguration synchronisieren",
+      "syncWslDesc": "Beim Kontowechsel die .gemini-Konfiguration in WSL automatisch überschreiben"
     },
     "geminiRefreshInterval": "Kontingent automatisch aktualisieren",
     "codebuddy": {

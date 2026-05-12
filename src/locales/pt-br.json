@@ -1014,10 +1014,14 @@
         "empty": "A tag não pode estar vazia",
         "tooLong": "A tag não pode ter mais de {{max}} caracteres",
         "duplicate": "A tag já existe",
-        "tooMany": "Você pode adicionar até {{max}} tags"
+        "tooMany": "Você pode adicionar até {{max}} tags",
+        "globalDeleteFailed": "Falha ao excluir globalmente: {{error}}"
       },
       "notesLabel": "Observações",
-      "notesPlaceholder": "Digite observações. Deixe em branco para limpar"
+      "notesPlaceholder": "Digite observações. Deixe em branco para limpar",
+      "confirmGlobalDeleteTitle": "Excluir tag",
+      "confirmGlobalDeleteMessage": "Remover a tag \"{{tag}}\" de todas as contas? Esta ação não pode ser desfeita.",
+      "confirmGlobalDeleteAction": "Excluir"
     },
     "groupByTag": "Agrupar por tag",
     "untagged": "Sem tag",
@@ -1779,7 +1783,10 @@
         "accountRequests": "{{count}} requisições",
         "accountTokens": "{{count}} tokens totais",
         "accountResult": "Sucesso {{success}} / Falha {{failed}}",
-        "accountTokensCompact": "{{value}}"
+        "accountTokensCompact": "{{value}}",
+        "totalCost": "Custo total",
+        "accountRequestsCompact": "Solicitações {{value}}",
+        "totalTokensCompact": "Soma {{value}}"
       },
       "routingLabel": "Roteamento",
       "routingSaveSuccess": "Roteamento do serviço API atualizado",
@@ -1844,6 +1851,27 @@
         "viewFull": "Ver estatísticas completas",
         "modalTitle": "Pool de cota do serviço API",
         "empty": "Ainda sem estatísticas de cota"
+      },
+      "pricing": {
+        "title": "Estimativa de custo",
+        "sync": "Sincronizar preços oficiais",
+        "syncNoPrices": "Nenhum preço de modelo foi lido da página oficial",
+        "syncSuccess": "{{count}} preços oficiais de modelos sincronizados",
+        "reset": "Redefinir",
+        "resetSuccess": "Preços dos modelos redefinidos para os padrões internos",
+        "openSource": "Abrir origem dos preços",
+        "model": "Modelo",
+        "input": "Entrada $/1M",
+        "cachedInput": "Entrada em cache $/1M",
+        "output": "Saída $/1M",
+        "source": "Origem",
+        "sourceOpenAi": "Oficial",
+        "sourceBuiltin": "Interno",
+        "sourceManual": "Definido manualmente",
+        "sameAsInput": "Igual à entrada",
+        "costPill": "Custo {{cost}}",
+        "estimatedWithCurrentPrices": "Estimado com os preços atuais",
+        "unknownModels": "Preço ausente: {{models}}"
       }
     },
     "local": {
@@ -1859,7 +1887,8 @@
       "hourly": "Cota de 5 horas",
       "weekly": "Cota semanal",
       "reset": "Redefinir",
-      "weeklyBlocksHourly": "A cota semanal é 0, então a cota de 5 horas está indisponível"
+      "weeklyBlocksHourly": "A cota semanal é 0, então a cota de 5 horas está indisponível",
+      "apiKeyUnsupported": "Consulta de cota não compatível com este tipo de conta"
     },
     "quotaError": {
       "badge": "Erro de cota",
@@ -2114,7 +2143,8 @@
         "collapse": "Recolher",
         "repairVisibility": "Reparar visibilidade",
         "restoreSessions": "Restaurar sessões",
-        "copySessionId": "Copiar ID da sessão"
+        "copySessionId": "Copiar ID da sessão",
+        "copyToInstance": "Copiar para instância"
       },
       "confirm": {
         "title": "Mover para a lixeira",
@@ -2147,6 +2177,15 @@
         "emptyTitle": "A lixeira está vazia",
         "emptyDesc": "As sessões movidas para a lixeira aparecerão aqui.",
         "restoreAction": "Restaurar sessões selecionadas"
+      },
+      "targetModal": {
+        "title": "Copiar para instância",
+        "hint": "Copia as sessões selecionadas para a instância de destino. Sessões com o mesmo ID já presentes são ignoradas. Instâncias em execução podem precisar ser reiniciadas.",
+        "targetInstance": "Instância de destino",
+        "pickTarget": "Selecione uma instância de destino",
+        "selectedCount": "{{count}} sessão(ões) selecionada(s)",
+        "existingCount": "{{count}} já existem no destino",
+        "confirm": "Copiar sessões"
       }
     },
     "api": {
@@ -2617,7 +2656,9 @@
     "cursorRefreshInterval": "Atualização automática de cota",
     "gemini": {
       "title": "Configurações do Gemini Cli",
-      "appPath": "Caminho do Gemini Cli"
+      "appPath": "Caminho do Gemini Cli",
+      "syncWsl": "Sincronizar configuração WSL",
+      "syncWslDesc": "Sobrescrever automaticamente a configuração .gemini no WSL ao trocar de conta"
     },
     "geminiRefreshInterval": "Atualização automática de cota",
     "codebuddy": {

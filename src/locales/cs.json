@@ -1014,10 +1014,14 @@
         "empty": "Štítek nesmí být prázdný",
         "tooLong": "Štítek může mít maximálně {{max}} znaků",
         "duplicate": "Štítek už existuje",
-        "tooMany": "Můžete přidat až {{max}} štítků"
+        "tooMany": "Můžete přidat až {{max}} štítků",
+        "globalDeleteFailed": "Globální smazání selhalo: {{error}}"
       },
       "notesLabel": "Poznámka",
-      "notesPlaceholder": "Zadejte poznámku. Ponechte prázdné pro vymazání"
+      "notesPlaceholder": "Zadejte poznámku. Ponechte prázdné pro vymazání",
+      "confirmGlobalDeleteTitle": "Smazat štítek",
+      "confirmGlobalDeleteMessage": "Odebrat štítek „{{tag}}“ ze všech účtů? Tuto akci nelze vrátit.",
+      "confirmGlobalDeleteAction": "Smazat"
     },
     "groupByTag": "Seskupit podle štítku",
     "untagged": "Bez štítku",
@@ -1779,7 +1783,10 @@
         "accountRequests": "{{count}} požadavků",
         "accountTokens": "{{count}} tokenů",
         "accountResult": "Úspěch {{success}} / Chyba {{failed}}",
-        "accountTokensCompact": "{{value}}"
+        "accountTokensCompact": "{{value}}",
+        "totalCost": "Celkové náklady",
+        "accountRequestsCompact": "Požadavky {{value}}",
+        "totalTokensCompact": "Celkem {{value}}"
       },
       "routingLabel": "Směrování",
       "routingSaveSuccess": "Směrování služby API bylo aktualizováno",
@@ -1844,6 +1851,27 @@
         "viewFull": "Zobrazit úplné statistiky",
         "modalTitle": "Fond kvóty služby API",
         "empty": "Zatím žádné statistiky kvóty"
+      },
+      "pricing": {
+        "title": "Odhad nákladů",
+        "sync": "Synchronizovat oficiální ceny",
+        "syncNoPrices": "Z oficiální cenové stránky se nepodařilo načíst ceny modelů",
+        "syncSuccess": "Synchronizovány ceny {{count}} oficiálních modelů",
+        "reset": "Resetovat",
+        "resetSuccess": "Ceny modelů byly vráceny na vestavěné výchozí hodnoty",
+        "openSource": "Otevřít zdroj cen",
+        "model": "Model služby",
+        "input": "Vstup $/1M",
+        "cachedInput": "Cache vstup $/1M",
+        "output": "Výstup $/1M",
+        "source": "Zdroj",
+        "sourceOpenAi": "Oficiální",
+        "sourceBuiltin": "Vestavěné",
+        "sourceManual": "Ruční",
+        "sameAsInput": "Stejné jako vstup",
+        "costPill": "Náklady {{cost}}",
+        "estimatedWithCurrentPrices": "Odhad podle aktuálních cen",
+        "unknownModels": "Chybí cena: {{models}}"
       }
     },
     "local": {
@@ -1859,7 +1887,8 @@
       "hourly": "Kvóta 5 hodin",
       "weekly": "Týdenní kvóta",
       "reset": "Reset",
-      "weeklyBlocksHourly": "Týdenní kvóta je 0, proto není 5hodinová kvóta dostupná"
+      "weeklyBlocksHourly": "Týdenní kvóta je 0, proto není 5hodinová kvóta dostupná",
+      "apiKeyUnsupported": "Tento typ účtu nepodporuje načtení kvóty"
     },
     "quotaError": {
       "badge": "Chyba kvóty",
@@ -2114,7 +2143,8 @@
         "collapse": "Sbalit",
         "repairVisibility": "Opravit viditelnost",
         "restoreSessions": "Obnovit relace",
-        "copySessionId": "Kopírovat ID relace"
+        "copySessionId": "Kopírovat ID relace",
+        "copyToInstance": "Kopírovat do instance"
       },
       "confirm": {
         "title": "Přesunout do koše",
@@ -2147,6 +2177,15 @@
         "emptyTitle": "Koš je prázdný",
         "emptyDesc": "Relace přesunuté do koše se zobrazí zde.",
         "restoreAction": "Obnovit vybrané relace"
+      },
+      "targetModal": {
+        "title": "Kopírovat do instance",
+        "hint": "Zkopíruje vybrané relace do cílové instance. Relace se stejným ID se přeskočí. Běžící cílové instance mohou vyžadovat restart.",
+        "targetInstance": "Cílová instance",
+        "pickTarget": "Vyberte cílovou instanci",
+        "selectedCount": "Vybráno relací: {{count}}",
+        "existingCount": "{{count}} již v cíli existuje",
+        "confirm": "Kopírovat relace"
       }
     },
     "api": {
@@ -2617,7 +2656,9 @@
     "cursorRefreshInterval": "Automatická obnova kvóty",
     "gemini": {
       "title": "Nastavení Gemini Cli",
-      "appPath": "Cesta k Gemini Cli"
+      "appPath": "Cesta k Gemini Cli",
+      "syncWsl": "Synchronizovat WSL konfiguraci",
+      "syncWslDesc": "Při přepnutí účtu automaticky přepsat konfiguraci .gemini ve WSL"
     },
     "geminiRefreshInterval": "Automatická obnova kvóty",
     "codebuddy": {

@@ -1014,10 +1014,14 @@
         "empty": "Il tag non può essere vuoto",
         "tooLong": "Il tag non può superare {{max}} caratteri",
         "duplicate": "Il tag esiste già",
-        "tooMany": "Puoi aggiungere fino a {{max}} tag"
+        "tooMany": "Puoi aggiungere fino a {{max}} tag",
+        "globalDeleteFailed": "Eliminazione globale non riuscita: {{error}}"
       },
       "notesLabel": "Note",
-      "notesPlaceholder": "Inserisci una nota. Lascia vuoto per cancellarla"
+      "notesPlaceholder": "Inserisci una nota. Lascia vuoto per cancellarla",
+      "confirmGlobalDeleteTitle": "Elimina tag",
+      "confirmGlobalDeleteMessage": "Rimuovere il tag \"{{tag}}\" da tutti gli account? L’azione non può essere annullata.",
+      "confirmGlobalDeleteAction": "Elimina"
     },
     "groupByTag": "Raggruppa per tag",
     "untagged": "Senza tag",
@@ -1779,7 +1783,10 @@
         "accountRequests": "{{count}} richieste",
         "accountTokens": "{{count}} token",
         "accountResult": "Successi {{success}} / Errori {{failed}}",
-        "accountTokensCompact": "{{value}}"
+        "accountTokensCompact": "{{value}}",
+        "totalCost": "Costo totale",
+        "accountRequestsCompact": "Richieste {{value}}",
+        "totalTokensCompact": "Totale {{value}}"
       },
       "routingLabel": "Instradamento",
       "routingSaveSuccess": "Instradamento del servizio API aggiornato",
@@ -1844,6 +1851,27 @@
         "viewFull": "Vedi statistiche complete",
         "modalTitle": "Pool quota del servizio API",
         "empty": "Nessuna statistica quota"
+      },
+      "pricing": {
+        "title": "Stima costo",
+        "sync": "Sincronizza prezzi ufficiali",
+        "syncNoPrices": "Nessun prezzo modello rilevato dalla pagina ufficiale",
+        "syncSuccess": "Sincronizzati {{count}} prezzi modello ufficiali",
+        "reset": "Reimposta",
+        "resetSuccess": "Prezzi modello ripristinati ai valori integrati",
+        "openSource": "Apri fonte prezzi",
+        "model": "Modello",
+        "input": "Ingresso $/1M",
+        "cachedInput": "Input cache $/1M",
+        "output": "Uscita $/1M",
+        "source": "Fonte",
+        "sourceOpenAi": "Ufficiale",
+        "sourceBuiltin": "Integrato",
+        "sourceManual": "Manuale",
+        "sameAsInput": "Uguale all’input",
+        "costPill": "Costo {{cost}}",
+        "estimatedWithCurrentPrices": "Stimato con i prezzi correnti",
+        "unknownModels": "Prezzo mancante: {{models}}"
       }
     },
     "local": {
@@ -1859,7 +1887,8 @@
       "hourly": "Quota di 5 ore",
       "weekly": "Quota settimanale",
       "reset": "Reimposta",
-      "weeklyBlocksHourly": "La quota settimanale è 0, quindi la quota di 5 ore non è disponibile"
+      "weeklyBlocksHourly": "La quota settimanale è 0, quindi la quota di 5 ore non è disponibile",
+      "apiKeyUnsupported": "La lettura quota non è supportata per questo tipo di account"
     },
     "quotaError": {
       "badge": "Errore quota",
@@ -2114,7 +2143,8 @@
         "collapse": "Comprimi",
         "repairVisibility": "Ripara visibilità",
         "restoreSessions": "Ripristina sessioni",
-        "copySessionId": "Copia ID sessione"
+        "copySessionId": "Copia ID sessione",
+        "copyToInstance": "Copia in istanza"
       },
       "confirm": {
         "title": "Sposta nel cestino",
@@ -2147,6 +2177,15 @@
         "emptyTitle": "Il cestino è vuoto",
         "emptyDesc": "Le sessioni spostate nel cestino appariranno qui.",
         "restoreAction": "Ripristina le sessioni selezionate"
+      },
+      "targetModal": {
+        "title": "Copia in istanza",
+        "hint": "Copia le sessioni selezionate nell’istanza di destinazione. Le sessioni con lo stesso ID già presenti vengono ignorate. Le istanze in esecuzione potrebbero richiedere un riavvio.",
+        "targetInstance": "Istanza di destinazione",
+        "pickTarget": "Seleziona istanza di destinazione",
+        "selectedCount": "{{count}} sessioni selezionate",
+        "existingCount": "{{count}} già nella destinazione",
+        "confirm": "Copia sessioni"
       }
     },
     "api": {
@@ -2617,7 +2656,9 @@
     "cursorRefreshInterval": "Aggiornamento automatico quota",
     "gemini": {
       "title": "Impostazioni Gemini Cli",
-      "appPath": "Percorso Gemini Cli"
+      "appPath": "Percorso Gemini Cli",
+      "syncWsl": "Sincronizza configurazione WSL",
+      "syncWslDesc": "Sovrascrivi automaticamente la configurazione .gemini in WSL al cambio account"
     },
     "geminiRefreshInterval": "Aggiornamento automatico quota",
     "codebuddy": {

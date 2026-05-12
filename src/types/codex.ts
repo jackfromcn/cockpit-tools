@@ -427,8 +427,10 @@ export function isCodexNewApiAccount(account: CodexAccount): boolean {
 export function getCodexPlanDisplayName(planType?: string): string {
   if (!planType) return "FREE";
   const upper = planType.toUpperCase();
+  if (upper.startsWith("SELF_SERVE_BUSINESS_USAGE_")) return "CODEX SEAT";
   if (upper.includes("TEAM")) return "TEAM";
   if (upper.includes("ENTERPRISE")) return "ENTERPRISE";
+  if (upper.includes("BUSINESS")) return "BUSINESS";
   if (upper.includes("PLUS")) return "PLUS";
   if (upper.includes("PRO")) return "PRO";
   return upper;

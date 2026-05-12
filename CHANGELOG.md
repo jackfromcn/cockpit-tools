@@ -7,6 +7,24 @@ All notable changes to Cockpit Tools will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
+## [0.23.0] - 2026-05-12
+
+### Added
+- **Codex now supports Windows multi-instance management**: Codex instances can launch with isolated Windows data roots while preserving account binding, process tracking, and session visibility behavior across the official local state files.
+- **Codex Local API Service now supports multiple managed services**: users can create, rename, select, enable, delete, and activate separate API service entries, each with its own upstream accounts, API keys, default key, health checks, and usage statistics.
+- **Gemini default-instance credentials can now sync into WSL**: settings and quick controls can keep the default Gemini credential files mirrored for WSL-based workflows.
+
+### Changed
+- **The tray idle path now unloads the main WebView when closing to tray**: closing the main window can destroy the WebView and restore it on demand, reducing idle memory while keeping tray operation available.
+- **Codex and GitHub Copilot account cards now share more of the same layout treatment**: account cards use the shared card shell classes while preserving platform-specific controls and quota presentation.
+- **Codex account presentation now recognizes Business and Codex Seat plan values**: Business-like plan strings are displayed with clearer plan labels instead of falling through to raw values.
+
+### Fixed
+- **WebKit LocalStorage WAL files are checkpointed on startup**: the app now performs startup maintenance for WebKit LocalStorage databases to avoid unbounded WAL growth over repeated runs.
+- **Deleting a Codex account now removes stale wake-up task references**: wake-up tasks are cleaned when referenced accounts are deleted, and tasks left without accounts are removed.
+- **Global tag deletion now uses an in-app confirmation dialog**: failures stay inside the dialog and the confirmation copy is fully localized.
+
+---
 ## [0.22.22] - 2026-05-12
 
 ### Added

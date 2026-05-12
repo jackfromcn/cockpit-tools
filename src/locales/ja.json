@@ -1014,10 +1014,14 @@
         "empty": "タグを入力してください",
         "tooLong": "タグは{{max}}文字以内で入力してください",
         "duplicate": "タグは既に存在します",
-        "tooMany": "タグは最大{{max}}件まで追加できます"
+        "tooMany": "タグは最大{{max}}件まで追加できます",
+        "globalDeleteFailed": "一括削除に失敗しました: {{error}}"
       },
       "notesLabel": "メモ",
-      "notesPlaceholder": "メモを入力。空欄でクリア"
+      "notesPlaceholder": "メモを入力。空欄でクリア",
+      "confirmGlobalDeleteTitle": "タグを削除",
+      "confirmGlobalDeleteMessage": "すべてのアカウントからタグ「{{tag}}」を削除しますか？この操作は元に戻せません。",
+      "confirmGlobalDeleteAction": "削除"
     },
     "groupByTag": "タグでグループ化",
     "untagged": "タグなし",
@@ -1779,7 +1783,10 @@
         "accountRequests": "{{count}} 件のリクエスト",
         "accountTokens": "{{count}} トークン",
         "accountResult": "成功 {{success}} / 失敗 {{failed}}",
-        "accountTokensCompact": "{{value}}"
+        "accountTokensCompact": "{{value}}",
+        "totalCost": "総コスト",
+        "accountRequestsCompact": "リクエスト {{value}}",
+        "totalTokensCompact": "合計 {{value}}"
       },
       "routingLabel": "ルーティング",
       "routingSaveSuccess": "API サービスのルーティングを更新しました",
@@ -1844,6 +1851,27 @@
         "viewFull": "完全な統計を表示",
         "modalTitle": "APIサービスのクォータプール",
         "empty": "クォータ統計はまだありません"
+      },
+      "pricing": {
+        "title": "コスト見積もり",
+        "sync": "公式価格を同期",
+        "syncNoPrices": "公式価格ページからモデル価格を解析できませんでした",
+        "syncSuccess": "{{count}} 件の公式モデル価格を同期しました",
+        "reset": "リセット",
+        "resetSuccess": "モデル価格を組み込み既定値に戻しました",
+        "openSource": "価格ソースを開く",
+        "model": "モデル",
+        "input": "入力 $/1M",
+        "cachedInput": "キャッシュ入力 $/1M",
+        "output": "出力 $/1M",
+        "source": "ソース",
+        "sourceOpenAi": "公式",
+        "sourceBuiltin": "組み込み",
+        "sourceManual": "手動",
+        "sameAsInput": "入力と同じ",
+        "costPill": "コスト {{cost}}",
+        "estimatedWithCurrentPrices": "現在の価格で見積もり",
+        "unknownModels": "価格未設定: {{models}}"
       }
     },
     "local": {
@@ -1859,7 +1887,8 @@
       "hourly": "5 時間クォータ",
       "weekly": "週次クォータ",
       "reset": "リセット",
-      "weeklyBlocksHourly": "週クォータが 0 のため、5時間クォータは利用できません"
+      "weeklyBlocksHourly": "週クォータが 0 のため、5時間クォータは利用できません",
+      "apiKeyUnsupported": "このアカウント種別ではクォータ取得はサポートされません"
     },
     "quotaError": {
       "badge": "クォータエラー",
@@ -2114,7 +2143,8 @@
         "collapse": "折りたたむ",
         "repairVisibility": "表示情報を修復",
         "restoreSessions": "セッションを復元",
-        "copySessionId": "セッション ID をコピー"
+        "copySessionId": "セッション ID をコピー",
+        "copyToInstance": "インスタンスへコピー"
       },
       "confirm": {
         "title": "ゴミ箱へ移動",
@@ -2147,6 +2177,15 @@
         "emptyTitle": "ゴミ箱は空です",
         "emptyDesc": "ゴミ箱へ移動したセッションはここに表示されます。",
         "restoreAction": "選択したセッションを復元"
+      },
+      "targetModal": {
+        "title": "インスタンスへコピー",
+        "hint": "選択したセッションを対象インスタンスへコピーします。同じ ID が既にあるセッションはスキップされます。実行中の対象インスタンスでは再起動が必要な場合があります。",
+        "targetInstance": "対象インスタンス",
+        "pickTarget": "対象インスタンスを選択",
+        "selectedCount": "{{count}} 件のセッションを選択中",
+        "existingCount": "{{count}} 件は対象に既存",
+        "confirm": "セッションをコピー"
       }
     },
     "api": {
@@ -2617,7 +2656,9 @@
     "cursorRefreshInterval": "クォータ自動更新",
     "gemini": {
       "title": "Gemini Cli 設定",
-      "appPath": "Gemini Cli パス"
+      "appPath": "Gemini Cli パス",
+      "syncWsl": "WSL 設定を同期",
+      "syncWslDesc": "アカウント切り替え時に WSL の .gemini 設定を自動的に上書きします"
     },
     "geminiRefreshInterval": "クォータ自動更新",
     "codebuddy": {

@@ -1014,10 +1014,14 @@
         "empty": "Etiket boş olamaz",
         "tooLong": "Etiket en fazla {{max}} karakter olabilir",
         "duplicate": "Etiket zaten mevcut",
-        "tooMany": "En fazla {{max}} etiket ekleyebilirsiniz"
+        "tooMany": "En fazla {{max}} etiket ekleyebilirsiniz",
+        "globalDeleteFailed": "Genel silme başarısız: {{error}}"
       },
       "notesLabel": "Not",
-      "notesPlaceholder": "Not girin. Temizlemek için boş bırakın"
+      "notesPlaceholder": "Not girin. Temizlemek için boş bırakın",
+      "confirmGlobalDeleteTitle": "Etiketi sil",
+      "confirmGlobalDeleteMessage": "\"{{tag}}\" etiketi tüm hesaplardan kaldırılsın mı? Bu işlem geri alınamaz.",
+      "confirmGlobalDeleteAction": "Sil"
     },
     "groupByTag": "Etikete göre grupla",
     "untagged": "Etiketsiz",
@@ -1779,7 +1783,10 @@
         "accountRequests": "{{count}} istek",
         "accountTokens": "{{count}} token",
         "accountResult": "Başarılı {{success}} / Hatalı {{failed}}",
-        "accountTokensCompact": "{{value}}"
+        "accountTokensCompact": "{{value}}",
+        "totalCost": "Toplam maliyet",
+        "accountRequestsCompact": "İstek {{value}}",
+        "totalTokensCompact": "Toplam {{value}}"
       },
       "routingLabel": "Yönlendirme",
       "routingSaveSuccess": "API hizmeti yönlendirmesi güncellendi",
@@ -1844,6 +1851,27 @@
         "viewFull": "Tam istatistikleri gör",
         "modalTitle": "API hizmeti kota havuzu",
         "empty": "Henüz kota istatistiği yok"
+      },
+      "pricing": {
+        "title": "Maliyet tahmini",
+        "sync": "Resmi fiyatları eşitle",
+        "syncNoPrices": "Resmi fiyat sayfasından model fiyatı okunamadı",
+        "syncSuccess": "{{count}} resmi model fiyatı eşitlendi",
+        "reset": "Sıfırla",
+        "resetSuccess": "Model fiyatları yerleşik varsayılanlara döndürüldü",
+        "openSource": "Fiyat kaynağını aç",
+        "model": "Hizmet modeli",
+        "input": "Girdi $/1M",
+        "cachedInput": "Önbellek girdi $/1M",
+        "output": "Çıktı $/1M",
+        "source": "Kaynak",
+        "sourceOpenAi": "Resmi",
+        "sourceBuiltin": "Yerleşik",
+        "sourceManual": "Manuel",
+        "sameAsInput": "Girdiyle aynı",
+        "costPill": "Maliyet {{cost}}",
+        "estimatedWithCurrentPrices": "Geçerli fiyatlarla tahmin edildi",
+        "unknownModels": "Eksik fiyat: {{models}}"
       }
     },
     "local": {
@@ -1859,7 +1887,8 @@
       "hourly": "5 saatlik kota",
       "weekly": "Haftalık kota",
       "reset": "Sıfırla",
-      "weeklyBlocksHourly": "Haftalık kota 0 olduğu için 5 saatlik kota kullanılamaz"
+      "weeklyBlocksHourly": "Haftalık kota 0 olduğu için 5 saatlik kota kullanılamaz",
+      "apiKeyUnsupported": "Bu hesap türü için kota sorgusu desteklenmiyor"
     },
     "quotaError": {
       "badge": "Kota hatası",
@@ -2114,7 +2143,8 @@
         "collapse": "Daralt",
         "repairVisibility": "Görünürlüğü düzelt",
         "restoreSessions": "Oturumları geri yükle",
-        "copySessionId": "Oturum kimliğini kopyala"
+        "copySessionId": "Oturum kimliğini kopyala",
+        "copyToInstance": "Örneğe kopyala"
       },
       "confirm": {
         "title": "Çöp kutusuna taşı",
@@ -2147,6 +2177,15 @@
         "emptyTitle": "Çöp kutusu boş",
         "emptyDesc": "Çöp kutusuna taşınan oturumlar burada görünür.",
         "restoreAction": "Seçili oturumları geri yükle"
+      },
+      "targetModal": {
+        "title": "Örneğe kopyala",
+        "hint": "Seçili oturumları hedef örneğe kopyalar. Aynı ID zaten varsa atlanır. Çalışan hedef örneklerin görünmesi için yeniden başlatma gerekebilir.",
+        "targetInstance": "Hedef örnek",
+        "pickTarget": "Hedef örnek seç",
+        "selectedCount": "{{count}} oturum seçildi",
+        "existingCount": "Hedefte zaten {{count}} var",
+        "confirm": "Oturumları kopyala"
       }
     },
     "api": {
@@ -2617,7 +2656,9 @@
     "cursorRefreshInterval": "Kota otomatik yenileme",
     "gemini": {
       "title": "Gemini Cli Ayarları",
-      "appPath": "Gemini Cli Yolu"
+      "appPath": "Gemini Cli Yolu",
+      "syncWsl": "WSL yapılandırmasını eşitle",
+      "syncWslDesc": "Hesap değiştirirken WSL içindeki .gemini yapılandırmasını otomatik olarak üzerine yaz"
     },
     "geminiRefreshInterval": "Kota Otomatik Yenileme",
     "codebuddy": {

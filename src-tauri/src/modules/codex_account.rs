@@ -2,7 +2,7 @@ use crate::models::codex::{
     CodexAccount, CodexAccountIndex, CodexAccountSummary, CodexApiProviderMode, CodexAuthFile,
     CodexAuthMode, CodexAuthTokens, CodexJwtPayload, CodexQuickConfig, CodexTokens,
 };
-use crate::modules::{account, codex_oauth, logger};
+use crate::modules::{account, codex_oauth, codex_wakeup, logger};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
 #[cfg(target_os = "macos")]
@@ -2113,6 +2113,7 @@ pub fn remove_account(account_id: &str) -> Result<(), String> {
 
     save_account_index(&index)?;
     delete_account_file(account_id)?;
+    codex_wakeup::remove_account_refs(&[account_id.to_string()])?;
 
     Ok(())
 }

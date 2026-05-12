@@ -1014,10 +1014,14 @@
         "empty": "태그는 비워둘 수 없습니다",
         "tooLong": "태그는 최대 {{max}}자까지 입력할 수 있습니다",
         "duplicate": "이미 존재하는 태그입니다",
-        "tooMany": "태그는 최대 {{max}}개까지 추가할 수 있습니다"
+        "tooMany": "태그는 최대 {{max}}개까지 추가할 수 있습니다",
+        "globalDeleteFailed": "전체 삭제 실패: {{error}}"
       },
       "notesLabel": "메모",
-      "notesPlaceholder": "메모를 입력하세요. 비워 두면 삭제됩니다"
+      "notesPlaceholder": "메모를 입력하세요. 비워 두면 삭제됩니다",
+      "confirmGlobalDeleteTitle": "태그 삭제",
+      "confirmGlobalDeleteMessage": "모든 계정에서 \"{{tag}}\" 태그를 제거할까요? 이 작업은 되돌릴 수 없습니다.",
+      "confirmGlobalDeleteAction": "삭제"
     },
     "groupByTag": "태그별 그룹",
     "untagged": "태그 없음",
@@ -1779,7 +1783,10 @@
         "accountRequests": "{{count}}건 요청",
         "accountTokens": "{{count}} 토큰",
         "accountResult": "성공 {{success}} / 실패 {{failed}}",
-        "accountTokensCompact": "{{value}}"
+        "accountTokensCompact": "{{value}}",
+        "totalCost": "총 비용",
+        "accountRequestsCompact": "요청 {{value}}",
+        "totalTokensCompact": "합계 {{value}}"
       },
       "routingLabel": "라우팅",
       "routingSaveSuccess": "API 서비스 라우팅을 업데이트했습니다",
@@ -1844,6 +1851,27 @@
         "viewFull": "전체 통계 보기",
         "modalTitle": "API 서비스 할당량 풀",
         "empty": "할당량 통계가 아직 없습니다"
+      },
+      "pricing": {
+        "title": "비용 추정",
+        "sync": "공식 가격 동기화",
+        "syncNoPrices": "공식 가격 페이지에서 모델 가격을解析하지 못했습니다",
+        "syncSuccess": "공식 모델 가격 {{count}}개를 동기화했습니다",
+        "reset": "초기화",
+        "resetSuccess": "모델 가격을 내장 기본값으로 되돌렸습니다",
+        "openSource": "가격 출처 열기",
+        "model": "모델",
+        "input": "입력 $/1M",
+        "cachedInput": "캐시 입력 $/1M",
+        "output": "출력 $/1M",
+        "source": "출처",
+        "sourceOpenAi": "공식",
+        "sourceBuiltin": "내장",
+        "sourceManual": "수동",
+        "sameAsInput": "입력과 동일",
+        "costPill": "비용 {{cost}}",
+        "estimatedWithCurrentPrices": "현재 가격으로 추정",
+        "unknownModels": "가격 누락: {{models}}"
       }
     },
     "local": {
@@ -1859,7 +1887,8 @@
       "hourly": "5시간 쿼터",
       "weekly": "주간 쿼터",
       "reset": "재설정",
-      "weeklyBlocksHourly": "주간 할당량이 0이라 5시간 할당량을 사용할 수 없습니다"
+      "weeklyBlocksHourly": "주간 할당량이 0이라 5시간 할당량을 사용할 수 없습니다",
+      "apiKeyUnsupported": "이 계정 유형은 할당량 조회를 지원하지 않습니다"
     },
     "quotaError": {
       "badge": "할당량 오류",
@@ -2114,7 +2143,8 @@
         "collapse": "접기",
         "repairVisibility": "표시 정보 복구",
         "restoreSessions": "세션 복원",
-        "copySessionId": "세션 ID 복사"
+        "copySessionId": "세션 ID 복사",
+        "copyToInstance": "인스턴스로 복사"
       },
       "confirm": {
         "title": "휴지통으로 이동",
@@ -2147,6 +2177,15 @@
         "emptyTitle": "휴지통이 비어 있습니다",
         "emptyDesc": "휴지통으로 이동한 세션이 여기에 표시됩니다.",
         "restoreAction": "선택한 세션 복원"
+      },
+      "targetModal": {
+        "title": "인스턴스로 복사",
+        "hint": "선택한 세션을 대상 인스턴스로 복사합니다. 같은 ID가 이미 있는 세션은 건너뜁니다. 실행 중인 대상 인스턴스는 다시 시작해야 보일 수 있습니다.",
+        "targetInstance": "대상 인스턴스",
+        "pickTarget": "대상 인스턴스 선택",
+        "selectedCount": "{{count}}개 세션 선택됨",
+        "existingCount": "대상에 이미 {{count}}개 있음",
+        "confirm": "세션 복사"
       }
     },
     "api": {
@@ -2617,7 +2656,9 @@
     "cursorRefreshInterval": "할당량 자동 새로고침",
     "gemini": {
       "title": "Gemini Cli 설정",
-      "appPath": "Gemini Cli 경로"
+      "appPath": "Gemini Cli 경로",
+      "syncWsl": "WSL 구성 동기화",
+      "syncWslDesc": "계정을 전환할 때 WSL의 .gemini 구성을 자동으로 덮어씁니다"
     },
     "geminiRefreshInterval": "할당량 자동 새로고침",
     "codebuddy": {

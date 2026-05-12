@@ -1060,10 +1060,14 @@
         "empty": "لا يمكن أن تكون العلامة فارغة",
         "tooLong": "يجب ألا يتجاوز الوسم {{max}} حرفًا",
         "duplicate": "الوسم موجود بالفعل",
-        "tooMany": "يمكنك إضافة حتى {{max}} أوسمة"
+        "tooMany": "يمكنك إضافة حتى {{max}} أوسمة",
+        "globalDeleteFailed": "فشل الحذف العام: {{error}}"
       },
       "notesLabel": "ملاحظات",
-      "notesPlaceholder": "أدخل ملاحظات. اتركه فارغًا للمسح"
+      "notesPlaceholder": "أدخل ملاحظات. اتركه فارغًا للمسح",
+      "confirmGlobalDeleteTitle": "حذف الوسم",
+      "confirmGlobalDeleteMessage": "إزالة الوسم \"{{tag}}\" من كل الحسابات؟ لا يمكن التراجع عن ذلك.",
+      "confirmGlobalDeleteAction": "حذف"
     },
     "groupByTag": "تجميع حسب العلامة",
     "untagged": "غير موسوم",
@@ -1825,7 +1829,10 @@
         "accountRequests": "{{count}} طلب",
         "accountTokens": "{{count}} رمز",
         "accountResult": "نجاح {{success}} / فشل {{failed}}",
-        "accountTokensCompact": "{{value}}"
+        "accountTokensCompact": "{{value}}",
+        "totalCost": "التكلفة الإجمالية",
+        "accountRequestsCompact": "الطلبات {{value}}",
+        "totalTokensCompact": "الإجمالي {{value}}"
       },
       "routingLabel": "توجيه",
       "routingSaveSuccess": "تم تحديث توجيه خدمة API",
@@ -1890,6 +1897,27 @@
         "viewFull": "عرض الإحصاء الكامل",
         "modalTitle": "مجمع حصة خدمة API",
         "empty": "لا توجد إحصاءات حصة بعد"
+      },
+      "pricing": {
+        "title": "تقدير التكلفة",
+        "sync": "مزامنة الأسعار الرسمية",
+        "syncNoPrices": "لم يتم تحليل أسعار نماذج من صفحة الأسعار الرسمية",
+        "syncSuccess": "تمت مزامنة أسعار {{count}} نموذج رسمي",
+        "reset": "إعادة ضبط",
+        "resetSuccess": "أُعيدت أسعار النماذج إلى القيم المدمجة",
+        "openSource": "فتح مصدر الأسعار",
+        "model": "النموذج",
+        "input": "الإدخال $/1M",
+        "cachedInput": "الإدخال المخزن $/1M",
+        "output": "الإخراج $/1M",
+        "source": "المصدر",
+        "sourceOpenAi": "رسمي",
+        "sourceBuiltin": "مدمج",
+        "sourceManual": "يدوي",
+        "sameAsInput": "مثل الإدخال",
+        "costPill": "التكلفة {{cost}}",
+        "estimatedWithCurrentPrices": "محسوب بالأسعار الحالية",
+        "unknownModels": "سعر مفقود: {{models}}"
       }
     },
     "local": {
@@ -1905,7 +1933,8 @@
       "hourly": "حصة 5 ساعات",
       "weekly": "الحصة الأسبوعية",
       "reset": "إعادة ضبط",
-      "weeklyBlocksHourly": "الحصة الأسبوعية 0، لذا حصة 5 ساعات غير متاحة"
+      "weeklyBlocksHourly": "الحصة الأسبوعية 0، لذا حصة 5 ساعات غير متاحة",
+      "apiKeyUnsupported": "لا يدعم نوع هذا الحساب جلب الحصة"
     },
     "quotaError": {
       "badge": "خطأ في الحصة",
@@ -2160,7 +2189,8 @@
         "collapse": "طي",
         "repairVisibility": "إصلاح الظهور",
         "restoreSessions": "استعادة الجلسات",
-        "copySessionId": "نسخ معرّف الجلسة"
+        "copySessionId": "نسخ معرّف الجلسة",
+        "copyToInstance": "نسخ إلى مثيل"
       },
       "confirm": {
         "title": "نقل إلى المهملات",
@@ -2193,6 +2223,15 @@
         "emptyTitle": "سلة المهملات فارغة",
         "emptyDesc": "ستظهر هنا الجلسات المنقولة إلى سلة المهملات.",
         "restoreAction": "استعادة الجلسات المحددة"
+      },
+      "targetModal": {
+        "title": "نسخ إلى مثيل",
+        "hint": "ينسخ الجلسات المحددة إلى المثيل الهدف. تُتخطى الجلسات ذات المعرّف الموجود هناك. قد تحتاج المثيلات العاملة إلى إعادة تشغيل لتظهر.",
+        "targetInstance": "المثيل الهدف",
+        "pickTarget": "اختر مثيلاً هدفاً",
+        "selectedCount": "تم تحديد {{count}} جلسة",
+        "existingCount": "{{count}} موجودة بالفعل في الهدف",
+        "confirm": "نسخ الجلسات"
       }
     },
     "api": {
@@ -2663,7 +2702,9 @@
     "cursorRefreshInterval": "تحديث الحصة تلقائيًا",
     "gemini": {
       "title": "إعدادات Gemini Cli",
-      "appPath": "مسار Gemini Cli"
+      "appPath": "مسار Gemini Cli",
+      "syncWsl": "مزامنة إعداد WSL",
+      "syncWslDesc": "استبدال إعداد .gemini في WSL تلقائياً عند تبديل الحسابات"
     },
     "geminiRefreshInterval": "تحديث الحصة تلقائيًا",
     "codebuddy": {
