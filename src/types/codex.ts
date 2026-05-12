@@ -148,6 +148,32 @@ export interface CodexSessionRecord {
   locations: CodexSessionLocation[];
 }
 
+export interface CodexSharedChatCatalogRecord {
+  sourceSessionId: string;
+  title: string;
+  cwd: string;
+  updatedAt?: number | null;
+  archived: boolean;
+  foreign: boolean;
+  materialized: boolean;
+  localSessionId?: string | null;
+  sourceInstanceId: string;
+  sourceInstanceName: string;
+  sourceAccountId?: string | null;
+  sourceCodexHome: string;
+  sourceRolloutPath: string;
+}
+
+export interface CodexSharedChatVisibilitySummary {
+  targetInstanceId: string;
+  targetInstanceName: string;
+  materializedForeignCount: number;
+  copiedSameAccountCount: number;
+  removedUnsafeSameIdCount: number;
+  backupDir?: string | null;
+  message: string;
+}
+
 export interface CodexSessionTokenStats {
   sessionId: string;
   inputTokens: number;

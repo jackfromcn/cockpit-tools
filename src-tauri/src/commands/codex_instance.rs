@@ -59,6 +59,7 @@ pub struct CodexInstanceLaunchInfo {
     pub launch_command: String,
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 struct CodexLaunchContext {
     user_data_dir: String,
     working_dir: Option<String>,
@@ -91,7 +92,8 @@ async fn inject_bound_account_to_profile(
         return Ok(());
     }
 
-    modules::codex_instance::inject_account_to_profile(profile_dir, bind_account_id).await
+    modules::codex_instance::inject_account_to_profile(profile_dir, bind_account_id).await?;
+    modules::codex_instance::clear_electron_user_data_auth_state(profile_dir, bind_account_id)
 }
 
 fn default_instance_view(
@@ -181,12 +183,12 @@ fn posix_shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+#[cfg_attr(target_os = "windows", allow(unused_variables))]
 fn build_launch_command(context: &CodexLaunchContext) -> Result<String, String> {
-    let runtime = modules::codex_wakeup::resolve_cli_runtime()?;
-    let parsed_args = modules::process::parse_extra_args(&context.extra_args);
-
     #[cfg(not(target_os = "windows"))]
     {
+        let runtime = modules::codex_wakeup::resolve_cli_runtime()?;
+        let parsed_args = modules::process::parse_extra_args(&context.extra_args);
         let mut command_parts = Vec::new();
         if let Some(ref dir) = context.working_dir {
             if !dir.trim().is_empty() {
@@ -238,30 +240,37 @@ pub async fn codex_list_instances() -> Result<Vec<CodexInstanceProfileView>, Str
     let store = modules::codex_instance::load_instance_store()?;
     let default_dir = modules::codex_instance::get_default_codex_home()?;
 
-    let default_settings = store.default_settings.clone();
+    let mut default_settings = store.default_settings.clone();
     let process_entries = modules::process::collect_codex_process_entries();
-    let mut result: Vec<CodexInstanceProfileView> = store
-        .instances
-        .into_iter()
-        .map(|instance| {
-            let resolved_pid = modules::process::resolve_codex_pid_from_entries(
-                instance.last_pid,
-                Some(&instance.user_data_dir),
-                &process_entries,
-            );
-            let running = resolved_pid.is_some();
-            let initialized = is_profile_initialized(&instance.user_data_dir);
-            let mut view = CodexInstanceProfileView::from_profile(instance, running, initialized);
-            view.last_pid = resolved_pid;
-            view
-        })
-        .collect();
+    let mut result: Vec<CodexInstanceProfileView> = Vec::new();
+    for mut instance in store.instances {
+        let resolved_pid = modules::process::resolve_codex_pid_from_entries(
+            instance.last_pid,
+            Some(&instance.user_data_dir),
+            &process_entries,
+        );
+        if instance.last_pid != resolved_pid {
+            instance = modules::codex_instance::update_instance_pid(&instance.id, resolved_pid)?;
+        } else {
+            instance.last_pid = resolved_pid;
+        }
+        let running = resolved_pid.is_some();
+        let initialized = is_profile_initialized(&instance.user_data_dir);
+        result.push(CodexInstanceProfileView::from_profile(
+            instance,
+            running,
+            initialized,
+        ));
+    }
 
     let default_pid = modules::process::resolve_codex_pid_from_entries(
         default_settings.last_pid,
         None,
         &process_entries,
     );
+    if default_settings.last_pid != default_pid {
+        default_settings = modules::codex_instance::update_default_pid(default_pid)?;
+    }
     let default_running = default_pid.is_some();
     let default_bind_account_id = resolve_default_account_id(&default_settings);
     result.push(default_instance_view(
@@ -336,6 +345,20 @@ pub async fn codex_repair_session_visibility_across_instances(
 pub async fn codex_list_sessions_across_instances(
 ) -> Result<Vec<modules::codex_session_manager::CodexSessionRecord>, String> {
     modules::codex_session_manager::list_sessions_across_instances()
+}
+
+#[tauri::command]
+pub async fn codex_list_shared_chat_catalog(
+    instance_id: String,
+) -> Result<Vec<modules::codex_session_manager::CodexSharedChatCatalogRecord>, String> {
+    modules::codex_session_manager::list_shared_chat_catalog(&instance_id)
+}
+
+#[tauri::command]
+pub async fn codex_ensure_shared_chat_visibility(
+    instance_id: String,
+) -> Result<modules::codex_session_manager::CodexSharedChatVisibilitySummary, String> {
+    modules::codex_session_manager::ensure_shared_chat_visibility_for_instance(&instance_id)
 }
 
 #[tauri::command]
@@ -414,10 +437,13 @@ pub async fn codex_update_instance(
             follow_local_account,
             launch_mode,
         )?;
-        let running = updated
-            .last_pid
-            .map(modules::process::is_pid_running)
-            .unwrap_or(false);
+        let resolved_pid = modules::process::resolve_codex_pid(updated.last_pid, None);
+        let updated = if updated.last_pid != resolved_pid {
+            modules::codex_instance::update_default_pid(resolved_pid)?
+        } else {
+            updated
+        };
+        let running = resolved_pid.is_some();
         let default_bind_account_id = resolve_default_account_id(&updated);
         let _ = working_dir;
         return Ok(default_instance_view(
@@ -425,7 +451,7 @@ pub async fn codex_update_instance(
             &updated,
             default_bind_account_id,
             running,
-            updated.last_pid,
+            resolved_pid,
         ));
     }
 
@@ -455,10 +481,14 @@ pub async fn codex_update_instance(
             launch_mode,
         })?;
 
-    let running = instance
-        .last_pid
-        .map(modules::process::is_pid_running)
-        .unwrap_or(false);
+    let resolved_pid =
+        modules::process::resolve_codex_pid(instance.last_pid, Some(&instance.user_data_dir));
+    let instance = if instance.last_pid != resolved_pid {
+        modules::codex_instance::update_instance_pid(&instance.id, resolved_pid)?
+    } else {
+        instance
+    };
+    let running = resolved_pid.is_some();
     let initialized = is_profile_initialized(&instance.user_data_dir);
     Ok(CodexInstanceProfileView::from_profile(
         instance,
@@ -488,6 +518,9 @@ pub async fn codex_start_instance(instance_id: String) -> Result<CodexInstancePr
         if let Some(ref account_id) = default_bind_account_id {
             inject_bound_account_to_profile(&default_dir, account_id).await?;
         }
+        modules::codex_session_manager::ensure_shared_chat_visibility_for_instance(
+            DEFAULT_INSTANCE_ID,
+        )?;
 
         if default_settings.launch_mode == InstanceLaunchMode::Cli {
             let context = resolve_instance_launch_context(DEFAULT_INSTANCE_ID)?;
@@ -504,15 +537,17 @@ pub async fn codex_start_instance(instance_id: String) -> Result<CodexInstancePr
 
         modules::process::ensure_codex_launch_path_configured()?;
         let extra_args = modules::process::parse_extra_args(&default_settings.extra_args);
-        let pid = modules::process::start_codex_default(&extra_args)?;
-        let updated = modules::codex_instance::update_default_pid(Some(pid))?;
-        let running = modules::process::is_pid_running(pid);
+        let launched_pid =
+            modules::process::start_codex_with_args(&default_dir.to_string_lossy(), &extra_args)?;
+        let resolved_pid = modules::process::resolve_codex_pid(Some(launched_pid), None);
+        let updated = modules::codex_instance::update_default_pid(resolved_pid)?;
+        let running = resolved_pid.is_some();
         return Ok(default_instance_view(
             &default_dir,
             &updated,
             default_bind_account_id,
             running,
-            Some(pid),
+            resolved_pid,
         ));
     }
 
@@ -523,8 +558,6 @@ pub async fn codex_start_instance(instance_id: String) -> Result<CodexInstancePr
         .find(|item| item.id == instance_id)
         .ok_or("实例不存在")?;
 
-    modules::codex_instance::ensure_instance_shared_skills(Path::new(&instance.user_data_dir))?;
-
     if let Some(pid) =
         modules::process::resolve_codex_pid(instance.last_pid, Some(&instance.user_data_dir))
     {
@@ -532,9 +565,12 @@ pub async fn codex_start_instance(instance_id: String) -> Result<CodexInstancePr
         let _ = modules::codex_instance::update_instance_pid(&instance.id, None)?;
     }
 
+    modules::codex_instance::ensure_instance_shared_skills(Path::new(&instance.user_data_dir))?;
+
     if let Some(ref account_id) = instance.bind_account_id {
         inject_bound_account_to_profile(Path::new(&instance.user_data_dir), account_id).await?;
     }
+    modules::codex_session_manager::ensure_shared_chat_visibility_for_instance(&instance.id)?;
 
     if instance.launch_mode == InstanceLaunchMode::Cli {
         let context = resolve_instance_launch_context(&instance.id)?;
@@ -550,9 +586,13 @@ pub async fn codex_start_instance(instance_id: String) -> Result<CodexInstancePr
 
     modules::process::ensure_codex_launch_path_configured()?;
     let extra_args = modules::process::parse_extra_args(&instance.extra_args);
-    let pid = modules::process::start_codex_with_args(&instance.user_data_dir, &extra_args)?;
-    let updated = modules::codex_instance::update_instance_after_start(&instance.id, pid)?;
-    let running = modules::process::is_pid_running(pid);
+    let launched_pid =
+        modules::process::start_codex_with_args(&instance.user_data_dir, &extra_args)?;
+    let resolved_pid =
+        modules::process::resolve_codex_pid(Some(launched_pid), Some(&instance.user_data_dir));
+    let updated =
+        modules::codex_instance::update_instance_after_start_resolved(&instance.id, resolved_pid)?;
+    let running = resolved_pid.is_some();
     let initialized = is_profile_initialized(&updated.user_data_dir);
     Ok(CodexInstanceProfileView::from_profile(
         updated,

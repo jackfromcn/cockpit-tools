@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 
-export type PlatformRuntimeSupport = 'desktop' | 'macos-only' | 'windows-only' | 'linux-only';
+export type PlatformRuntimeSupport = 'desktop' | 'macos-or-windows' | 'macos-only' | 'windows-only' | 'linux-only';
 
 export function usePlatformRuntimeSupport(mode: PlatformRuntimeSupport): boolean {
   return useMemo(() => {
@@ -13,6 +13,9 @@ export function usePlatformRuntimeSupport(mode: PlatformRuntimeSupport): boolean
 
     if (mode === 'macos-only') {
       return isMac;
+    }
+    if (mode === 'macos-or-windows') {
+      return isMac || isWindows;
     }
     if (mode === 'windows-only') {
       return isWindows;

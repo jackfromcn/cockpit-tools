@@ -593,6 +593,7 @@ fn read_top_level_int_from_doc(doc: &Document, key: &str) -> Option<i64> {
 pub fn read_quick_config_from_config_toml(base_dir: &Path) -> Result<CodexQuickConfig, String> {
     let config_path = get_config_toml_path(base_dir);
     let content = fs::read_to_string(config_path).unwrap_or_default();
+    let content = strip_utf8_bom(&content);
     if content.trim().is_empty() {
         return Ok(CodexQuickConfig {
             context_window_1m: false,
@@ -904,6 +905,10 @@ fn get_accounts_dir() -> PathBuf {
     let accounts_dir = data_dir.join("codex_accounts");
     fs::create_dir_all(&accounts_dir).ok();
     accounts_dir
+}
+
+fn strip_utf8_bom(content: &str) -> &str {
+    content.strip_prefix('\u{feff}').unwrap_or(content)
 }
 
 /// 解析 JWT Token 的 payload
@@ -1233,11 +1238,13 @@ pub fn load_account_index() -> CodexAccountIndex {
     }
 
     match fs::read_to_string(&path) {
-        Ok(content) if content.trim().is_empty() => {
+        Ok(content) if strip_utf8_bom(&content).trim().is_empty() => {
             repair_account_index_from_details("索引文件为空").unwrap_or_else(CodexAccountIndex::new)
         }
-        Ok(content) => match serde_json::from_str::<CodexAccountIndex>(&content) {
-            Ok(index) if !index.accounts.is_empty() => index,
+        Ok(content) => match serde_json::from_str::<CodexAccountIndex>(strip_utf8_bom(&content)) {
+            Ok(index) if !index.accounts.is_empty() => {
+                repair_incomplete_account_index_from_details(index)
+            }
             Ok(_) => repair_account_index_from_details("索引账号列表为空")
                 .unwrap_or_else(CodexAccountIndex::new),
             Err(err) => {
@@ -1293,6 +1300,8 @@ fn load_account_index_checked() -> Result<CodexAccountIndex, String> {
         }
     };
 
+    let content = strip_utf8_bom(&content);
+
     if content.trim().is_empty() {
         logger::log_warn(&format!(
             "[Codex Account][Repair] 检测到账号索引文件为空，准备尝试自动修复: path={}",
@@ -1311,8 +1320,10 @@ fn load_account_index_checked() -> Result<CodexAccountIndex, String> {
         return Ok(CodexAccountIndex::new());
     }
 
-    match serde_json::from_str::<CodexAccountIndex>(&content) {
-        Ok(index) if !index.accounts.is_empty() => Ok(index),
+    match serde_json::from_str::<CodexAccountIndex>(content) {
+        Ok(index) if !index.accounts.is_empty() => {
+            Ok(repair_incomplete_account_index_from_details(index))
+        }
         Ok(index) => {
             logger::log_warn(&format!(
                 "[Codex Account][Repair] 账号索引可解析但列表为空，准备尝试自动修复: path={}",
@@ -1367,7 +1378,7 @@ fn repair_account_index_from_details(reason: &str) -> Option<CodexAccountIndex> 
         accounts_dir.display()
     ));
 
-    let mut accounts = match crate::modules::account_index_repair::load_accounts_from_details(
+    let accounts = match crate::modules::account_index_repair::load_accounts_from_details(
         &accounts_dir,
         |account_id| load_account(account_id),
     ) {
@@ -1397,26 +1408,7 @@ fn repair_account_index_from_details(reason: &str) -> Option<CodexAccountIndex> 
         accounts.len()
     ));
 
-    crate::modules::account_index_repair::sort_accounts_by_recency(
-        &mut accounts,
-        |account| account.last_used,
-        |account| account.created_at,
-        |account| account.id.as_str(),
-    );
-
-    let mut index = CodexAccountIndex::new();
-    index.accounts = accounts
-        .iter()
-        .map(|account| CodexAccountSummary {
-            id: account.id.clone(),
-            email: account.email.clone(),
-            plan_type: account.plan_type.clone(),
-            subscription_active_until: account.subscription_active_until.clone(),
-            created_at: account.created_at,
-            last_used: account.last_used,
-        })
-        .collect();
-    index.current_account_id = None;
+    let index = rebuild_account_index_from_accounts(accounts, None);
 
     logger::log_info(&format!(
         "[Codex Account][Repair] 索引重建完成，准备写回本地文件: recovered_accounts={}, current_account_id={}",
@@ -1454,6 +1446,95 @@ fn repair_account_index_from_details(reason: &str) -> Option<CodexAccountIndex> 
     ));
 
     Some(index)
+}
+
+fn repair_incomplete_account_index_from_details(mut index: CodexAccountIndex) -> CodexAccountIndex {
+    let accounts_dir = get_accounts_dir();
+    let accounts = match crate::modules::account_index_repair::load_accounts_from_details(
+        &accounts_dir,
+        |account_id| load_account(account_id),
+    ) {
+        Ok(accounts) => accounts,
+        Err(err) => {
+            logger::log_warn(&format!(
+                "[Codex Account][Repair] 无法扫描账号详情目录以校验索引完整性: accounts_dir={}, error={}",
+                accounts_dir.display(),
+                err
+            ));
+            return index;
+        }
+    };
+
+    let indexed_ids = index
+        .accounts
+        .iter()
+        .map(|account| account.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let missing_count = accounts
+        .iter()
+        .filter(|account| !indexed_ids.contains(account.id.as_str()))
+        .count();
+    if missing_count == 0 {
+        return index;
+    }
+
+    logger::log_warn(&format!(
+        "[Codex Account][Repair] 账号索引缺少详情文件中的账号，准备按详情文件重建: indexed_accounts={}, detail_accounts={}, missing_accounts={}",
+        index.accounts.len(),
+        accounts.len(),
+        missing_count
+    ));
+
+    let previous_current_account_id = index.current_account_id.clone();
+    if let Some(repaired) = repair_account_index_from_details("索引缺少详情账号") {
+        index = repaired;
+        if previous_current_account_id
+            .as_deref()
+            .is_some_and(|account_id| index.accounts.iter().any(|item| item.id == account_id))
+        {
+            index.current_account_id = previous_current_account_id;
+            if let Err(err) = save_account_index(&index) {
+                logger::log_warn(&format!(
+                    "[Codex Account][Repair] 保存保留当前账号后的索引失败: {}",
+                    err
+                ));
+            }
+        }
+    }
+
+    index
+}
+
+fn rebuild_account_index_from_accounts(
+    mut accounts: Vec<CodexAccount>,
+    current_account_id: Option<String>,
+) -> CodexAccountIndex {
+    crate::modules::account_index_repair::sort_accounts_by_recency(
+        &mut accounts,
+        |account| account.last_used,
+        |account| account.created_at,
+        |account| account.id.as_str(),
+    );
+
+    let mut index = CodexAccountIndex::new();
+    index.accounts = accounts
+        .iter()
+        .map(|account| CodexAccountSummary {
+            id: account.id.clone(),
+            email: account.email.clone(),
+            plan_type: account.plan_type.clone(),
+            subscription_active_until: account.subscription_active_until.clone(),
+            created_at: account.created_at,
+            last_used: account.last_used,
+        })
+        .collect();
+    index.current_account_id = current_account_id.filter(|account_id| {
+        index
+            .accounts
+            .iter()
+            .any(|account| account.id == *account_id)
+    });
+    index
 }
 
 fn read_json_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
@@ -1657,11 +1738,12 @@ fn load_account_with_summary(
 
     let content = fs::read_to_string(&path)
         .map_err(|error| format!("读取账号详情失败 ({}): {}", path.display(), error))?;
-    if let Ok(account) = serde_json::from_str::<CodexAccount>(&content) {
+    let content = strip_utf8_bom(&content);
+    if let Ok(account) = serde_json::from_str::<CodexAccount>(content) {
         return Ok(Some(account));
     }
 
-    let value = serde_json::from_str::<serde_json::Value>(&content)
+    let value = serde_json::from_str::<serde_json::Value>(content)
         .map_err(|error| format!("账号详情不是有效 JSON ({}): {}", path.display(), error))?;
     let account = parse_codex_account_compat(value, account_id, summary)?
         .ok_or_else(|| format!("账号详情缺少可识别凭据 ({})", path.display()))?;
@@ -3719,8 +3801,9 @@ mod tests {
         get_accounts_dir, get_accounts_storage_path, get_current_account, list_accounts_checked,
         load_account, load_account_index, parse_auth_file_last_refresh, parse_codex_account_compat,
         parse_line_delimited_json_values, read_api_provider_from_config_toml,
-        read_quick_config_from_config_toml, resolve_api_provider_config, save_account,
-        save_account_index, should_accept_authority_snapshot, sync_account_from_auth_dir,
+        read_quick_config_from_config_toml, rebuild_account_index_from_accounts,
+        resolve_api_provider_config, save_account, save_account_index,
+        should_accept_authority_snapshot, sync_account_from_auth_dir,
         sync_managed_projection_from_auth_dir, validate_api_key_credentials,
         write_api_provider_to_config_toml, write_managed_projection_to_dir,
         write_quick_config_to_config_toml, ApiProviderConfig, CodexAccountIndex,
@@ -3849,6 +3932,8 @@ mod tests {
     struct TestEnvGuard {
         home_dir: std::path::PathBuf,
         previous_home: Option<String>,
+        previous_userprofile: Option<String>,
+        previous_data_dir: Option<String>,
         previous_codex_home: Option<String>,
     }
 
@@ -3859,13 +3944,22 @@ mod tests {
             fs::create_dir_all(&codex_home).expect("create codex home");
 
             let previous_home = std::env::var("HOME").ok();
+            let previous_userprofile = std::env::var("USERPROFILE").ok();
+            let previous_data_dir = std::env::var("COCKPIT_TOOLS_DATA_DIR").ok();
             let previous_codex_home = std::env::var("CODEX_HOME").ok();
             std::env::set_var("HOME", &home_dir);
+            std::env::set_var("USERPROFILE", &home_dir);
+            std::env::set_var(
+                "COCKPIT_TOOLS_DATA_DIR",
+                home_dir.join(".antigravity_cockpit"),
+            );
             std::env::set_var("CODEX_HOME", &codex_home);
 
             Self {
                 home_dir,
                 previous_home,
+                previous_userprofile,
+                previous_data_dir,
                 previous_codex_home,
             }
         }
@@ -3880,6 +3974,14 @@ mod tests {
             match self.previous_home.as_ref() {
                 Some(value) => std::env::set_var("HOME", value),
                 None => std::env::remove_var("HOME"),
+            }
+            match self.previous_userprofile.as_ref() {
+                Some(value) => std::env::set_var("USERPROFILE", value),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+            match self.previous_data_dir.as_ref() {
+                Some(value) => std::env::set_var("COCKPIT_TOOLS_DATA_DIR", value),
+                None => std::env::remove_var("COCKPIT_TOOLS_DATA_DIR"),
             }
             match self.previous_codex_home.as_ref() {
                 Some(value) => std::env::set_var("CODEX_HOME", value),
@@ -4171,6 +4273,97 @@ mod tests {
             persisted.tokens.refresh_token.as_deref(),
             stored.tokens.refresh_token.as_deref()
         );
+    }
+
+    #[test]
+    fn valid_but_incomplete_account_index_repairs_from_detail_files() {
+        let mut first = CodexAccount::new(
+            "codex_first".to_string(),
+            "first@example.com".to_string(),
+            make_codex_tokens(
+                "first@example.com",
+                "acc-first",
+                "org-first",
+                "first",
+                "rt-first",
+            ),
+        );
+        first.created_at = 100;
+        first.last_used = 100;
+        first.plan_type = Some("pro".to_string());
+
+        let mut second = CodexAccount::new(
+            "codex_second".to_string(),
+            "second@example.com".to_string(),
+            make_codex_tokens(
+                "second@example.com",
+                "acc-second",
+                "org-second",
+                "second",
+                "rt-second",
+            ),
+        );
+        second.created_at = 200;
+        second.last_used = 300;
+        second.plan_type = Some("plus".to_string());
+
+        let repaired_index = rebuild_account_index_from_accounts(
+            vec![first.clone(), second.clone()],
+            Some(first.id.clone()),
+        );
+        let ids = repaired_index
+            .accounts
+            .iter()
+            .map(|account| account.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(repaired_index.accounts.len(), 2);
+        assert!(ids.contains(first.id.as_str()));
+        assert!(ids.contains(second.id.as_str()));
+        assert_eq!(
+            repaired_index.current_account_id.as_deref(),
+            Some(first.id.as_str())
+        );
+    }
+
+    #[test]
+    fn account_index_accepts_utf8_bom() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _env = TestEnvGuard::new("codex-index-bom-test");
+
+        let mut account = CodexAccount::new(
+            "codex_bom".to_string(),
+            "bom@example.com".to_string(),
+            make_codex_tokens("bom@example.com", "acc-bom", "org-bom", "bom", "rt-bom"),
+        );
+        account.plan_type = Some("pro".to_string());
+        save_account(&account).expect("save account");
+
+        let mut index = CodexAccountIndex::new();
+        index.accounts.push(CodexAccountSummary {
+            id: account.id.clone(),
+            email: account.email.clone(),
+            plan_type: account.plan_type.clone(),
+            subscription_active_until: account.subscription_active_until.clone(),
+            created_at: account.created_at,
+            last_used: account.last_used,
+        });
+        index.current_account_id = Some(account.id.clone());
+
+        let mut content = vec![0xEF, 0xBB, 0xBF];
+        content.extend(serde_json::to_vec_pretty(&index).expect("serialize index"));
+        fs::write(get_accounts_storage_path(), content).expect("write bom index");
+
+        let loaded = load_account_index();
+        assert_eq!(loaded.accounts.len(), 1);
+        assert_eq!(
+            loaded.current_account_id.as_deref(),
+            Some(account.id.as_str())
+        );
+
+        let checked_accounts = list_accounts_checked().expect("list checked accounts");
+        assert_eq!(checked_accounts.len(), 1);
+        assert_eq!(checked_accounts[0].id, account.id);
     }
 
     #[test]

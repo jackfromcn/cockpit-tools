@@ -70,7 +70,7 @@ pbkdf2 = "0.12"
 sha1 = "0.10"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 mac-notification-sys = "0.6"

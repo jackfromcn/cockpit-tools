@@ -9,9 +9,11 @@ use modules::logger;
 use std::sync::OnceLock;
 #[cfg(target_os = "macos")]
 use tauri::ActivationPolicy;
+use tauri::Emitter;
+#[cfg(target_os = "macos")]
+use tauri::Manager;
 use tauri::RunEvent;
 use tauri::WindowEvent;
-use tauri::{Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tracing::info;
 
@@ -150,6 +152,20 @@ pub fn run() {
 
             tauri::async_runtime::spawn(async {
                 modules::codex_local_access::restore_local_access_gateway().await;
+            });
+
+            tauri::async_runtime::spawn(async {
+                loop {
+                    if let Err(err) =
+                        modules::codex_session_manager::ensure_shared_chat_visibility_across_instances()
+                    {
+                        logger::log_warn(&format!(
+                            "[Codex Shared Chat] background visibility sync skipped: {}",
+                            err
+                        ));
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+                }
             });
 
             {
@@ -806,6 +822,8 @@ pub fn run() {
             commands::codex_instance::codex_sync_sessions_to_instance,
             commands::codex_instance::codex_repair_session_visibility_across_instances,
             commands::codex_instance::codex_list_sessions_across_instances,
+            commands::codex_instance::codex_list_shared_chat_catalog,
+            commands::codex_instance::codex_ensure_shared_chat_visibility,
             commands::codex_instance::codex_get_session_token_stats_across_instances,
             commands::codex_instance::codex_move_sessions_to_trash_across_instances,
             commands::codex_instance::codex_list_trashed_sessions_across_instances,

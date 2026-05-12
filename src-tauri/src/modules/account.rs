@@ -194,6 +194,13 @@ fn clear_deleted_account_fingerprint(email: &str) -> Result<(), String> {
 
 /// 获取数据目录路径
 pub fn get_data_dir() -> Result<PathBuf, String> {
+    if let Some(data_dir) = resolve_data_dir_from_env() {
+        if !data_dir.exists() {
+            fs::create_dir_all(&data_dir).map_err(|e| format!("创建数据目录失败: {}", e))?;
+        }
+        return Ok(data_dir);
+    }
+
     let home = dirs::home_dir().ok_or("无法获取用户主目录")?;
     let data_dir = home.join(DATA_DIR);
 
@@ -202,6 +209,15 @@ pub fn get_data_dir() -> Result<PathBuf, String> {
     }
 
     Ok(data_dir)
+}
+
+fn resolve_data_dir_from_env() -> Option<PathBuf> {
+    let raw = std::env::var("COCKPIT_TOOLS_DATA_DIR").ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(trimmed.trim_matches('"').trim_matches('\'')))
 }
 
 /// 获取账号目录路径

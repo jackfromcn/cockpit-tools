@@ -111,6 +111,10 @@ struct ThreadSnapshot {
 }
 
 pub fn sync_threads_across_instances() -> Result<CodexInstanceThreadSyncSummary, String> {
+    if ensure_thread_sync_safe_for_account_bindings().is_err() {
+        return sync_shared_chat_visibility_across_instances();
+    }
+
     let instances = collect_instances()?;
     if instances.len() < 2 {
         return Err("至少需要两个 Codex 实例才能同步线程".to_string());
@@ -318,6 +322,91 @@ pub fn sync_sessions_to_instance(
         running,
         message,
     })
+}
+
+fn sync_shared_chat_visibility_across_instances() -> Result<CodexInstanceThreadSyncSummary, String>
+{
+    let summaries =
+        modules::codex_session_manager::ensure_shared_chat_visibility_across_instances()?;
+    if summaries.len() < 2 {
+        return Err("至少需要两个 Codex 实例才能同步线程".to_string());
+    }
+
+    let mut items = Vec::with_capacity(summaries.len());
+    let mut backup_dirs = Vec::new();
+    let mut mutated_instance_count = 0usize;
+    let mut total_synced_thread_count = 0usize;
+
+    for summary in summaries {
+        let added_thread_count =
+            summary.materialized_foreign_count + summary.copied_same_account_count;
+        if added_thread_count > 0 || summary.removed_unsafe_same_id_count > 0 {
+            mutated_instance_count += 1;
+        }
+        total_synced_thread_count += added_thread_count;
+        if let Some(ref backup_dir) = summary.backup_dir {
+            backup_dirs.push(backup_dir.clone());
+        }
+        items.push(CodexInstanceThreadSyncItem {
+            instance_id: summary.target_instance_id,
+            instance_name: summary.target_instance_name,
+            added_thread_count,
+            backup_dir: summary.backup_dir,
+        });
+    }
+
+    let message = if total_synced_thread_count == 0 {
+        "All Codex instances already have account-safe shared chat visibility".to_string()
+    } else {
+        format!(
+            "Account-safe shared chat visibility updated: {} fork/copy record(s) materialized across {} instance(s)",
+            total_synced_thread_count, mutated_instance_count
+        )
+    };
+
+    Ok(CodexInstanceThreadSyncSummary {
+        instance_count: items.len(),
+        thread_universe_count: total_synced_thread_count,
+        mutated_instance_count,
+        total_synced_thread_count,
+        items,
+        backup_dirs,
+        message,
+    })
+}
+
+fn ensure_thread_sync_safe_for_account_bindings() -> Result<(), String> {
+    let store = modules::codex_instance::load_instance_store()?;
+    thread_sync_account_bindings_are_safe(&store)
+}
+
+fn thread_sync_account_bindings_are_safe(
+    store: &crate::models::InstanceStore,
+) -> Result<(), String> {
+    let mut account_ids = HashSet::new();
+
+    if let Some(account_id) = store.default_settings.bind_account_id.as_deref() {
+        if !account_id.trim().is_empty() {
+            account_ids.insert(account_id.to_string());
+        }
+    }
+
+    for instance in &store.instances {
+        if let Some(account_id) = instance.bind_account_id.as_deref() {
+            if !account_id.trim().is_empty() {
+                account_ids.insert(account_id.to_string());
+            }
+        }
+    }
+
+    if account_ids.len() > 1 {
+        return Err(
+            "Codex thread sync is disabled across different bound accounts to avoid quota/account leakage"
+                .to_string(),
+        );
+    }
+
+    Ok(())
 }
 
 fn collect_instances() -> Result<Vec<CodexSyncInstance>, String> {
@@ -914,5 +1003,53 @@ fn format_timestamp(timestamp: i64) -> Option<String> {
     } else {
         chrono::DateTime::<Utc>::from_timestamp(timestamp, 0)
             .map(|value| value.to_rfc3339_opts(SecondsFormat::Micros, true))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{InstanceLaunchMode, InstanceProfile, InstanceStore};
+
+    fn instance_with_account(id: &str, account_id: Option<&str>) -> InstanceProfile {
+        InstanceProfile {
+            id: id.to_string(),
+            name: id.to_string(),
+            user_data_dir: format!("C:\\tmp\\{}", id),
+            working_dir: None,
+            extra_args: String::new(),
+            bind_account_id: account_id.map(str::to_string),
+            launch_mode: InstanceLaunchMode::App,
+            created_at: 0,
+            last_launched_at: None,
+            last_pid: None,
+        }
+    }
+
+    #[test]
+    fn codex_thread_sync_rejects_different_bound_accounts() {
+        let mut store = InstanceStore::new();
+        store.default_settings.bind_account_id = Some("account-a".to_string());
+        store
+            .instances
+            .push(instance_with_account("second", Some("account-b")));
+
+        let error = thread_sync_account_bindings_are_safe(&store)
+            .expect_err("different accounts must not use direct thread sync");
+
+        assert!(error.contains("quota/account leakage"));
+    }
+
+    #[test]
+    fn codex_thread_sync_allows_same_or_unbound_accounts() {
+        let mut store = InstanceStore::new();
+        store.default_settings.bind_account_id = Some("account-a".to_string());
+        store
+            .instances
+            .push(instance_with_account("second", Some("account-a")));
+        store.instances.push(instance_with_account("third", None));
+
+        thread_sync_account_bindings_are_safe(&store)
+            .expect("same bound account and unbound instances can use legacy local sync");
     }
 }

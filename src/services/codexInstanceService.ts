@@ -4,6 +4,8 @@ import type {
   CodexSessionVisibilityRepairSummary,
   CodexInstanceThreadSyncSummary,
   CodexInstanceTargetThreadSyncSummary,
+  CodexSharedChatCatalogRecord,
+  CodexSharedChatVisibilitySummary,
   CodexSessionRecord,
   CodexSessionTokenStats,
   CodexSessionTrashSummary,
@@ -150,6 +152,18 @@ export async function listSessionsAcrossInstances(): Promise<
   CodexSessionRecord[]
 > {
   return await invoke("codex_list_sessions_across_instances");
+}
+
+export async function listSharedChatCatalog(
+  instanceId: string,
+): Promise<CodexSharedChatCatalogRecord[]> {
+  return await invoke("codex_list_shared_chat_catalog", { instanceId });
+}
+
+export async function ensureSharedChatVisibility(
+  instanceId: string,
+): Promise<CodexSharedChatVisibilitySummary> {
+  return await invoke("codex_ensure_shared_chat_visibility", { instanceId });
 }
 
 export async function getSessionTokenStatsAcrossInstances(
