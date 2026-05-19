@@ -267,25 +267,40 @@ fn build_qoder_request_body(messages: &Value, model: &str) -> Value {
         })
         .unwrap_or("");
 
-    // Build messages array in Qoder format
+    // Build messages in Qoder format
     let mut qoder_messages = Vec::new();
+    let mut has_system = false;
     if let Some(arr) = messages.as_array() {
         for msg in arr {
             let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
             let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
+            if role == "system" {
+                has_system = true;
+            }
             let mut qm = json!({
                 "role": role,
-                "content": content,
+                "content": if role == "user" { "" } else { content },
                 "response_meta": {"id": "", "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}},
                 "reasoning_content_signature": ""
             });
             if role == "user" {
                 qm["contents"] = json!([{"type": "text", "text": content}]);
-                qm["content"] = json!("");
             }
             qoder_messages.push(qm);
         }
     }
+
+    // Add minimal system message if none provided
+    if !has_system {
+        qoder_messages.insert(0, json!({
+            "role": "system",
+            "content": "You are a helpful assistant. Respond concisely.",
+            "response_meta": {"id": "", "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}},
+            "reasoning_content_signature": ""
+        }));
+    }
+
+    let biz_name = if prompt.len() > 30 { &prompt[..prompt.char_indices().nth(30).map(|(i,_)|i).unwrap_or(prompt.len())] } else { prompt };
 
     json!({
         "request_id": nid,
@@ -293,16 +308,43 @@ fn build_qoder_request_body(messages: &Value, model: &str) -> Value {
         "request_set_id": uuid::Uuid::new_v4().to_string(),
         "session_id": uuid::Uuid::new_v4().to_string(),
         "stream": true,
+        "chat_task": "FREE_INPUT",
+        "is_reply": true,
+        "is_retry": false,
+        "source": 1,
+        "version": "3",
+        "session_type": "qodercli",
+        "agent_id": "agent_common",
+        "task_id": "common",
+        "code_language": "",
+        "chat_prompt": "",
         "aliyun_user_type": "personal_standard",
-        "model_config": {"key": model, "source": "system"},
+        "parameters": {"max_tokens": 32768},
+        "model_config": {
+            "key": model,
+            "source": "system",
+            "display_name": model,
+            "model": "",
+            "format": "openai",
+            "is_vl": false,
+            "is_reasoning": false,
+            "max_input_tokens": 180000
+        },
         "business": {
             "id": uuid::Uuid::new_v4().to_string(),
-            "name": if prompt.len() > 30 { &prompt[..30] } else { prompt },
+            "name": biz_name,
             "begin_at": now_ms
         },
         "chat_context": {
-            "text": {"text": prompt},
-            "extra": {"originalContent": {"text": prompt}}
+            "chatPrompt": "",
+            "features": [],
+            "imageUrls": null,
+            "text": {"type": "text", "text": prompt},
+            "extra": {
+                "context": [],
+                "modelConfig": {"is_reasoning": false, "key": model},
+                "originalContent": {"type": "text", "text": prompt}
+            }
         },
         "messages": qoder_messages,
     })
