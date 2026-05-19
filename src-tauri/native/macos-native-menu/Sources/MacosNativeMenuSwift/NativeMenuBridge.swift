@@ -11,12 +11,10 @@ private func rustDispatchMenuAction(
 
 private func runNativeMenuControllerSync(
     label: String,
-    _ operation: @escaping @MainActor () -> Void
+    _ operation: @escaping () -> Void
 ) {
     precondition(Thread.isMainThread, "[NativeMenu] \(label) 必须在主线程执行")
-    MainActor.assumeIsolated {
-        operation()
-    }
+    operation()
 }
 
 private let nativeMenuRunLoopModes: [RunLoop.Mode] = [
@@ -27,7 +25,7 @@ private let nativeMenuRunLoopModes: [RunLoop.Mode] = [
 
 private func runNativeMenuController(
     label: String,
-    _ operation: @escaping @MainActor () -> Void
+    _ operation: @escaping () -> Void
 ) {
     if Thread.isMainThread {
         runNativeMenuControllerSync(label: label, operation)
@@ -65,7 +63,7 @@ public func macos_native_menu_toggle(
 ) {
     guard let snapshotJSONPointer, let statusItemPointer else { return }
     let snapshotJSON = String(cString: snapshotJSONPointer)
-    runNativeMenuController(label: "toggle") {
+    Task { @MainActor in
         NativeMenuPopoverController.shared.toggle(
             snapshotJSON: snapshotJSON,
             statusItemPointer: statusItemPointer
@@ -79,7 +77,7 @@ public func macos_native_menu_update_snapshot(
 ) {
     guard let snapshotJSONPointer else { return }
     let snapshotJSON = String(cString: snapshotJSONPointer)
-    runNativeMenuController(label: "update_snapshot") {
+    Task { @MainActor in
         NativeMenuPopoverController.shared.update(snapshotJSON: snapshotJSON)
     }
 }
