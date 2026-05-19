@@ -1,14 +1,15 @@
 use crate::models::qoder::QoderAccount;
 use crate::models::qoder_local_access::{
     QoderLocalAccessCollection, QoderLocalAccessRoutingStrategy, QoderLocalAccessScope,
-    QoderLocalAccessState, QoderLocalAccessStats, QoderLocalAccessUsageStats,
+    QoderLocalAccessState, QoderLocalAccessStats,
 };
 use crate::modules::atomic_write::write_string_atomic;
-use crate::modules::{logger, qoder_account, qoder_oauth};
-use futures_util::StreamExt;
+use crate::modules::{logger, qoder_account};
+use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+use base64::{engine::general_purpose, Engine as _};
 use rand::{distributions::Alphanumeric, Rng};
-use reqwest::header::{HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
-use reqwest::{Client, StatusCode};
+use reqwest::Client;
+use rsa::{pkcs8::DecodePublicKey, Pkcs1v15Encrypt, RsaPublicKey};
 use serde_json::{json, Value};
 use std::net::{Ipv4Addr, TcpListener as StdTcpListener};
 use std::path::PathBuf;
@@ -20,16 +21,30 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, Mutex as TokioMutex};
 use tokio::time::{timeout, Duration};
 
+type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
+
 const QODER_LOCAL_ACCESS_FILE: &str = "qoder_local_access.json";
 const QODER_LOCAL_ACCESS_STATS_FILE: &str = "qoder_local_access_stats.json";
 const LOCALHOST_BIND: &str = "127.0.0.1";
 const LAN_BIND: &str = "0.0.0.0";
 const MAX_HTTP_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(15);
-const UPSTREAM_BASE_URL: &str = "https://api2-v2.qoder.sh/model/v1";
+const UPSTREAM_URL: &str = "https://api3.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1";
+const UPSTREAM_PATH_FOR_SIG: &str = "/api/v2/service/pro/sse/agent_chat_generation";
 const MAX_RETRY_ACCOUNTS: usize = 8;
 const GATEWAY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const GATEWAY_PORT_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
+const COSY_VERSION: &str = "0.1.43";
+
+const SERVER_PUBKEY_PEM: &str = "-----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
+4k6Pz1EaDicBMpdpxKduSZu5OANqUq8er4GM95omAGIOPOh+Nx0spthYA2BqGz+l
+6HRkPJ7S236FZz73In/KVuLnwI8JJ2CbuJap8kvheCCZpmAWpb/cPx/3Vr/J6I17
+XcW+ML9FoCI6AOvOzwIDAQAB
+-----END PUBLIC KEY-----";
+
+const QODER_CUSTOM_ALPHABET: &[u8] = b"_doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!";
+const STD_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 const DEFAULT_QODER_MODELS: &[&str] = &["auto", "lite", "performance", "ultimate"];
 
@@ -111,6 +126,249 @@ fn bind_host_for_scope(scope: QoderLocalAccessScope) -> &'static str {
         QoderLocalAccessScope::Localhost => LOCALHOST_BIND,
         QoderLocalAccessScope::Lan => LAN_BIND,
     }
+}
+
+// ─── QoderEncoding ───
+
+fn qoder_encode(plaintext: &[u8]) -> String {
+    let std = general_purpose::STANDARD.encode(plaintext);
+    let n = std.len();
+    let a = n / 3;
+    let rearranged = format!("{}{}{}", &std[n - a..], &std[a..n - a], &std[..a]);
+    let mut s2c = [0u8; 128];
+    for i in 0..64 {
+        s2c[STD_ALPHABET[i] as usize] = QODER_CUSTOM_ALPHABET[i];
+    }
+    s2c[b'=' as usize] = b'$';
+    rearranged
+        .bytes()
+        .map(|b| s2c[b as usize] as char)
+        .collect()
+}
+
+// ─── COSY 签名 ───
+
+struct CosySession {
+    cosy_key: String,
+    info: String,
+    temp_key: Vec<u8>,
+    machine_id: String,
+    machine_token: String,
+    machine_type: String,
+    uid: String,
+}
+
+fn build_cosy_session(account: &QoderAccount) -> Result<CosySession, String> {
+    let token = extract_access_token(account).ok_or("账号缺少 access token")?;
+    let uid = account.user_id.clone().unwrap_or_default();
+    let name = account.display_name.clone().unwrap_or_default();
+
+    // Generate temp key (16 bytes)
+    let temp_key: Vec<u8> = uuid::Uuid::new_v4()
+        .to_string()
+        .replace('-', "")[..16]
+        .as_bytes()
+        .to_vec();
+
+    // RSA encrypt temp key
+    let pub_key = RsaPublicKey::from_public_key_pem(SERVER_PUBKEY_PEM)
+        .map_err(|e| format!("解析 RSA 公钥失败: {}", e))?;
+    let mut rng = rand::thread_rng();
+    let encrypted_key = pub_key
+        .encrypt(&mut rng, Pkcs1v15Encrypt, &temp_key)
+        .map_err(|e| format!("RSA 加密失败: {}", e))?;
+    let cosy_key = general_purpose::STANDARD.encode(&encrypted_key);
+
+    // AES-128-CBC encrypt auth payload
+    let auth_payload = serde_json::to_vec(&json!({
+        "name": name,
+        "aid": uid,
+        "uid": uid,
+        "yx_uid": "",
+        "organization_id": "",
+        "organization_name": "",
+        "user_type": "personal_standard",
+        "security_oauth_token": token,
+        "refresh_token": account.auth_user_info_raw.as_ref()
+            .and_then(|v| v.get("refresh_token"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    }))
+    .map_err(|e| format!("序列化 auth payload 失败: {}", e))?;
+
+    let encrypted_info = aes_cbc_encrypt(&auth_payload, &temp_key)?;
+    let info = general_purpose::STANDARD.encode(&encrypted_info);
+
+    let machine_id = uuid::Uuid::new_v4().to_string();
+    let raw_token = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().to_string().replace('-', ""),
+        uuid::Uuid::new_v4().to_string().replace('-', "")
+    );
+    let machine_token = general_purpose::URL_SAFE_NO_PAD.encode(&raw_token[..50].as_bytes());
+    let machine_type = uuid::Uuid::new_v4().to_string().replace('-', "")[..18].to_string();
+
+    Ok(CosySession {
+        cosy_key,
+        info,
+        temp_key,
+        machine_id,
+        machine_token,
+        machine_type,
+        uid,
+    })
+}
+
+fn aes_cbc_encrypt(plaintext: &[u8], key: &[u8]) -> Result<Vec<u8>, String> {
+    let mut buf = vec![0u8; plaintext.len() + 16];
+    buf[..plaintext.len()].copy_from_slice(plaintext);
+    let ct = Aes128CbcEnc::new(key.into(), key.into())
+        .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
+        .map_err(|e| format!("AES 加密失败: {}", e))?;
+    Ok(ct.to_vec())
+}
+
+fn build_cosy_bearer(session: &CosySession, encoded_body: &str) -> Result<String, String> {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let mut payload_map = serde_json::Map::new();
+    payload_map.insert("cosyVersion".into(), json!(COSY_VERSION));
+    payload_map.insert("ideVersion".into(), json!(""));
+    payload_map.insert("info".into(), json!(session.info));
+    payload_map.insert("requestId".into(), json!(request_id));
+    payload_map.insert("version".into(), json!("v1"));
+    let payload_json = serde_json::to_string(&payload_map)
+        .map_err(|e| format!("序列化 payload 失败: {}", e))?;
+    let payload_b64 = general_purpose::STANDARD.encode(payload_json.as_bytes());
+
+    let cosy_date = format!("{}", chrono::Utc::now().timestamp());
+    let sig_input = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        payload_b64, session.cosy_key, cosy_date, encoded_body, UPSTREAM_PATH_FOR_SIG
+    );
+    let sig = format!("{:x}", md5::compute(sig_input.as_bytes()));
+
+    Ok(format!("Bearer COSY.{}.{}", payload_b64, sig))
+}
+
+// ─── OpenAI → Qoder 请求格式转换 ───
+
+fn build_qoder_request_body(messages: &Value, model: &str) -> Value {
+    let nid = uuid::Uuid::new_v4().to_string();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    // Extract latest user prompt
+    let prompt = messages
+        .as_array()
+        .and_then(|arr| {
+            arr.iter()
+                .rev()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                .and_then(|m| m.get("content").and_then(|c| c.as_str()))
+        })
+        .unwrap_or("");
+
+    // Build messages array in Qoder format
+    let mut qoder_messages = Vec::new();
+    if let Some(arr) = messages.as_array() {
+        for msg in arr {
+            let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+            let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
+            let mut qm = json!({
+                "role": role,
+                "content": content,
+                "response_meta": {"id": "", "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}},
+                "reasoning_content_signature": ""
+            });
+            if role == "user" {
+                qm["contents"] = json!([{"type": "text", "text": content}]);
+                qm["content"] = json!("");
+            }
+            qoder_messages.push(qm);
+        }
+    }
+
+    json!({
+        "request_id": nid,
+        "chat_record_id": nid,
+        "request_set_id": uuid::Uuid::new_v4().to_string(),
+        "session_id": uuid::Uuid::new_v4().to_string(),
+        "stream": true,
+        "aliyun_user_type": "personal_standard",
+        "model_config": {"key": model, "source": "system"},
+        "business": {
+            "id": uuid::Uuid::new_v4().to_string(),
+            "name": if prompt.len() > 30 { &prompt[..30] } else { prompt },
+            "begin_at": now_ms
+        },
+        "chat_context": {
+            "text": {"text": prompt},
+            "extra": {"originalContent": {"text": prompt}}
+        },
+        "messages": qoder_messages,
+    })
+}
+
+// ─── Qoder SSE → OpenAI 响应格式转换 ───
+
+fn parse_qoder_sse_to_openai(
+    sse_data: &str,
+    request_id: &str,
+    model: &str,
+) -> (Vec<String>, bool) {
+    let mut chunks = Vec::new();
+    let mut finished = false;
+    let created = chrono::Utc::now().timestamp();
+
+    for line in sse_data.lines() {
+        if !line.starts_with("data:") {
+            if line.starts_with("event:finish") {
+                finished = true;
+            }
+            continue;
+        }
+        let data = &line[5..];
+        let wrapper: Value = match serde_json::from_str(data) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let body_str = wrapper.get("body").and_then(|b| b.as_str()).unwrap_or("");
+        if body_str.is_empty() {
+            continue;
+        }
+        let inner: Value = match serde_json::from_str(body_str) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Some(choices) = inner.get("choices").and_then(|c| c.as_array()) {
+            for choice in choices {
+                let empty_obj = json!({});
+                let delta = choice.get("delta").unwrap_or(&empty_obj);
+                let content = delta.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                let role = delta.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                if content.is_empty() && role.is_empty() {
+                    continue;
+                }
+                let chunk = json!({
+                    "id": request_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": delta,
+                        "finish_reason": null
+                    }]
+                });
+                chunks.push(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default()));
+            }
+        }
+    }
+
+    if finished && chunks.is_empty() {
+        // Empty response, still send a done marker
+    }
+
+    (chunks, finished)
 }
 
 // ─── 配置加载/保存 ───
@@ -247,7 +505,7 @@ fn select_account_ids(
     result
 }
 
-// ─── 请求透传 ───
+// ─── 请求透传（COSY 签名） ───
 
 struct ProxyResult {
     status: u16,
@@ -257,80 +515,164 @@ struct ProxyResult {
 }
 
 async fn proxy_to_upstream(
-    method: &str,
-    path: &str,
-    headers: &[(String, String)],
+    _method: &str,
+    _path: &str,
+    _headers: &[(String, String)],
     body: &[u8],
-    access_token: &str,
+    account: &QoderAccount,
 ) -> Result<ProxyResult, String> {
     let client = get_http_client()?;
-    let url = format!("{}{}", UPSTREAM_BASE_URL, path);
 
-    let mut req = if method.eq_ignore_ascii_case("POST") {
-        client.post(&url)
-    } else {
-        client.get(&url)
-    };
+    // Parse incoming OpenAI request
+    let req_body: Value =
+        serde_json::from_slice(body).map_err(|e| format!("解析请求体失败: {}", e))?;
+    let model = req_body
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or("lite");
+    let messages = req_body.get("messages").cloned().unwrap_or(json!([]));
+    let stream = req_body
+        .get("stream")
+        .and_then(|s| s.as_bool())
+        .unwrap_or(false);
 
-    req = req.header(AUTHORIZATION, format!("Bearer {}", access_token));
-    req = req.header(CONTENT_TYPE, "application/json");
+    // Build COSY session
+    let session = build_cosy_session(account)?;
 
-    // 透传部分请求头
-    for (name, value) in headers {
-        let lower = name.to_lowercase();
-        if lower == "authorization"
-            || lower == "host"
-            || lower == "content-length"
-            || lower == "connection"
-            || lower == "accept-encoding"
-            || lower == "x-api-key"
-        {
-            continue;
-        }
-        if let (Ok(hn), Ok(hv)) = (
-            HeaderName::from_bytes(name.as_bytes()),
-            HeaderValue::from_str(value),
-        ) {
-            req = req.header(hn, hv);
-        }
-    }
+    // Convert to Qoder format
+    let qoder_body = build_qoder_request_body(&messages, model);
+    let encoded_body = qoder_encode(&serde_json::to_vec(&qoder_body).unwrap_or_default());
 
-    if !body.is_empty() && method.eq_ignore_ascii_case("POST") {
-        req = req.body(body.to_vec());
-    }
+    // Build Bearer
+    let bearer = build_cosy_bearer(&session, &encoded_body)?;
+    let cosy_date = format!("{}", chrono::Utc::now().timestamp());
 
-    let resp = req
+    let resp = client
+        .post(UPSTREAM_URL)
+        .header("cosy-data-policy", "AGREE")
+        .header("content-type", "application/json")
+        .header("cosy-machinetype", &session.machine_type)
+        .header("cosy-clienttype", "5")
+        .header("cosy-date", &cosy_date)
+        .header("cosy-user", &session.uid)
+        .header("cosy-key", &session.cosy_key)
+        .header("cache-control", "no-cache")
+        .header("accept", "text/event-stream")
+        .header("cosy-clientip", "169.254.198.161")
+        .header("authorization", &bearer)
+        .header("accept-encoding", "identity")
+        .header("cosy-version", COSY_VERSION)
+        .header("cosy-machineid", &session.machine_id)
+        .header("cosy-machinetoken", &session.machine_token)
+        .header("login-version", "v2")
+        .header("user-agent", "Go-http-client/2.0")
+        .header("x-model-key", model)
+        .header("x-model-source", "system")
+        .body(encoded_body)
         .send()
         .await
         .map_err(|e| format!("上游请求失败: {}", e))?;
 
     let status = resp.status().as_u16();
-    let mut resp_headers = Vec::new();
-    let is_stream = resp
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.contains("text/event-stream"))
-        .unwrap_or(false);
-
-    for (name, value) in resp.headers() {
-        if let Ok(v) = value.to_str() {
-            resp_headers.push((name.to_string(), v.to_string()));
-        }
+    if status == 401 || status == 403 {
+        return Ok(ProxyResult {
+            status,
+            headers: Vec::new(),
+            body: Vec::new(),
+            is_stream: false,
+        });
     }
 
-    let resp_body = resp
-        .bytes()
+    let sse_data = resp
+        .text()
         .await
-        .map_err(|e| format!("读取上游响应失败: {}", e))?
-        .to_vec();
+        .map_err(|e| format!("读取上游响应失败: {}", e))?;
 
-    Ok(ProxyResult {
-        status,
-        headers: resp_headers,
-        body: resp_body,
-        is_stream,
-    })
+    // Convert Qoder SSE to OpenAI format
+    let request_id = format!(
+        "chatcmpl-{}",
+        uuid::Uuid::new_v4().to_string().replace('-', "")[..24].to_string()
+    );
+    let created = chrono::Utc::now().timestamp();
+
+    if stream {
+        let (chunks, _) = parse_qoder_sse_to_openai(&sse_data, &request_id, model);
+        let mut response_body = String::new();
+        // Role chunk
+        let role_chunk = json!({
+            "id": request_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": null}]
+        });
+        response_body.push_str(&format!(
+            "data: {}\n\n",
+            serde_json::to_string(&role_chunk).unwrap_or_default()
+        ));
+        for chunk in &chunks {
+            response_body.push_str(chunk);
+        }
+        // Done chunk
+        let done_chunk = json!({
+            "id": request_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+        });
+        response_body.push_str(&format!(
+            "data: {}\n\n",
+            serde_json::to_string(&done_chunk).unwrap_or_default()
+        ));
+        response_body.push_str("data: [DONE]\n\n");
+
+        Ok(ProxyResult {
+            status: 200,
+            headers: vec![("content-type".into(), "text/event-stream".into())],
+            body: response_body.into_bytes(),
+            is_stream: true,
+        })
+    } else {
+        // Non-stream: collect all content
+        let (chunks, _) = parse_qoder_sse_to_openai(&sse_data, &request_id, model);
+        let mut full_content = String::new();
+        for chunk_str in &chunks {
+            if let Some(data_part) = chunk_str.strip_prefix("data: ") {
+                if let Ok(v) = serde_json::from_str::<Value>(data_part.trim()) {
+                    if let Some(c) = v
+                        .get("choices")
+                        .and_then(|ch| ch.get(0))
+                        .and_then(|ch| ch.get("delta"))
+                        .and_then(|d| d.get("content"))
+                        .and_then(|c| c.as_str())
+                    {
+                        full_content.push_str(c);
+                    }
+                }
+            }
+        }
+
+        let response = json!({
+            "id": request_id,
+            "object": "chat.completion",
+            "created": created,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": full_content},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        });
+
+        Ok(ProxyResult {
+            status: 200,
+            headers: vec![("content-type".into(), "application/json".into())],
+            body: serde_json::to_vec(&response).unwrap_or_default(),
+            is_stream: false,
+        })
+    }
 }
 
 // ─── HTTP 请求解析 ───
@@ -516,7 +858,7 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
             None => continue,
         };
 
-        let Some(token) = extract_access_token(&account) else {
+        let Some(_token) = extract_access_token(&account) else {
             logger::log_warn(&format!(
                 "[QoderLocalAccess] 账号 {} 无有效 token，跳过",
                 account_id
@@ -524,13 +866,12 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
             continue;
         };
 
-        let upstream_path = &parsed.target[3..]; // 去掉 /v1 前缀
         match proxy_to_upstream(
             &parsed.method,
-            upstream_path,
+            &parsed.target,
             &parsed.headers,
             &parsed.body,
-            &token,
+            &account,
         )
         .await
         {
