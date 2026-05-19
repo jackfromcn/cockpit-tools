@@ -246,3 +246,63 @@ pub fn update_qoder_account_tags(
 pub fn get_qoder_accounts_index_path() -> Result<String, String> {
     qoder_account::accounts_index_path_string()
 }
+
+// ─── Qoder Local Access Commands ───
+
+use crate::models::qoder_local_access::{
+    QoderLocalAccessRoutingStrategy, QoderLocalAccessScope, QoderLocalAccessState,
+};
+use crate::modules::qoder_local_access;
+
+#[tauri::command]
+pub async fn qoder_local_access_get_state() -> Result<QoderLocalAccessState, String> {
+    qoder_local_access::get_local_access_state().await
+}
+
+#[tauri::command]
+pub async fn qoder_local_access_set_enabled(enabled: bool) -> Result<QoderLocalAccessState, String> {
+    qoder_local_access::set_local_access_enabled(enabled).await
+}
+
+#[tauri::command]
+pub async fn qoder_local_access_save_accounts(
+    account_ids: Vec<String>,
+) -> Result<QoderLocalAccessState, String> {
+    qoder_local_access::save_local_access_accounts(account_ids).await
+}
+
+#[tauri::command]
+pub async fn qoder_local_access_remove_account(
+    account_id: String,
+) -> Result<QoderLocalAccessState, String> {
+    qoder_local_access::remove_local_access_account(&account_id).await
+}
+
+#[tauri::command]
+pub async fn qoder_local_access_rotate_api_key() -> Result<QoderLocalAccessState, String> {
+    qoder_local_access::rotate_local_access_api_key().await
+}
+
+#[tauri::command]
+pub async fn qoder_local_access_update_port(port: u16) -> Result<QoderLocalAccessState, String> {
+    qoder_local_access::update_local_access_port(port).await
+}
+
+#[tauri::command]
+pub async fn qoder_local_access_update_routing_strategy(
+    strategy: QoderLocalAccessRoutingStrategy,
+) -> Result<QoderLocalAccessState, String> {
+    qoder_local_access::update_local_access_routing_strategy(strategy).await
+}
+
+#[tauri::command]
+pub async fn qoder_local_access_update_access_scope(
+    access_scope: QoderLocalAccessScope,
+) -> Result<QoderLocalAccessState, String> {
+    qoder_local_access::update_local_access_scope(access_scope).await
+}
+
+#[tauri::command]
+pub async fn qoder_local_access_clear_stats() -> Result<QoderLocalAccessState, String> {
+    qoder_local_access::clear_local_access_stats().await
+}

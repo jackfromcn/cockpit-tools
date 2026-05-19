@@ -167,6 +167,10 @@ pub fn run() {
                 modules::codex_local_access::restore_local_access_gateway().await;
             });
 
+            tauri::async_runtime::spawn(async {
+                modules::qoder_local_access::restore_local_access_gateway().await;
+            });
+
             {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -691,6 +695,16 @@ pub fn run() {
             commands::qoder::inject_qoder_account,
             commands::qoder::update_qoder_account_tags,
             commands::qoder::get_qoder_accounts_index_path,
+            // Qoder Local Access Commands
+            commands::qoder::qoder_local_access_get_state,
+            commands::qoder::qoder_local_access_set_enabled,
+            commands::qoder::qoder_local_access_save_accounts,
+            commands::qoder::qoder_local_access_remove_account,
+            commands::qoder::qoder_local_access_rotate_api_key,
+            commands::qoder::qoder_local_access_update_port,
+            commands::qoder::qoder_local_access_update_routing_strategy,
+            commands::qoder::qoder_local_access_update_access_scope,
+            commands::qoder::qoder_local_access_clear_stats,
             // Zed Commands
             commands::zed::list_zed_accounts,
             commands::zed::delete_zed_account,

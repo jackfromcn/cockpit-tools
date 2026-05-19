@@ -8,6 +8,7 @@ pub mod github_copilot;
 pub mod instance;
 pub mod kiro;
 pub mod qoder;
+pub mod qoder_local_access;
 pub mod quota;
 pub mod token;
 pub mod trae;
