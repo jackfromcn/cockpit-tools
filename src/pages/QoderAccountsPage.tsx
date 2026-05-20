@@ -40,6 +40,7 @@ import {
   PlatformOverviewTabsHeader,
 } from '../components/platform/PlatformOverviewTabsHeader';
 import { QoderInstancesContent } from './QoderInstancesPage';
+import { QoderLocalAccessCard } from '../components/QoderLocalAccessCard';
 import { useQoderAccountStore } from '../stores/useQoderAccountStore';
 import * as qoderService from '../services/qoderService';
 import {
@@ -1868,6 +1869,7 @@ export function QoderAccountsPage() {
         <QoderInstancesContent accountsForSelect={filteredAccounts} />
       ) : (
         <>
+          <QoderLocalAccessCard accountIds={accounts.map(a => a.id)} />
           <div className={`ghcp-flow-notice ${isFlowNoticeCollapsed ? 'collapsed' : ''}`} role="note" aria-live="polite">
             <button
               type="button"
