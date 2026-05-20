@@ -998,15 +998,22 @@ async fn write_json_response(stream: &mut TcpStream, status: u16, value: &Value)
 async fn write_upstream_response(stream: &mut TcpStream, result: &ProxyResult) {
     let mut header_str = format!("HTTP/1.1 {} {}\r\n", result.status, status_text(result.status));
     header_str.push_str("Access-Control-Allow-Origin: *\r\n");
-    for (name, value) in &result.headers {
-        let lower = name.to_lowercase();
-        if lower == "transfer-encoding" || lower == "connection" || lower == "access-control-allow-origin" {
-            continue;
+    if result.is_stream {
+        header_str.push_str("Content-Type: text/event-stream\r\n");
+        header_str.push_str("Cache-Control: no-cache\r\n");
+        header_str.push_str("Connection: close\r\n");
+        header_str.push_str("\r\n");
+    } else {
+        for (name, value) in &result.headers {
+            let lower = name.to_lowercase();
+            if lower == "transfer-encoding" || lower == "connection" || lower == "access-control-allow-origin" {
+                continue;
+            }
+            header_str.push_str(&format!("{}: {}\r\n", name, value));
         }
-        header_str.push_str(&format!("{}: {}\r\n", name, value));
+        header_str.push_str(&format!("Content-Length: {}\r\n", result.body.len()));
+        header_str.push_str("\r\n");
     }
-    header_str.push_str(&format!("Content-Length: {}\r\n", result.body.len()));
-    header_str.push_str("\r\n");
     stream.write_all(header_str.as_bytes()).await.ok();
     stream.write_all(&result.body).await.ok();
 }
