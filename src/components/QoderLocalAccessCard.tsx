@@ -11,13 +11,16 @@ export function QoderLocalAccessCard({ accountIds }: Props) {
   const [state, setState] = useState<QoderLocalAccessState | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
       const s = await qoderLocalAccessService.getState();
       setState(s);
+      setError(null);
     } catch (e) {
       console.error('[QoderLocalAccess] getState failed:', e);
+      setError(String(e));
     }
   }, []);
 
@@ -63,22 +66,25 @@ export function QoderLocalAccessCard({ accountIds }: Props) {
   const stats = state?.stats?.totals;
 
   return (
-    <div className="ghcp-flow-notice" style={{ marginBottom: 12 }}>
+    <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--color-border)', background: 'var(--color-bg-secondary)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {running ? <Power size={16} color="var(--color-success)" /> : <PowerOff size={16} color="var(--color-text-tertiary)" />}
-          <strong>API 服务 (Local Access)</strong>
-          {running && <span style={{ fontSize: 11, color: 'var(--color-success)', fontWeight: 500 }}>运行中</span>}
+          {running ? <Power size={16} color="var(--color-success, #22c55e)" /> : <PowerOff size={16} color="var(--color-text-tertiary, #999)" />}
+          <strong style={{ fontSize: 13 }}>API 服务 (Local Access)</strong>
+          {running && <span style={{ fontSize: 11, color: 'var(--color-success, #22c55e)', fontWeight: 500 }}>运行中</span>}
         </div>
         <button
           type="button"
           className={`ghcp-btn ghcp-btn-sm ${enabled ? 'ghcp-btn-danger' : 'ghcp-btn-primary'}`}
           onClick={handleToggle}
           disabled={loading}
+          style={{ fontSize: 12, padding: '3px 10px' }}
         >
           {enabled ? '停用' : '启用'}
         </button>
       </div>
+
+      {error && <div style={{ fontSize: 11, color: 'red', marginBottom: 6 }}>加载失败: {error}</div>}
 
       {enabled && state?.collection && (
         <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', display: 'flex', flexDirection: 'column', gap: 6 }}>
