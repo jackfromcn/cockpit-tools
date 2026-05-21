@@ -47,3 +47,5 @@ target/
 docs/plugin-architecture-proposal.md
 .aitasks
 .qoder/
+# Generated repository packs
+repomix-output.xml
