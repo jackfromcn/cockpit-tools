@@ -662,6 +662,35 @@
   margin-left: 1px;
 }
 
+.codex-local-access-member--single-quota {
+  grid-template-columns: minmax(0, 1fr) max-content max-content 16px;
+  gap: 6px;
+}
+
+.codex-local-access-member--single-quota .codex-local-access-member-text,
+.codex-local-access-member--single-quota .codex-local-access-member-plan {
+  width: auto;
+  min-width: max-content;
+  max-width: 104px;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.codex-local-access-member--single-quota .codex-local-access-member-text {
+  font-size: 11px;
+}
+
+.codex-local-access-member--single-quota .codex-local-access-member-plan {
+  font-size: 10px;
+}
+
+.codex-local-access-member--single-quota .folder-preview-remove-btn {
+  width: 16px;
+  height: 16px;
+  margin-left: 0;
+}
+
 .codex-local-access-member-quota.high {
   background: rgba(34, 197, 94, 0.14);
   color: #15803d;
@@ -2260,7 +2289,8 @@
   gap: 4px;
 }
 
-.codex-accounts-page .codex-login-subline {
+.codex-accounts-page .codex-login-subline,
+.ghcp-accounts-page .codex-login-subline {
   display: block;
   min-width: 0;
   font-size: 11px;
@@ -2308,7 +2338,8 @@
   background: rgba(37, 99, 235, 0.08);
 }
 
-.codex-accounts-page .codex-api-key-reveal-line {
+.codex-accounts-page .codex-api-key-reveal-line,
+.ghcp-accounts-page .codex-api-key-reveal-line {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -2322,21 +2353,26 @@
   cursor: pointer;
 }
 
-.codex-accounts-page .codex-api-key-reveal-line .codex-login-subline {
+.codex-accounts-page .codex-api-key-reveal-line .codex-login-subline,
+.ghcp-accounts-page .codex-api-key-reveal-line .codex-login-subline {
   flex: 1;
 }
 
-.codex-accounts-page .codex-api-key-reveal-line svg {
+.codex-accounts-page .codex-api-key-reveal-line svg,
+.ghcp-accounts-page .codex-api-key-reveal-line svg {
   flex-shrink: 0;
   color: var(--text-muted);
 }
 
 .codex-accounts-page .codex-api-key-reveal-line:hover .codex-login-subline,
-.codex-accounts-page .codex-api-key-reveal-line:hover svg {
+.codex-accounts-page .codex-api-key-reveal-line:hover svg,
+.ghcp-accounts-page .codex-api-key-reveal-line:hover .codex-login-subline,
+.ghcp-accounts-page .codex-api-key-reveal-line:hover svg {
   color: var(--text-primary);
 }
 
-.codex-accounts-page .codex-provider-inline-line {
+.codex-accounts-page .codex-provider-inline-line,
+.ghcp-accounts-page .codex-provider-inline-line {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2344,11 +2380,14 @@
   flex-wrap: nowrap;
 }
 
-.codex-accounts-page .codex-provider-inline-text {
-  flex: 1;
+.codex-accounts-page .codex-provider-inline-text,
+.ghcp-accounts-page .codex-provider-inline-text {
+  flex: 1 1 0%;
+  min-width: 0;
 }
 
-.codex-accounts-page .codex-provider-inline-switch {
+.codex-accounts-page .codex-provider-inline-switch,
+.ghcp-accounts-page .codex-provider-inline-switch {
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--bg-tertiary);
@@ -2362,23 +2401,29 @@
   transition: all 0.2s ease;
 }
 
-.codex-accounts-page .codex-provider-inline-switch:disabled {
+.codex-accounts-page .codex-provider-inline-switch:disabled,
+.ghcp-accounts-page .codex-provider-inline-switch:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
 
-.codex-accounts-page .codex-oauth-binding-action {
+.codex-accounts-page .codex-oauth-binding-action,
+.ghcp-accounts-page .codex-oauth-binding-action {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  margin-left: auto;
 }
 
-.codex-accounts-page .codex-local-access-oauth-line {
+.codex-accounts-page .codex-local-access-oauth-line,
+.ghcp-accounts-page .codex-local-access-oauth-line {
   width: 100%;
   min-height: 28px;
+  justify-content: space-between;
 }
 
-.codex-accounts-page .codex-provider-inline-switch:hover:not(:disabled) {
+.codex-accounts-page .codex-provider-inline-switch:hover:not(:disabled),
+.ghcp-accounts-page .codex-provider-inline-switch:hover:not(:disabled) {
   color: #fff;
   border-color: transparent;
   background: var(--gradient-primary);

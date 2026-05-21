@@ -7,6 +7,7 @@ pub mod gemini;
 pub mod github_copilot;
 pub mod instance;
 pub mod kiro;
+pub mod kiro_local_access;
 pub mod qoder;
 pub mod qoder_local_access;
 pub mod quota;

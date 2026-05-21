@@ -2,7 +2,8 @@ use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
 use crate::models::kiro::{KiroAccount, KiroOAuthStartResponse};
-use crate::modules::{kiro_account, kiro_oauth, logger};
+use crate::models::kiro_local_access::{KiroLocalAccessState, KiroLocalAccessTestResult};
+use crate::modules::{kiro_account, kiro_local_access, kiro_oauth, logger};
 
 async fn refresh_kiro_account_after_login(account: KiroAccount) -> KiroAccount {
     let account_id = account.id.clone();
@@ -244,4 +245,50 @@ pub async fn inject_kiro_to_vscode(app: AppHandle, account_id: String) -> Result
         ));
         Ok(format!("切换完成: {}", account.email))
     }
+}
+
+#[tauri::command]
+pub async fn kiro_local_access_get_state() -> Result<KiroLocalAccessState, String> {
+    kiro_local_access::get_local_access_state().await
+}
+
+#[tauri::command]
+pub async fn kiro_local_access_set_enabled(
+    enabled: bool,
+) -> Result<KiroLocalAccessState, String> {
+    kiro_local_access::set_local_access_enabled(enabled).await
+}
+
+#[tauri::command]
+pub async fn kiro_local_access_save_accounts(
+    account_ids: Vec<String>,
+) -> Result<KiroLocalAccessState, String> {
+    kiro_local_access::save_local_access_accounts(account_ids).await
+}
+
+#[tauri::command]
+pub async fn kiro_local_access_remove_account(
+    account_id: String,
+) -> Result<KiroLocalAccessState, String> {
+    kiro_local_access::remove_local_access_account(&account_id).await
+}
+
+#[tauri::command]
+pub async fn kiro_local_access_rotate_api_key() -> Result<KiroLocalAccessState, String> {
+    kiro_local_access::rotate_local_access_api_key().await
+}
+
+#[tauri::command]
+pub async fn kiro_local_access_update_port(port: u16) -> Result<KiroLocalAccessState, String> {
+    kiro_local_access::update_local_access_port(port).await
+}
+
+#[tauri::command]
+pub async fn kiro_local_access_clear_stats() -> Result<KiroLocalAccessState, String> {
+    kiro_local_access::clear_local_access_stats().await
+}
+
+#[tauri::command]
+pub async fn kiro_local_access_test() -> Result<KiroLocalAccessTestResult, String> {
+    kiro_local_access::test_local_access().await
 }

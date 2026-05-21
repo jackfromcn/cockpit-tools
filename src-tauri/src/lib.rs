@@ -171,6 +171,10 @@ pub fn run() {
                 modules::qoder_local_access::restore_local_access_gateway().await;
             });
 
+            tauri::async_runtime::spawn(async {
+                modules::kiro_local_access::restore_local_access_gateway().await;
+            });
+
             {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -600,6 +604,14 @@ pub fn run() {
             commands::kiro::update_kiro_account_tags,
             commands::kiro::get_kiro_accounts_index_path,
             commands::kiro::inject_kiro_to_vscode,
+            commands::kiro::kiro_local_access_get_state,
+            commands::kiro::kiro_local_access_set_enabled,
+            commands::kiro::kiro_local_access_save_accounts,
+            commands::kiro::kiro_local_access_remove_account,
+            commands::kiro::kiro_local_access_rotate_api_key,
+            commands::kiro::kiro_local_access_update_port,
+            commands::kiro::kiro_local_access_clear_stats,
+            commands::kiro::kiro_local_access_test,
             // CodeBuddy Commands
             commands::codebuddy::list_codebuddy_accounts,
             commands::codebuddy::delete_codebuddy_account,

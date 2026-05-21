@@ -45,6 +45,7 @@ import { QuickSettingsPopover } from '../components/QuickSettingsPopover';
 import { useProviderAccountsPage } from '../hooks/useProviderAccountsPage';
 import { MultiSelectFilterDropdown, type MultiSelectFilterOption } from '../components/MultiSelectFilterDropdown';
 import { SingleSelectFilterDropdown } from '../components/SingleSelectFilterDropdown';
+import { KiroLocalAccessCard } from '../components/KiroLocalAccessCard';
 import type { KiroAccount } from '../types/kiro';
 import { compareCurrentAccountFirst } from '../utils/currentAccountSort';
 import {
@@ -841,6 +842,15 @@ export function KiroAccountsPage() {
       );
     });
 
+  const localAccessCard = (
+    <KiroLocalAccessCard
+      accounts={accounts}
+      currentAccountId={currentAccountId}
+      maskAccountText={maskAccountText}
+      layoutMode={viewMode}
+    />
+  );
+
   return (
     <div className="ghcp-accounts-page kiro-accounts-page">
       <KiroOverviewTabsHeader active={activeTab} onTabChange={setActiveTab} />
@@ -867,37 +877,36 @@ export function KiroAccountsPage() {
 
       {activeTab === 'overview' && (
         <>
+          {message && (
+            <div className={`message-bar ${message.tone === 'error' ? 'error' : 'success'}`}>
+              {message.text}
+              <button onClick={() => setMessage(null)}><X size={14} /></button>
+            </div>
+          )}
 
-      {message && (
-        <div className={`message-bar ${message.tone === 'error' ? 'error' : 'success'}`}>
-          {message.text}
-          <button onClick={() => setMessage(null)}><X size={14} /></button>
-        </div>
-      )}
+          <div className="toolbar">
+            <div className="toolbar-left">
+              <div className="search-box">
+                <Search size={16} className="search-icon" />
+                <input type="text" placeholder={t('common.shared.search', '搜索账号...')} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+              </div>
 
-      <div className="toolbar">
-        <div className="toolbar-left">
-          <div className="search-box">
-            <Search size={16} className="search-icon" />
-            <input type="text" placeholder={t('common.shared.search', '搜索账号...')} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
-          </div>
+              <div className="view-switcher">
+                <button className={`view-btn ${viewMode === 'list' ? 'active' : ''}`} onClick={() => setViewMode('list')} title={t('common.shared.view.list', '列表视图')}><List size={16} /></button>
+                <button className={`view-btn ${viewMode === 'grid' ? 'active' : ''}`} onClick={() => setViewMode('grid')} title={t('common.shared.view.grid', '卡片视图')}><LayoutGrid size={16} /></button>
+              </div>
 
-          <div className="view-switcher">
-            <button className={`view-btn ${viewMode === 'list' ? 'active' : ''}`} onClick={() => setViewMode('list')} title={t('common.shared.view.list', '列表视图')}><List size={16} /></button>
-            <button className={`view-btn ${viewMode === 'grid' ? 'active' : ''}`} onClick={() => setViewMode('grid')} title={t('common.shared.view.grid', '卡片视图')}><LayoutGrid size={16} /></button>
-          </div>
-
-          <MultiSelectFilterDropdown
-            options={tierFilterOptions}
-            selectedValues={filterTypes}
-            allLabel={`ALL (${tierSummary.all})`}
-            filterLabel={t('common.shared.filterLabel', '筛选')}
-            clearLabel={t('accounts.clearFilter', '清空筛选')}
-            emptyLabel={t('common.none', '暂无')}
-            ariaLabel={t('common.shared.filterLabel', '筛选')}
-            onToggleValue={toggleFilterTypeValue}
-            onClear={clearFilterTypes}
-          />
+              <MultiSelectFilterDropdown
+                options={tierFilterOptions}
+                selectedValues={filterTypes}
+                allLabel={`ALL (${tierSummary.all})`}
+                filterLabel={t('common.shared.filterLabel', '筛选')}
+                clearLabel={t('accounts.clearFilter', '清空筛选')}
+                emptyLabel={t('common.none', '暂无')}
+                ariaLabel={t('common.shared.filterLabel', '筛选')}
+                onToggleValue={toggleFilterTypeValue}
+                onClear={clearFilterTypes}
+              />
 
           <div className="tag-filter" ref={tagFilterRef}>
             <button type="button" className={`tag-filter-btn ${tagFilter.length > 0 ? 'active' : ''}`} onClick={() => setShowTagFilter((prev) => !prev)} aria-label={t('accounts.filterTags', '标签筛选')}>
@@ -1014,71 +1023,83 @@ export function KiroAccountsPage() {
             </div>
           )}
           {groupByTag ? (
-          <div className="tag-group-list">
-            {paginatedGroupedAccounts.map(({ groupKey, items, totalCount }) => (
-              <div key={groupKey} className="tag-group-section">
-                <div className="tag-group-header">
-                  <span className="tag-group-title">{resolveGroupLabel(groupKey)}</span>
-                  <span className="tag-group-count">{totalCount}</span>
-                </div>
-                <div className="tag-group-grid ghcp-accounts-grid">{renderGridCards(items, groupKey)}</div>
+            <>
+              <div className="ghcp-accounts-grid">{localAccessCard}</div>
+              <div className="tag-group-list">
+                {paginatedGroupedAccounts.map(({ groupKey, items, totalCount }) => (
+                  <div key={groupKey} className="tag-group-section">
+                    <div className="tag-group-header">
+                      <span className="tag-group-title">{resolveGroupLabel(groupKey)}</span>
+                      <span className="tag-group-count">{totalCount}</span>
+                    </div>
+                    <div className="tag-group-grid ghcp-accounts-grid">{renderGridCards(items, groupKey)}</div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        ) : (
-          <div className="ghcp-accounts-grid">{renderGridCards(paginatedAccounts)}</div>
-        )}
+            </>
+          ) : (
+            <div className="ghcp-accounts-grid">
+              {localAccessCard}
+              {renderGridCards(paginatedAccounts)}
+            </div>
+          )}
         </div>
       ) : groupByTag ? (
-        <div className="account-table-container grouped">
-          <table className="account-table">
-            <thead>
-              <tr>
-                <th style={{ width: 40 }}>
-                  <input type="checkbox" checked={isAllPaginatedSelected} onChange={() => toggleSelectAll(paginatedIds)} />
-                </th>
-                <th style={{ width: 240 }}>{t('common.shared.columns.email', '邮箱')}</th>
-                <th style={{ width: 120 }}>{t('common.shared.columns.plan', '计划')}</th>
-                <th>{t('common.shared.columns.promptCredits', 'User Prompt credits')}</th>
-                <th>{t('common.shared.columns.addOnPromptCredits', 'Add-on prompt credits')}</th>
-                <th className="sticky-action-header table-action-header">{t('common.shared.columns.actions', '操作')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {paginatedGroupedAccounts.map(({ groupKey, items, totalCount }) => (
-                <Fragment key={groupKey}>
-                  <tr className="tag-group-row">
-                    <td colSpan={6}>
-                      <div className="tag-group-header">
-                        <span className="tag-group-title">{resolveGroupLabel(groupKey)}</span>
-                        <span className="tag-group-count">{totalCount}</span>
-                      </div>
-                    </td>
-                  </tr>
-                  {renderTableRows(items, groupKey)}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="ghcp-accounts-grid" style={{ marginBottom: '20px' }}>{localAccessCard}</div>
+          <div className="account-table-container grouped">
+            <table className="account-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 40 }}>
+                    <input type="checkbox" checked={isAllPaginatedSelected} onChange={() => toggleSelectAll(paginatedIds)} />
+                  </th>
+                  <th style={{ width: 240 }}>{t('common.shared.columns.email', '邮箱')}</th>
+                  <th style={{ width: 120 }}>{t('common.shared.columns.plan', '计划')}</th>
+                  <th>{t('common.shared.columns.promptCredits', 'User Prompt credits')}</th>
+                  <th>{t('common.shared.columns.addOnPromptCredits', 'Add-on prompt credits')}</th>
+                  <th className="sticky-action-header table-action-header">{t('common.shared.columns.actions', '操作')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paginatedGroupedAccounts.map(({ groupKey, items, totalCount }) => (
+                  <Fragment key={groupKey}>
+                    <tr className="tag-group-row">
+                      <td colSpan={6}>
+                        <div className="tag-group-header">
+                          <span className="tag-group-title">{resolveGroupLabel(groupKey)}</span>
+                          <span className="tag-group-count">{totalCount}</span>
+                        </div>
+                      </td>
+                    </tr>
+                    {renderTableRows(items, groupKey)}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       ) : (
-        <div className="account-table-container">
-          <table className="account-table">
-            <thead>
-              <tr>
-                <th style={{ width: 40 }}>
-                  <input type="checkbox" checked={isAllPaginatedSelected} onChange={() => toggleSelectAll(paginatedIds)} />
-                </th>
-                <th style={{ width: 240 }}>{t('common.shared.columns.email', '邮箱')}</th>
-                <th style={{ width: 120 }}>{t('common.shared.columns.plan', '计划')}</th>
-                <th>{t('common.shared.columns.promptCredits', 'User Prompt credits')}</th>
-                <th>{t('common.shared.columns.addOnPromptCredits', 'Add-on prompt credits')}</th>
-                <th className="sticky-action-header table-action-header">{t('common.shared.columns.actions', '操作')}</th>
-              </tr>
-            </thead>
-            <tbody>{renderTableRows(paginatedAccounts)}</tbody>
-          </table>
-        </div>
+        <>
+          <div className="ghcp-accounts-grid" style={{ marginBottom: '20px' }}>{localAccessCard}</div>
+          <div className="account-table-container">
+            <table className="account-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 40 }}>
+                    <input type="checkbox" checked={isAllPaginatedSelected} onChange={() => toggleSelectAll(paginatedIds)} />
+                  </th>
+                  <th style={{ width: 240 }}>{t('common.shared.columns.email', '邮箱')}</th>
+                  <th style={{ width: 120 }}>{t('common.shared.columns.plan', '计划')}</th>
+                  <th>{t('common.shared.columns.promptCredits', 'User Prompt credits')}</th>
+                  <th>{t('common.shared.columns.addOnPromptCredits', 'Add-on prompt credits')}</th>
+                  <th className="sticky-action-header table-action-header">{t('common.shared.columns.actions', '操作')}</th>
+                </tr>
+              </thead>
+              <tbody>{renderTableRows(paginatedAccounts)}</tbody>
+            </table>
+          </div>
+        </>
       )}
 
       <PaginationControls
