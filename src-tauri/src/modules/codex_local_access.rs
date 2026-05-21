@@ -1,9 +1,10 @@
 use crate::models::codex::{CodexAccount, CodexApiProviderMode};
 use crate::models::codex_local_access::{
-    CodexLocalAccessAccountStats, CodexLocalAccessCollection, CodexLocalAccessPortCleanupResult,
-    CodexLocalAccessRoutingStrategy, CodexLocalAccessScope, CodexLocalAccessState,
-    CodexLocalAccessStats, CodexLocalAccessStatsWindow, CodexLocalAccessTestFailure,
-    CodexLocalAccessTestResult, CodexLocalAccessUsageEvent, CodexLocalAccessUsageStats,
+    CodexLocalAccessAccountStats, CodexLocalAccessCollection, CodexLocalAccessCustomRoutingRule,
+    CodexLocalAccessPortCleanupResult, CodexLocalAccessRoutingStrategy, CodexLocalAccessScope,
+    CodexLocalAccessState, CodexLocalAccessStats, CodexLocalAccessStatsWindow,
+    CodexLocalAccessTestFailure, CodexLocalAccessTestResult, CodexLocalAccessUsageEvent,
+    CodexLocalAccessUsageStats,
 };
 use crate::modules::atomic_write::write_string_atomic;
 use crate::modules::{codex_account, codex_oauth, codex_protocol, codex_wakeup, logger, process};
@@ -11,9 +12,10 @@ use base64::{engine::general_purpose, Engine as _};
 use futures_util::StreamExt;
 use rand::{distributions::Alphanumeric, Rng};
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
-use reqwest::{Client, Method, NoProxy, Proxy, StatusCode, Url};
+use reqwest::{Client, Method, Proxy, StatusCode, Url};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
+use std::error::Error as StdError;
 use std::net::{Ipv4Addr, TcpListener as StdTcpListener};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -48,6 +50,10 @@ const PREPARED_ACCOUNT_CACHE_TTL_MS: i64 = 30 * 1000;
 const DAY_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 const WEEK_WINDOW_MS: i64 = 7 * DAY_WINDOW_MS;
 const MONTH_WINDOW_MS: i64 = 30 * DAY_WINDOW_MS;
+const CUSTOM_ROUTING_PRIORITY_MIN: i32 = 0;
+const CUSTOM_ROUTING_PRIORITY_MAX: i32 = 100;
+const CUSTOM_ROUTING_WEIGHT_MIN: u32 = 1;
+const CUSTOM_ROUTING_WEIGHT_MAX: u32 = 100;
 const GATEWAY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const GATEWAY_PORT_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 const GATEWAY_PORT_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -159,8 +165,22 @@ struct CachedPreparedAccount {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct UpstreamHttpClientSignature {
+    proxy_source: UpstreamProxySource,
     proxy_url: Option<String>,
-    no_proxy: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpstreamProxySource {
+    ApiService,
+    Global,
+    SystemEnv,
+    SystemAuto,
+}
+
+#[derive(Debug, Clone)]
+struct UpstreamProxyDiagnostics {
+    proxy_source: UpstreamProxySource,
+    proxy_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -239,27 +259,62 @@ fn upstream_http_client_cache() -> &'static Mutex<Option<CachedUpstreamHttpClien
     UPSTREAM_HTTP_CLIENT.get_or_init(|| Mutex::new(None))
 }
 
-fn current_upstream_http_client_signature() -> UpstreamHttpClientSignature {
+fn upstream_env_proxy_url() -> Option<String> {
+    const ENV_PROXY_KEYS: [&str; 6] = [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+    ];
+
+    for key in ENV_PROXY_KEYS {
+        if let Ok(value) = std::env::var(key) {
+            let proxy_url = value.trim();
+            if !proxy_url.is_empty() {
+                return Some(proxy_url.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+fn current_upstream_http_client_signature(
+    upstream_proxy_url: Option<&str>,
+) -> UpstreamHttpClientSignature {
+    if let Some(proxy_url) = upstream_proxy_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return UpstreamHttpClientSignature {
+            proxy_source: UpstreamProxySource::ApiService,
+            proxy_url: Some(proxy_url.to_string()),
+        };
+    }
+
     let config = crate::modules::config::get_user_config();
-    if !config.global_proxy_enabled {
+    if config.global_proxy_enabled {
+        let proxy_url = config.global_proxy_url.trim();
+        if !proxy_url.is_empty() {
+            return UpstreamHttpClientSignature {
+                proxy_source: UpstreamProxySource::Global,
+                proxy_url: Some(proxy_url.to_string()),
+            };
+        }
+    }
+
+    if let Some(proxy_url) = upstream_env_proxy_url() {
         return UpstreamHttpClientSignature {
-            proxy_url: None,
-            no_proxy: None,
+            proxy_source: UpstreamProxySource::SystemEnv,
+            proxy_url: Some(proxy_url),
         };
     }
 
-    let proxy_url = config.global_proxy_url.trim();
-    if proxy_url.is_empty() {
-        return UpstreamHttpClientSignature {
-            proxy_url: None,
-            no_proxy: None,
-        };
-    }
-
-    let no_proxy = codex_protocol::merge_local_no_proxy(config.global_proxy_no_proxy.trim());
     UpstreamHttpClientSignature {
-        proxy_url: Some(proxy_url.to_string()),
-        no_proxy: (!no_proxy.is_empty()).then_some(no_proxy),
+        proxy_source: UpstreamProxySource::SystemAuto,
+        proxy_url: None,
     }
 }
 
@@ -278,15 +333,21 @@ fn redact_proxy_url_for_log(proxy_url: &str) -> String {
     }
 }
 
+fn current_upstream_proxy_diagnostics(
+    upstream_proxy_url: Option<&str>,
+) -> UpstreamProxyDiagnostics {
+    let signature = current_upstream_http_client_signature(upstream_proxy_url);
+    UpstreamProxyDiagnostics {
+        proxy_source: signature.proxy_source,
+        proxy_url: signature.proxy_url.as_deref().map(redact_proxy_url_for_log),
+    }
+}
+
 fn build_upstream_http_client(signature: &UpstreamHttpClientSignature) -> Result<Client, String> {
     let mut builder = Client::builder();
 
     if let Some(proxy_url) = signature.proxy_url.as_deref() {
-        let mut proxy =
-            Proxy::all(proxy_url).map_err(|e| format!("Codex 本地接入代理地址无效: {}", e))?;
-        if let Some(no_proxy) = signature.no_proxy.as_deref() {
-            proxy = proxy.no_proxy(NoProxy::from_string(no_proxy));
-        }
+        let proxy = Proxy::all(proxy_url).map_err(|e| format!("Codex 上游代理地址无效: {}", e))?;
         builder = builder.proxy(proxy);
     }
 
@@ -296,18 +357,28 @@ fn build_upstream_http_client(signature: &UpstreamHttpClientSignature) -> Result
 }
 
 fn log_upstream_http_client_signature(signature: &UpstreamHttpClientSignature) {
-    match signature.proxy_url.as_deref() {
-        Some(proxy_url) => logger::log_info(&format!(
-            "[CodexLocalAccess] 上游 HTTP 客户端已应用全局代理 proxy_url={} no_proxy={}",
-            redact_proxy_url_for_log(proxy_url),
-            signature.no_proxy.as_deref().unwrap_or("<empty>")
+    match (signature.proxy_source, signature.proxy_url.as_deref()) {
+        (UpstreamProxySource::ApiService, Some(proxy_url)) => logger::log_info(&format!(
+            "[CodexLocalAccess] 上游 HTTP 客户端已应用 API 服务代理 proxy_url={}",
+            redact_proxy_url_for_log(proxy_url)
         )),
-        None => logger::log_info("[CodexLocalAccess] 上游 HTTP 客户端使用系统代理配置"),
+        (UpstreamProxySource::Global, Some(proxy_url)) => logger::log_info(&format!(
+            "[CodexLocalAccess] 上游 HTTP 客户端已跟随全局代理 proxy_url={}，API 服务上游请求不应用 no_proxy 绕过",
+            redact_proxy_url_for_log(proxy_url)
+        )),
+        (UpstreamProxySource::SystemEnv, Some(proxy_url)) => logger::log_info(&format!(
+            "[CodexLocalAccess] 上游 HTTP 客户端已使用环境代理 proxy_url={}，API 服务上游请求不应用 no_proxy 绕过",
+            redact_proxy_url_for_log(proxy_url)
+        )),
+        (UpstreamProxySource::SystemAuto, None) => logger::log_info(
+            "[CodexLocalAccess] 未配置 API 服务代理、全局代理或环境代理，已回退到 reqwest 系统自动代理配置",
+        ),
+        _ => logger::log_warn("[CodexLocalAccess] 上游 HTTP 客户端代理状态异常"),
     }
 }
 
-fn upstream_http_client() -> Result<Client, String> {
-    let signature = current_upstream_http_client_signature();
+fn upstream_http_client(upstream_proxy_url: Option<&str>) -> Result<Client, String> {
+    let signature = current_upstream_http_client_signature(upstream_proxy_url);
     let mut cache = upstream_http_client_cache()
         .lock()
         .map_err(|_| "Codex 上游 HTTP 客户端缓存已损坏".to_string())?;
@@ -348,6 +419,16 @@ fn now_ms() -> i64 {
 fn is_prepared_account_cache_valid(entry: &CachedPreparedAccount, now: i64) -> bool {
     now.saturating_sub(entry.cached_at_ms) <= PREPARED_ACCOUNT_CACHE_TTL_MS
         && !codex_oauth::is_token_expired(&entry.account.tokens.access_token)
+}
+
+fn account_has_refresh_token(account: &CodexAccount) -> bool {
+    account
+        .tokens
+        .refresh_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .is_some()
 }
 
 fn prune_prepared_account_cache(runtime: &mut GatewayRuntime, now: i64) {
@@ -2616,6 +2697,7 @@ fn compare_routing_candidates(
                 .then_with(|| compare_option_desc(left.plan_rank, right.plan_rank))
                 .then_with(|| compare_option_desc(left.remaining_quota, right.remaining_quota))
         }
+        CodexLocalAccessRoutingStrategy::Custom => Ordering::Equal,
     };
 
     ordering.then_with(|| {
@@ -2631,10 +2713,146 @@ fn compare_routing_candidates(
     })
 }
 
+fn normalize_custom_routing_rule(
+    rule: CodexLocalAccessCustomRoutingRule,
+) -> Option<CodexLocalAccessCustomRoutingRule> {
+    let account_id = rule.account_id.trim().to_string();
+    if account_id.is_empty() {
+        return None;
+    }
+
+    Some(CodexLocalAccessCustomRoutingRule {
+        account_id,
+        priority: rule
+            .priority
+            .clamp(CUSTOM_ROUTING_PRIORITY_MIN, CUSTOM_ROUTING_PRIORITY_MAX),
+        weight: rule
+            .weight
+            .clamp(CUSTOM_ROUTING_WEIGHT_MIN, CUSTOM_ROUTING_WEIGHT_MAX),
+    })
+}
+
+fn normalize_custom_routing_rules(
+    rules: Vec<CodexLocalAccessCustomRoutingRule>,
+    account_ids: &[String],
+) -> Vec<CodexLocalAccessCustomRoutingRule> {
+    let valid_account_ids: HashSet<&str> = account_ids.iter().map(String::as_str).collect();
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+
+    for rule in rules {
+        let Some(rule) = normalize_custom_routing_rule(rule) else {
+            continue;
+        };
+        if !valid_account_ids.contains(rule.account_id.as_str()) {
+            continue;
+        }
+        if seen.insert(rule.account_id.clone()) {
+            normalized.push(rule);
+        }
+    }
+
+    normalized
+}
+
+fn custom_rule_map(rules: &[CodexLocalAccessCustomRoutingRule]) -> HashMap<&str, (i32, u32)> {
+    rules
+        .iter()
+        .map(|rule| {
+            (
+                rule.account_id.as_str(),
+                (
+                    rule.priority
+                        .clamp(CUSTOM_ROUTING_PRIORITY_MIN, CUSTOM_ROUTING_PRIORITY_MAX),
+                    rule.weight
+                        .clamp(CUSTOM_ROUTING_WEIGHT_MIN, CUSTOM_ROUTING_WEIGHT_MAX),
+                ),
+            )
+        })
+        .collect()
+}
+
+fn weighted_group_order(
+    group: &[String],
+    weights: &HashMap<&str, (i32, u32)>,
+    start: usize,
+) -> Vec<String> {
+    if group.len() <= 1 {
+        return group.to_vec();
+    }
+
+    let total_weight = group.iter().fold(0usize, |sum, account_id| {
+        let weight = weights
+            .get(account_id.as_str())
+            .map(|(_, weight)| *weight)
+            .unwrap_or(CUSTOM_ROUTING_WEIGHT_MIN) as usize;
+        sum.saturating_add(weight.max(1))
+    });
+    if total_weight == 0 {
+        return group.to_vec();
+    }
+
+    let mut slot = start % total_weight;
+    let mut first_index = 0usize;
+    for (index, account_id) in group.iter().enumerate() {
+        let weight = weights
+            .get(account_id.as_str())
+            .map(|(_, weight)| *weight)
+            .unwrap_or(CUSTOM_ROUTING_WEIGHT_MIN) as usize;
+        if slot < weight {
+            first_index = index;
+            break;
+        }
+        slot -= weight;
+    }
+
+    (0..group.len())
+        .map(|offset| group[(first_index + offset) % group.len()].clone())
+        .collect()
+}
+
+fn apply_custom_routing_strategy(
+    account_ids: &[String],
+    rules: &[CodexLocalAccessCustomRoutingRule],
+    start: usize,
+) -> Vec<String> {
+    let rule_map = custom_rule_map(rules);
+    let mut priority_groups: Vec<(i32, Vec<String>)> = Vec::new();
+
+    for account_id in account_ids {
+        let priority = rule_map
+            .get(account_id.as_str())
+            .map(|(priority, _)| *priority)
+            .unwrap_or(CUSTOM_ROUTING_PRIORITY_MIN);
+        if let Some((_, group)) = priority_groups
+            .iter_mut()
+            .find(|(group_priority, _)| *group_priority == priority)
+        {
+            group.push(account_id.clone());
+        } else {
+            priority_groups.push((priority, vec![account_id.clone()]));
+        }
+    }
+
+    priority_groups.sort_by(|left, right| right.0.cmp(&left.0));
+
+    let mut ordered = Vec::with_capacity(account_ids.len());
+    for (_, group) in priority_groups {
+        ordered.extend(weighted_group_order(&group, &rule_map, start));
+    }
+    ordered
+}
+
 fn apply_routing_strategy(
     account_ids: &[String],
     strategy: CodexLocalAccessRoutingStrategy,
+    custom_rules: &[CodexLocalAccessCustomRoutingRule],
+    start: usize,
 ) -> Vec<String> {
+    if strategy == CodexLocalAccessRoutingStrategy::Custom {
+        return apply_custom_routing_strategy(account_ids, custom_rules, start);
+    }
+
     let original_index: HashMap<String, usize> = account_ids
         .iter()
         .enumerate()
@@ -3384,6 +3602,22 @@ fn is_local_access_eligible_account(account: &CodexAccount, restrict_free_accoun
     true
 }
 
+fn normalize_upstream_proxy_url(upstream_proxy_url: Option<String>) -> Option<String> {
+    upstream_proxy_url
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn validate_upstream_proxy_config(
+    upstream_proxy_url: Option<String>,
+) -> Result<Option<String>, String> {
+    let normalized = normalize_upstream_proxy_url(upstream_proxy_url);
+    if let Some(proxy_url) = normalized.as_deref() {
+        Proxy::all(proxy_url).map_err(|e| format!("API 代理地址无效: {}", e))?;
+    }
+    Ok(normalized)
+}
+
 fn sanitize_collection(
     collection: &mut CodexLocalAccessCollection,
 ) -> Result<(bool, HashSet<String>), String> {
@@ -3403,6 +3637,12 @@ fn sanitize_collection(
     }
     if collection.updated_at <= 0 {
         collection.updated_at = now_ms();
+        changed = true;
+    }
+    let normalized_upstream_proxy_url =
+        normalize_upstream_proxy_url(collection.upstream_proxy_url.clone());
+    if normalized_upstream_proxy_url != collection.upstream_proxy_url {
+        collection.upstream_proxy_url = normalized_upstream_proxy_url;
         changed = true;
     }
 
@@ -3451,6 +3691,16 @@ fn sanitize_collection(
         changed = true;
     }
 
+    let original_custom_routing_rules = std::mem::take(&mut collection.custom_routing_rules);
+    let normalized_custom_routing_rules = normalize_custom_routing_rules(
+        original_custom_routing_rules.clone(),
+        &collection.account_ids,
+    );
+    if normalized_custom_routing_rules != original_custom_routing_rules {
+        changed = true;
+    }
+    collection.custom_routing_rules = normalized_custom_routing_rules;
+
     Ok((changed, valid_account_ids))
 }
 
@@ -3473,7 +3723,9 @@ async fn ensure_runtime_loaded_without_start() -> Result<(), String> {
             port: allocate_random_local_port(CODEX_LOCAL_ACCESS_LOCALHOST_BIND_HOST)?,
             api_key: generate_local_api_key(),
             access_scope: CodexLocalAccessScope::Localhost,
+            upstream_proxy_url: None,
             routing_strategy: CodexLocalAccessRoutingStrategy::default(),
+            custom_routing_rules: Vec::new(),
             restrict_free_accounts: true,
             bound_oauth_account_id: None,
             account_ids: Vec::new(),
@@ -4115,7 +4367,7 @@ fn classify_gateway_probe_failure(
             (
                 "上游服务或代理不可用",
                 "上游请求",
-                "检查全局代理、网络连通性和 Codex 上游服务状态；如只影响单个账号，刷新或移除该账号后重试。",
+                "检查 API 服务代理地址、网络连通性和 Codex 上游服务状态；如果 API 服务没有请求记录，检查代理工具是否拦截 localhost / 127.0.0.1。",
             )
         }
     } else {
@@ -4342,7 +4594,9 @@ pub async fn save_local_access_accounts(
                 port: allocate_random_local_port(CODEX_LOCAL_ACCESS_LOCALHOST_BIND_HOST)?,
                 api_key: generate_local_api_key(),
                 access_scope: CodexLocalAccessScope::Localhost,
+                upstream_proxy_url: None,
                 routing_strategy: CodexLocalAccessRoutingStrategy::default(),
+                custom_routing_rules: Vec::new(),
                 restrict_free_accounts: true,
                 bound_oauth_account_id: None,
                 account_ids: Vec::new(),
@@ -4405,6 +4659,65 @@ pub async fn update_local_access_routing_strategy(
     }
 
     collection.routing_strategy = strategy;
+    collection.updated_at = now_ms();
+    save_collection_to_disk(&collection)?;
+
+    {
+        let mut runtime = gateway_runtime().lock().await;
+        sync_runtime_collection(&mut runtime, collection);
+    }
+
+    snapshot_state().await
+}
+
+pub async fn update_local_access_custom_routing(
+    rules: Vec<CodexLocalAccessCustomRoutingRule>,
+) -> Result<CodexLocalAccessState, String> {
+    ensure_runtime_loaded().await?;
+
+    let maybe_collection = {
+        let runtime = gateway_runtime().lock().await;
+        runtime.collection.clone()
+    };
+
+    let Some(mut collection) = maybe_collection else {
+        return Err("本地接入集合尚未创建".to_string());
+    };
+
+    collection.custom_routing_rules =
+        normalize_custom_routing_rules(rules, &collection.account_ids);
+    collection.routing_strategy = CodexLocalAccessRoutingStrategy::Custom;
+    collection.updated_at = now_ms();
+    save_collection_to_disk(&collection)?;
+
+    {
+        let mut runtime = gateway_runtime().lock().await;
+        sync_runtime_collection(&mut runtime, collection);
+    }
+
+    snapshot_state().await
+}
+
+pub async fn update_local_access_upstream_proxy_config(
+    upstream_proxy_url: Option<String>,
+) -> Result<CodexLocalAccessState, String> {
+    ensure_runtime_loaded().await?;
+    let normalized_upstream_proxy_url = validate_upstream_proxy_config(upstream_proxy_url)?;
+
+    let maybe_collection = {
+        let runtime = gateway_runtime().lock().await;
+        runtime.collection.clone()
+    };
+
+    let Some(mut collection) = maybe_collection else {
+        return Err("本地接入集合尚未创建".to_string());
+    };
+
+    if collection.upstream_proxy_url == normalized_upstream_proxy_url {
+        return snapshot_state().await;
+    }
+
+    collection.upstream_proxy_url = normalized_upstream_proxy_url;
     collection.updated_at = now_ms();
     save_collection_to_disk(&collection)?;
 
@@ -5218,6 +5531,112 @@ fn json_response(status: u16, status_text: &str, body: &Value) -> Vec<u8> {
     response
 }
 
+fn gateway_error_code(status: u16) -> &'static str {
+    match status {
+        400 => "bad_request",
+        401 => "unauthorized",
+        404 => "not_found",
+        405 => "method_not_allowed",
+        429 => "rate_limited",
+        502 => "upstream_unavailable",
+        503 => "service_unavailable",
+        _ => "codex_local_access_error",
+    }
+}
+
+fn gateway_proxy_diagnostics_message(diagnostics: &UpstreamProxyDiagnostics) -> String {
+    match diagnostics.proxy_source {
+        UpstreamProxySource::ApiService => match diagnostics.proxy_url.as_deref() {
+            Some(proxy_url) => format!("当前使用 API 代理地址：{}。", proxy_url),
+            None => "当前 API 代理地址为空。".to_string(),
+        },
+        UpstreamProxySource::Global => match diagnostics.proxy_url.as_deref() {
+            Some(proxy_url) => format!("当前 API 代理地址为空，已跟随全局代理：{}。", proxy_url),
+            None => "当前 API 代理地址为空，已尝试跟随全局代理。".to_string(),
+        },
+        UpstreamProxySource::SystemEnv => match diagnostics.proxy_url.as_deref() {
+            Some(proxy_url) => {
+                format!(
+                    "当前 API 代理地址为空，且全局代理未启用或未配置，已使用环境代理：{}。",
+                    proxy_url
+                )
+            }
+            None => {
+                "当前 API 代理地址为空，且全局代理未启用或未配置，已尝试使用环境代理。".to_string()
+            }
+        },
+        UpstreamProxySource::SystemAuto => {
+            "当前 API 代理地址为空，且全局代理与环境代理均未配置，已回退到系统自动代理配置；如仍失败，请在 API 代理地址中填写 Clash 的 HTTP/mixed 端口。".to_string()
+        }
+    }
+}
+
+fn upstream_proxy_source_code(source: UpstreamProxySource) -> &'static str {
+    match source {
+        UpstreamProxySource::ApiService => "api_service",
+        UpstreamProxySource::Global => "global",
+        UpstreamProxySource::SystemEnv => "system_env",
+        UpstreamProxySource::SystemAuto => "system_auto",
+    }
+}
+
+fn gateway_user_visible_error_message(
+    status: u16,
+    message: &str,
+    proxy_diagnostics: Option<&UpstreamProxyDiagnostics>,
+) -> String {
+    if status != StatusCode::BAD_GATEWAY.as_u16() {
+        return message.to_string();
+    }
+
+    let proxy_context = proxy_diagnostics
+        .map(|diagnostics| format!(" {}", gateway_proxy_diagnostics_message(diagnostics)))
+        .unwrap_or_default();
+    format!(
+        "Codex API 服务连接官方上游失败。API 代理地址留空时会依次使用全局代理、环境代理、系统自动代理；如需固定出口，建议填写 API 代理地址（例如 http://127.0.0.1:7890）后重试。{} 如果 Codex 客户端仍显示 502 且 API 服务没有请求记录，请检查代理工具是否拦截或屏蔽 localhost / 127.0.0.1。原始错误：{}",
+        proxy_context, message
+    )
+}
+
+fn gateway_error_body(
+    status: u16,
+    message: &str,
+    proxy_diagnostics: Option<&UpstreamProxyDiagnostics>,
+) -> Value {
+    let mut error = Map::new();
+    error.insert(
+        "message".to_string(),
+        Value::String(gateway_user_visible_error_message(
+            status,
+            message,
+            proxy_diagnostics,
+        )),
+    );
+    error.insert(
+        "type".to_string(),
+        Value::String("codex_local_access_error".to_string()),
+    );
+    error.insert(
+        "code".to_string(),
+        Value::String(gateway_error_code(status).to_string()),
+    );
+    error.insert("status".to_string(), json!(status));
+
+    if let Some(diagnostics) = proxy_diagnostics {
+        error.insert(
+            "upstreamProxy".to_string(),
+            json!({
+                "source": upstream_proxy_source_code(diagnostics.proxy_source),
+                "proxyUrl": diagnostics.proxy_url.clone(),
+            }),
+        );
+    }
+
+    let mut body = Map::new();
+    body.insert("error".to_string(), Value::Object(error));
+    Value::Object(body)
+}
+
 fn options_response() -> Vec<u8> {
     let headers = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 0\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: {}\r\n\r\n",
@@ -5292,7 +5711,11 @@ async fn write_json_error_response(
         message,
     );
 
-    let response = json_response(status, status_text, &json!({ "error": message }));
+    let response = json_response(
+        status,
+        status_text,
+        &gateway_error_body(status, message, None),
+    );
     stream
         .write_all(&response)
         .await
@@ -6062,6 +6485,26 @@ fn should_retry_upstream_send_error(error: &reqwest::Error) -> bool {
     error.is_timeout() || error.is_connect() || error.is_request()
 }
 
+fn format_reqwest_error_chain(error: &reqwest::Error) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut source = StdError::source(error);
+    while let Some(err) = source {
+        let detail = err.to_string();
+        if !detail.trim().is_empty() && parts.last().map(|item| item != &detail).unwrap_or(true) {
+            parts.push(detail);
+        }
+        source = StdError::source(err);
+    }
+    parts.join(" | caused by: ")
+}
+
+fn format_upstream_network_error(error: &reqwest::Error) -> String {
+    format!(
+        "Codex 上游网络或代理不可用，未能连接到官方 Codex 服务。请检查网络、代理配置以及 chatgpt.com 可访问性。技术细节: {}",
+        format_reqwest_error_chain(error)
+    )
+}
+
 fn upstream_send_retry_delay(retry_attempt: usize) -> Duration {
     let multiplier = match retry_attempt {
         0 | 1 => 1u32,
@@ -6107,11 +6550,12 @@ async fn send_upstream_request(
     headers: &HashMap<String, String>,
     body: &[u8],
     account: &CodexAccount,
+    upstream_proxy_url: Option<&str>,
 ) -> Result<reqwest::Response, String> {
     let method =
         Method::from_bytes(method.as_bytes()).map_err(|e| format!("不支持的请求方法: {}", e))?;
     let url = format!("{}{}", UPSTREAM_CODEX_BASE_URL, target);
-    let client = upstream_http_client()?;
+    let client = upstream_http_client(upstream_proxy_url)?;
     for retry_attempt in 0..=UPSTREAM_SEND_RETRY_ATTEMPTS {
         let mut request = client.request(method.clone(), &url);
 
@@ -6171,7 +6615,7 @@ async fn send_upstream_request(
                 let should_retry = retry_attempt < UPSTREAM_SEND_RETRY_ATTEMPTS
                     && should_retry_upstream_send_error(&error);
                 if !should_retry {
-                    return Err(format!("请求 Codex 上游失败: {}", error));
+                    return Err(format_upstream_network_error(&error));
                 }
                 tokio::time::sleep(upstream_send_retry_delay(retry_attempt + 1)).await;
             }
@@ -6218,13 +6662,23 @@ async fn proxy_request_with_account_pool(
 
     loop {
         let start = GATEWAY_ROUND_ROBIN_CURSOR.fetch_add(1, Ordering::Relaxed);
-        let ordered_account_ids = build_ordered_account_ids(
-            &collection.account_ids,
-            start,
-            affinity_account_id.as_deref(),
-        );
+        let ordered_account_ids =
+            if collection.routing_strategy == CodexLocalAccessRoutingStrategy::Custom {
+                collection.account_ids.clone()
+            } else {
+                build_ordered_account_ids(
+                    &collection.account_ids,
+                    start,
+                    affinity_account_id.as_deref(),
+                )
+            };
         let strategy_account_ids = pin_account_to_front(
-            apply_routing_strategy(&ordered_account_ids, collection.routing_strategy),
+            apply_routing_strategy(
+                &ordered_account_ids,
+                collection.routing_strategy,
+                &collection.custom_routing_rules,
+                start,
+            ),
             affinity_account_id.as_deref(),
         );
         let mut attempted_in_round = false;
@@ -6304,16 +6758,18 @@ async fn proxy_request_with_account_pool(
                     &request.headers,
                     &request.body,
                     &account,
+                    collection.upstream_proxy_url.as_deref(),
                 )
                 .await;
 
                 let mut response = match first_response {
                     Ok(response) => response,
                     Err(err) => {
+                        last_status = StatusCode::BAD_GATEWAY.as_u16();
                         log_codex_api_failure(
                             None,
                             Some(request),
-                            None,
+                            Some(last_status),
                             Some(account.id.as_str()),
                             Some(account.email.as_str()),
                             None,
@@ -6323,6 +6779,31 @@ async fn proxy_request_with_account_pool(
                         break;
                     }
                 };
+
+                if response.status() == StatusCode::UNAUTHORIZED
+                    && !account_has_refresh_token(&account)
+                {
+                    last_status = StatusCode::UNAUTHORIZED.as_u16();
+                    invalidate_prepared_account(&account_id).await;
+                    log_codex_api_failure(
+                        None,
+                        Some(request),
+                        Some(last_status),
+                        Some(account.id.as_str()),
+                        Some(account.email.as_str()),
+                        None,
+                        format!(
+                            "上游返回 401，access-token-only 账号缺少 refresh_token，按普通账号路径轮转: {}",
+                            account.email
+                        )
+                        .as_str(),
+                    );
+                    last_error = format!(
+                        "账号 {} 当前 access_token 不可用，且没有 refresh_token 可续期",
+                        account.email
+                    );
+                    break;
+                }
 
                 if response.status() == StatusCode::UNAUTHORIZED {
                     match force_refresh_gateway_account(&account_id).await {
@@ -6334,15 +6815,17 @@ async fn proxy_request_with_account_pool(
                                 &request.headers,
                                 &request.body,
                                 &account,
+                                collection.upstream_proxy_url.as_deref(),
                             )
                             .await
                             {
                                 Ok(response) => response,
                                 Err(err) => {
+                                    last_status = StatusCode::BAD_GATEWAY.as_u16();
                                     log_codex_api_failure(
                                         None,
                                         Some(request),
-                                        None,
+                                        Some(last_status),
                                         Some(account.id.as_str()),
                                         Some(account.email.as_str()),
                                         None,
@@ -6370,6 +6853,7 @@ async fn proxy_request_with_account_pool(
                             }
                         }
                         Err(err) => {
+                            last_status = StatusCode::UNAUTHORIZED.as_u16();
                             invalidate_prepared_account(&account_id).await;
                             log_codex_api_failure(
                                 None,
@@ -6491,8 +6975,44 @@ async fn handle_connection(
     mut stream: TcpStream,
     addr: std::net::SocketAddr,
 ) -> Result<(), String> {
-    let raw_request = read_http_request(&mut stream).await?;
-    let mut parsed = parse_http_request(&raw_request)?;
+    let raw_request = match read_http_request(&mut stream).await {
+        Ok(raw_request) => raw_request,
+        Err(err) => {
+            let message = format!("读取本地 API 请求失败: {}", err);
+            write_json_error_response(
+                &mut stream,
+                Some(&addr),
+                None,
+                400,
+                "Bad Request",
+                message.as_str(),
+                None,
+                None,
+                None,
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+    let mut parsed = match parse_http_request(&raw_request) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            let message = format!("解析本地 API 请求失败: {}", err);
+            write_json_error_response(
+                &mut stream,
+                Some(&addr),
+                None,
+                400,
+                "Bad Request",
+                message.as_str(),
+                None,
+                None,
+                None,
+            )
+            .await?;
+            return Ok(());
+        }
+    };
 
     if parsed.method.eq_ignore_ascii_case("OPTIONS") {
         stream
@@ -6703,7 +7223,14 @@ async fn handle_connection(
                 502 => "Bad Gateway",
                 _ => "Service Unavailable",
             };
-            let response = json_response(status, status_text, &json!({ "error": message }));
+            let proxy_diagnostics = (status == StatusCode::BAD_GATEWAY.as_u16()).then(|| {
+                current_upstream_proxy_diagnostics(collection.upstream_proxy_url.as_deref())
+            });
+            let response = json_response(
+                status,
+                status_text,
+                &gateway_error_body(status, &message, proxy_diagnostics.as_ref()),
+            );
             let write_result = stream
                 .write_all(&response)
                 .await
@@ -6730,14 +7257,17 @@ async fn handle_connection(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_chat_completion_payload, build_chat_completion_stream_body,
+        apply_routing_strategy, build_chat_completion_payload, build_chat_completion_stream_body,
         build_codex_client_models_response, build_images_api_payload, build_local_models_response,
         build_ordered_account_ids, build_request_routing_hint, extract_usage_capture,
-        is_responses_completion_event, parse_codex_retry_after,
+        is_responses_completion_event, normalize_custom_routing_rules, parse_codex_retry_after,
         parse_responses_payload_from_upstream, prepare_gateway_request,
         resolve_supported_model_alias, should_retry_single_account_upstream_status,
         should_treat_response_as_stream, should_try_next_account, GatewayResponseAdapter,
         ParsedRequest, ResponseUsageCollector,
+    };
+    use crate::models::codex_local_access::{
+        CodexLocalAccessCustomRoutingRule, CodexLocalAccessRoutingStrategy,
     };
     use reqwest::StatusCode;
     use serde_json::{json, Value};
@@ -6907,6 +7437,129 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         );
 
         assert_eq!(ordered, vec!["acc-c", "acc-b", "acc-a"]);
+    }
+
+    #[test]
+    fn custom_routing_prefers_higher_priority_accounts() {
+        let account_ids = vec![
+            "acc-low".to_string(),
+            "acc-high-a".to_string(),
+            "acc-high-b".to_string(),
+        ];
+        let rules = vec![
+            CodexLocalAccessCustomRoutingRule {
+                account_id: "acc-low".to_string(),
+                priority: 10,
+                weight: 1,
+            },
+            CodexLocalAccessCustomRoutingRule {
+                account_id: "acc-high-a".to_string(),
+                priority: 40,
+                weight: 1,
+            },
+            CodexLocalAccessCustomRoutingRule {
+                account_id: "acc-high-b".to_string(),
+                priority: 40,
+                weight: 1,
+            },
+        ];
+
+        let ordered = apply_routing_strategy(
+            &account_ids,
+            CodexLocalAccessRoutingStrategy::Custom,
+            &rules,
+            0,
+        );
+
+        assert_eq!(ordered, vec!["acc-high-a", "acc-high-b", "acc-low"]);
+    }
+
+    #[test]
+    fn custom_routing_uses_weight_for_same_priority_first_pick() {
+        let account_ids = vec!["acc-heavy".to_string(), "acc-light".to_string()];
+        let rules = vec![
+            CodexLocalAccessCustomRoutingRule {
+                account_id: "acc-heavy".to_string(),
+                priority: 20,
+                weight: 3,
+            },
+            CodexLocalAccessCustomRoutingRule {
+                account_id: "acc-light".to_string(),
+                priority: 20,
+                weight: 1,
+            },
+        ];
+
+        let first_picks = (0..8)
+            .map(|start| {
+                apply_routing_strategy(
+                    &account_ids,
+                    CodexLocalAccessRoutingStrategy::Custom,
+                    &rules,
+                    start,
+                )[0]
+                .clone()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            first_picks,
+            vec![
+                "acc-heavy",
+                "acc-heavy",
+                "acc-heavy",
+                "acc-light",
+                "acc-heavy",
+                "acc-heavy",
+                "acc-heavy",
+                "acc-light",
+            ]
+        );
+    }
+
+    #[test]
+    fn custom_routing_rules_are_normalized_to_collection_accounts() {
+        let account_ids = vec!["acc-a".to_string(), "acc-b".to_string()];
+        let rules = vec![
+            CodexLocalAccessCustomRoutingRule {
+                account_id: " acc-a ".to_string(),
+                priority: 120,
+                weight: 0,
+            },
+            CodexLocalAccessCustomRoutingRule {
+                account_id: "acc-a".to_string(),
+                priority: 20,
+                weight: 10,
+            },
+            CodexLocalAccessCustomRoutingRule {
+                account_id: "acc-removed".to_string(),
+                priority: 30,
+                weight: 5,
+            },
+            CodexLocalAccessCustomRoutingRule {
+                account_id: "acc-b".to_string(),
+                priority: -5,
+                weight: 500,
+            },
+        ];
+
+        let normalized = normalize_custom_routing_rules(rules, &account_ids);
+
+        assert_eq!(
+            normalized,
+            vec![
+                CodexLocalAccessCustomRoutingRule {
+                    account_id: "acc-a".to_string(),
+                    priority: 100,
+                    weight: 1,
+                },
+                CodexLocalAccessCustomRoutingRule {
+                    account_id: "acc-b".to_string(),
+                    priority: 0,
+                    weight: 100,
+                },
+            ]
+        );
     }
 
     #[test]
