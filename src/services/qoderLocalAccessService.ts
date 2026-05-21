@@ -28,6 +28,13 @@ export interface QoderLocalAccessState {
   };
 }
 
+export type QoderLocalAccessRoutingStrategy =
+  | 'auto'
+  | 'quota_high_first'
+  | 'quota_low_first';
+
+export type QoderLocalAccessScope = 'localhost' | 'lan';
+
 export async function getState(): Promise<QoderLocalAccessState> {
   return invoke('qoder_local_access_get_state');
 }
@@ -50,6 +57,18 @@ export async function rotateApiKey(): Promise<QoderLocalAccessState> {
 
 export async function updatePort(port: number): Promise<QoderLocalAccessState> {
   return invoke('qoder_local_access_update_port', { port });
+}
+
+export async function updateRoutingStrategy(
+  strategy: QoderLocalAccessRoutingStrategy,
+): Promise<QoderLocalAccessState> {
+  return invoke('qoder_local_access_update_routing_strategy', { strategy });
+}
+
+export async function updateAccessScope(
+  accessScope: QoderLocalAccessScope,
+): Promise<QoderLocalAccessState> {
+  return invoke('qoder_local_access_update_access_scope', { accessScope });
 }
 
 export async function clearStats(): Promise<QoderLocalAccessState> {

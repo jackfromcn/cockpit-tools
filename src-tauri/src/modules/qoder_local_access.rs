@@ -1046,6 +1046,9 @@ async fn record_usage(success: bool, latency_ms: u64) {
     rt.stats.totals.total_latency_ms += latency_ms;
     rt.stats.updated_at = now_ms();
     rt.stats_dirty = true;
+    if let Err(err) = save_stats_to_disk(&rt.stats) {
+        logger::log_warn(&format!("[QoderLocalAccess] 保存统计失败: {}", err));
+    }
 }
 
 // ─── 网关启停 ───

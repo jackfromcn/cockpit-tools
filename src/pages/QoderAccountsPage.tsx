@@ -1772,6 +1772,15 @@ export function QoderAccountsPage() {
     ],
   );
 
+  const localAccessCard = (
+    <QoderLocalAccessCard
+      accounts={accounts}
+      currentAccountId={currentAccountId}
+      maskAccountText={maskAccountText}
+      layoutMode={viewMode}
+    />
+  );
+
   const renderGroupedAccounts = () => {
     if (viewMode === 'grid') {
       return (
@@ -1785,21 +1794,27 @@ export function QoderAccountsPage() {
             </div>
           )}
           {!groupByTag ? (
-            <div className="ghcp-accounts-grid">{renderGridCards(paginatedAccounts)}</div>
-          ) : (
-            <div className="tag-group-list">
-              {paginatedGroupedAccounts.map(({ groupKey, items, totalCount }) => (
-                <div key={groupKey} className="tag-group-section">
-                  <div className="tag-group-header">
-                    <span className="tag-group-title">
-                      {groupKey === UNTAGGED_KEY ? t('accounts.defaultGroup', '默认分组') : groupKey}
-                    </span>
-                    <span className="tag-group-count">{totalCount}</span>
-                  </div>
-                  <div className="tag-group-grid ghcp-accounts-grid">{renderGridCards(items, groupKey)}</div>
-                </div>
-              ))}
+            <div className="ghcp-accounts-grid">
+              {localAccessCard}
+              {renderGridCards(paginatedAccounts)}
             </div>
+          ) : (
+            <>
+              <div className="ghcp-accounts-grid">{localAccessCard}</div>
+              <div className="tag-group-list">
+                {paginatedGroupedAccounts.map(({ groupKey, items, totalCount }) => (
+                  <div key={groupKey} className="tag-group-section">
+                    <div className="tag-group-header">
+                      <span className="tag-group-title">
+                        {groupKey === UNTAGGED_KEY ? t('accounts.defaultGroup', '默认分组') : groupKey}
+                      </span>
+                      <span className="tag-group-count">{totalCount}</span>
+                    </div>
+                    <div className="tag-group-grid ghcp-accounts-grid">{renderGridCards(items, groupKey)}</div>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </div>
       );
@@ -1807,58 +1822,64 @@ export function QoderAccountsPage() {
 
     if (!groupByTag) {
       return (
-        <div className="account-table-container">
-          <table className="account-table">
-            <thead>
-              <tr>
-                <th>
-                  <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} />
-                </th>
-                <th>{t('common.shared.columns.account')}</th>
-                <th>{t('common.shared.columns.userId', '用户 ID')}</th>
-                <th>{t('common.shared.columns.plan', '套餐')}</th>
-                <th>{t('instances.labels.quota', '配额')}</th>
-                <th>{t('common.shared.columns.createdAt')}</th>
-                <th>{t('common.shared.columns.actions')}</th>
-              </tr>
-            </thead>
-            <tbody>{renderListRows(paginatedAccounts)}</tbody>
-          </table>
-        </div>
+        <>
+          <div className="ghcp-accounts-grid" style={{ marginBottom: '20px' }}>{localAccessCard}</div>
+          <div className="account-table-container">
+            <table className="account-table">
+              <thead>
+                <tr>
+                  <th>
+                    <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} />
+                  </th>
+                  <th>{t('common.shared.columns.account')}</th>
+                  <th>{t('common.shared.columns.userId', '用户 ID')}</th>
+                  <th>{t('common.shared.columns.plan', '套餐')}</th>
+                  <th>{t('instances.labels.quota', '配额')}</th>
+                  <th>{t('common.shared.columns.createdAt')}</th>
+                  <th>{t('common.shared.columns.actions')}</th>
+                </tr>
+              </thead>
+              <tbody>{renderListRows(paginatedAccounts)}</tbody>
+            </table>
+          </div>
+        </>
       );
     }
 
     return (
-      <div className="tag-group-list">
-        {paginatedGroupedAccounts.map(({ groupKey, items, totalCount }) => (
-          <div key={groupKey} className="tag-group-section">
-            <div className="tag-group-header">
-              <span className="tag-group-title">
-                {groupKey === UNTAGGED_KEY ? t('accounts.defaultGroup', '默认分组') : groupKey}
-              </span>
-              <span className="tag-group-count">{totalCount}</span>
+      <>
+        <div className="ghcp-accounts-grid" style={{ marginBottom: '20px' }}>{localAccessCard}</div>
+        <div className="tag-group-list">
+          {paginatedGroupedAccounts.map(({ groupKey, items, totalCount }) => (
+            <div key={groupKey} className="tag-group-section">
+              <div className="tag-group-header">
+                <span className="tag-group-title">
+                  {groupKey === UNTAGGED_KEY ? t('accounts.defaultGroup', '默认分组') : groupKey}
+                </span>
+                <span className="tag-group-count">{totalCount}</span>
+              </div>
+              <div className="account-table-container grouped">
+                <table className="account-table">
+                  <thead>
+                    <tr>
+                      <th>
+                        <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} />
+                      </th>
+                      <th>{t('common.shared.columns.account')}</th>
+                      <th>{t('common.shared.columns.userId', '用户 ID')}</th>
+                      <th>{t('common.shared.columns.plan', '套餐')}</th>
+                      <th>{t('instances.labels.quota', '配额')}</th>
+                      <th>{t('common.shared.columns.createdAt')}</th>
+                      <th>{t('common.shared.columns.actions')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>{renderListRows(items, groupKey)}</tbody>
+                </table>
+              </div>
             </div>
-            <div className="account-table-container grouped">
-              <table className="account-table">
-                <thead>
-                  <tr>
-                    <th>
-                      <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} />
-                    </th>
-                    <th>{t('common.shared.columns.account')}</th>
-                    <th>{t('common.shared.columns.userId', '用户 ID')}</th>
-                    <th>{t('common.shared.columns.plan', '套餐')}</th>
-                    <th>{t('instances.labels.quota', '配额')}</th>
-                    <th>{t('common.shared.columns.createdAt')}</th>
-                    <th>{t('common.shared.columns.actions')}</th>
-                  </tr>
-                </thead>
-                <tbody>{renderListRows(items, groupKey)}</tbody>
-              </table>
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      </>
     );
   };
 
@@ -1870,7 +1891,6 @@ export function QoderAccountsPage() {
         <QoderInstancesContent accountsForSelect={filteredAccounts} />
       ) : (
         <>
-          <QoderLocalAccessCard accountIds={accounts.map(a => a.id)} />
           <div className={`ghcp-flow-notice ${isFlowNoticeCollapsed ? 'collapsed' : ''}`} role="note" aria-live="polite">
             <button
               type="button"
