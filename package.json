@@ -13,6 +13,7 @@
     "pretauri": "npm run typecheck",
     "tauri": "npm run sync-version && tauri",
     "sync-version": "node scripts/sync-version.js",
+    "sync:upstream:check": "node scripts/check-upstream-sync.cjs",
     "verify:local-access-sync": "node scripts/verify-local-access-sync.cjs"
   },
   "dependencies": {

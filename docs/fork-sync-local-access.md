@@ -2,44 +2,52 @@
 
 This fork carries local API service features for Kiro and Qoder. Upstream regularly changes the Codex local-access UI, page layout, Tauri command registration, and shared CSS. After every upstream sync, verify that Kiro/Qoder still follow the Codex API service behavior and that the reverse proxy chain still works.
 
+Repository roles:
+
+- Fork repository: `jackfromcn/cockpit-tools` (`origin`)
+- Fork source repository: `jlcodes99/cockpit-tools` (`upstream`)
+- Protected fork-only requirements: Kiro/Qoder API service cards, local OpenAI-compatible `/v1` gateways, and the Qoder chain used by `free-code -> claudex -> Cockpit Tools(qoder)`.
+
 ## Sync Procedure
 
-1. Fetch the branch you plan to sync from.
+1. Make sure the source repository remote exists and cannot be pushed to accidentally.
 
 ```bash
-# Use upstream/main if a dedicated upstream remote is configured.
-# Use origin/main when the fork remote already contains the upstream merge.
-SYNC_REF=origin/main
+git remote add upstream https://github.com/jlcodes99/cockpit-tools.git 2>/dev/null || \
+  git remote set-url upstream https://github.com/jlcodes99/cockpit-tools.git
+git remote set-url --push upstream DISABLED
+```
+
+2. Fetch the fork and source repository.
+
+```bash
 git fetch origin main
+git fetch upstream main
 ```
 
-2. Review upstream changes that can affect local API service behavior.
+3. Run the read-only upstream sync preflight.
 
 ```bash
-git diff --name-status HEAD..$SYNC_REF -- \
-  'src-tauri/src/**/*local_access*' \
-  'src/**/*LocalAccess*' \
-  'src/pages/KiroAccountsPage.tsx' \
-  'src/pages/QoderAccountsPage.tsx' \
-  'src/styles/pages/codex.css' \
-  'src-tauri/src/lib.rs' \
-  'src-tauri/src/modules/mod.rs' \
-  'src-tauri/src/models/mod.rs'
+npm run sync:upstream:check
 ```
 
-3. Rebase local fork commits onto the updated remote branch.
+The preflight compares `merge-base(HEAD, upstream/main)..upstream/main`, not `HEAD..upstream/main`. This avoids incorrectly treating fork-only Kiro/Qoder files as upstream deletions.
+
+4. Merge the source repository into the fork.
 
 ```bash
-git rebase $SYNC_REF
+git merge upstream/main
 ```
 
-4. Run the fork-specific static guard.
+Prefer merge for routine fork syncs so the fork-only feature history remains visible and reversible. Resolve conflicts by preserving the protected Kiro/Qoder API service behavior unless upstream has intentionally replaced that capability.
+
+5. Run the fork-specific static guard.
 
 ```bash
 npm run verify:local-access-sync
 ```
 
-5. Run normal compile checks.
+6. Run normal compile checks.
 
 ```bash
 npm run typecheck
@@ -47,7 +55,7 @@ npm run build
 cd src-tauri && cargo check && cd ..
 ```
 
-6. For release validation, build the Tauri app.
+7. For release validation, build the Tauri app.
 
 ```bash
 npm run tauri build
@@ -126,4 +134,4 @@ Treat changes in these files as requiring extra review:
 
 ## Current Sync Assessment
 
-The upstream update rebased under commit `2956ca2` touched Codex local access, shared CSS, Kiro/Qoder pages, and Tauri command registration. It did not remove the fork-specific Kiro/Qoder local-access wiring after rebase. The required static guard should pass before future sync pushes.
+As of the sync preflight after commit `325efd2`, `upstream/main` was at `9e7bac8` and had two source commits not merged into the fork. Since the merge-base `78850e0`, upstream changed only `announcements.json`; it did not touch the high-risk Kiro/Qoder local-access paths. The protected fork-side changes remain local to the fork and should be preserved by a normal merge.
