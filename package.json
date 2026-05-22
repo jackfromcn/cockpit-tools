@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "pretauri": "npm run typecheck",
     "tauri": "npm run sync-version && tauri",
-    "sync-version": "node scripts/sync-version.js"
+    "sync-version": "node scripts/sync-version.js",
+    "verify:local-access-sync": "node scripts/verify-local-access-sync.cjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
