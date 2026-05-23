@@ -10,7 +10,7 @@ use rand::{distributions::Alphanumeric, Rng};
 use regex::Regex;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, TcpListener as StdTcpListener};
 use std::path::PathBuf;
 use std::process::Command;
@@ -28,6 +28,9 @@ const LOCALHOST_BIND: &str = "127.0.0.1";
 const MAX_HTTP_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(15);
 const GATEWAY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_KIRO_PAYLOAD_SIZE: usize = 615 * 1024;
+const DEFAULT_KIRO_REGION: &str = "us-east-1";
+const DEFAULT_AGENT_MODE: &str = "q-developer-converse";
 const KNOWN_AUTH_KEYS: [&str; 3] = [
     "kirocli:social:token",
     "kirocli:external-idp:token",
@@ -37,7 +40,53 @@ const PROFILE_STATE_KEY: &str = "api.codewhisperer.profile";
 const SOCIAL_AUTH_KEY: &str = "kirocli:social:token";
 const EXTERNAL_IDP_AUTH_KEY: &str = "kirocli:external-idp:token";
 const OIDC_AUTH_KEY: &str = "kirocli:odic:token";
-const DEFAULT_KIRO_MODELS: &[&str] = &["auto"];
+const DEFAULT_KIRO_MODELS: &[&str] = &[
+    "claude-opus-4-7",
+    "claude-opus-4-7-thinking",
+    "claude-sonnet-4-7",
+    "claude-sonnet-4-7-thinking",
+    "claude-haiku-4-7",
+    "claude-haiku-4-7-thinking",
+    "claude-opus-4-6",
+    "claude-opus-4-6-thinking",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4-6-thinking",
+    "claude-haiku-4-6",
+    "claude-haiku-4-6-thinking",
+    "claude-opus-4-5-20251101",
+    "claude-opus-4-5-20251101-thinking",
+    "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-5-20250929-thinking",
+    "claude-haiku-4-5-20251001",
+    "claude-haiku-4-5-20251001-thinking",
+    "claude-sonnet-4",
+    "claude-sonnet-4-20250514",
+    "claude-3-7-sonnet-20250219",
+];
+const SUPPORTED_KIRO_REGIONS: &[&str] = &[
+    "us-east-1",
+    "us-east-2",
+    "us-west-1",
+    "us-west-2",
+    "eu-west-1",
+    "eu-west-2",
+    "eu-west-3",
+    "eu-central-1",
+    "eu-north-1",
+    "eu-south-1",
+    "ap-northeast-1",
+    "ap-northeast-2",
+    "ap-northeast-3",
+    "ap-southeast-1",
+    "ap-southeast-2",
+    "ap-south-1",
+    "ap-east-1",
+    "ca-central-1",
+    "sa-east-1",
+    "me-south-1",
+    "af-south-1",
+    "us-gov-west-1",
+];
 
 static GATEWAY_RUNTIME: OnceLock<TokioMutex<GatewayRuntime>> = OnceLock::new();
 static ROUND_ROBIN_CURSOR: AtomicUsize = AtomicUsize::new(0);
@@ -72,6 +121,94 @@ struct CompletionRequest {
     prompt: String,
 }
 
+#[derive(Debug, Clone)]
+struct GatewayProxyRequest {
+    model: String,
+    stream: bool,
+    messages: Vec<GatewayMessage>,
+    tools: Vec<GatewayTool>,
+    previous_response_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct GatewayMessage {
+    role: String,
+    content: Value,
+    tool_calls: Vec<GatewayToolCall>,
+    tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct GatewayTool {
+    name: String,
+    description: String,
+    input_schema: Value,
+}
+
+#[derive(Debug, Clone)]
+struct GatewayToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct AggregatedKiroResponse {
+    text: String,
+    thinking: String,
+    tool_calls: Vec<GatewayToolCall>,
+    input_tokens: i32,
+    output_tokens: i32,
+    cache_read_input_tokens: Option<i32>,
+    cache_creation_input_tokens: Option<i32>,
+}
+
+#[derive(Debug)]
+enum KiroEvent {
+    Text(String),
+    Thinking(String),
+    ToolUseStart {
+        id: String,
+        name: String,
+    },
+    ToolUseInputDelta {
+        id: String,
+        input_delta: String,
+    },
+    ToolUseStop {
+        id: String,
+    },
+    Usage {
+        input_tokens: i32,
+        output_tokens: i32,
+        cache_read_input_tokens: Option<i32>,
+        cache_creation_input_tokens: Option<i32>,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct KiroUpstreamCredentials {
+    access_token: String,
+    profile_arn: Option<String>,
+    region: String,
+    user_agent: String,
+    provider: Option<String>,
+    account_email: String,
+}
+
+#[derive(Debug)]
+struct DirectProxyError {
+    status: u16,
+    message: String,
+}
+
+#[derive(Debug, Copy, Clone)]
+enum ApiProtocol {
+    OpenAi,
+    Anthropic,
+    Responses,
+}
+
 #[derive(Debug)]
 struct ProxyResult {
     status: u16,
@@ -84,6 +221,11 @@ struct ProxyResult {
 struct KiroCliDbSnapshot {
     auth_values: HashMap<String, Option<String>>,
     profile_value: Option<String>,
+}
+
+enum KiroCliAuthMode {
+    ReuseCurrent,
+    Injected(KiroCliDbSnapshot),
 }
 
 fn gateway_runtime() -> &'static TokioMutex<GatewayRuntime> {
@@ -102,8 +244,7 @@ fn ansi_escape_regex() -> &'static Regex {
 
 fn osc_escape_regex() -> &'static Regex {
     OSC_ESCAPE_REGEX.get_or_init(|| {
-        Regex::new(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
-            .expect("osc escape regex should compile")
+        Regex::new(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)").expect("osc escape regex should compile")
     })
 }
 
@@ -147,8 +288,8 @@ fn load_collection_from_disk() -> Option<KiroLocalAccessCollection> {
 
 fn save_collection_to_disk(collection: &KiroLocalAccessCollection) -> Result<(), String> {
     let path = local_access_file_path()?;
-    let json = serde_json::to_string_pretty(collection)
-        .map_err(|e| format!("序列化配置失败: {}", e))?;
+    let json =
+        serde_json::to_string_pretty(collection).map_err(|e| format!("序列化配置失败: {}", e))?;
     write_string_atomic(&path, &json)
 }
 
@@ -166,8 +307,7 @@ fn load_stats_from_disk() -> KiroLocalAccessStats {
 
 fn save_stats_to_disk(stats: &KiroLocalAccessStats) -> Result<(), String> {
     let path = local_access_stats_file_path()?;
-    let json =
-        serde_json::to_string_pretty(stats).map_err(|e| format!("序列化统计失败: {}", e))?;
+    let json = serde_json::to_string_pretty(stats).map_err(|e| format!("序列化统计失败: {}", e))?;
     write_string_atomic(&path, &json)
 }
 
@@ -191,10 +331,7 @@ fn build_state_snapshot(rt: &GatewayRuntime) -> KiroLocalAccessState {
         base_url: rt
             .actual_port
             .map(|port| format!("http://{}:{}/v1", LOCALHOST_BIND, port)),
-        model_ids: DEFAULT_KIRO_MODELS
-            .iter()
-            .map(|item| item.to_string())
-            .collect(),
+        model_ids: gateway_model_ids(),
         last_error: rt.last_error.clone(),
         member_count: rt
             .collection
@@ -384,10 +521,113 @@ fn extract_api_key(headers: &[(String, String)]) -> Option<String> {
     None
 }
 
-fn build_models_response() -> Value {
+fn gateway_model_ids() -> Vec<String> {
+    DEFAULT_KIRO_MODELS
+        .iter()
+        .map(|item| item.to_string())
+        .collect()
+}
+
+fn dedupe_model_ids(model_ids: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut ordered = Vec::new();
+    for model_id in model_ids {
+        if seen.insert(model_id.clone()) {
+            ordered.push(model_id);
+        }
+    }
+    if seen.insert("auto".to_string()) {
+        ordered.insert(0, "auto".to_string());
+    }
+    ordered
+}
+
+fn parse_kiro_cli_model_ids(output: &[u8]) -> Vec<String> {
+    let mut model_ids = Vec::new();
+    if let Ok(value) = serde_json::from_slice::<Value>(output) {
+        if let Some(items) = value.get("models").and_then(|value| value.as_array()) {
+            for item in items {
+                let model_id = item
+                    .get("model_id")
+                    .or_else(|| item.get("id"))
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+                if let Some(model_id) = model_id {
+                    model_ids.push(model_id.to_string());
+                }
+            }
+        }
+    }
+    dedupe_model_ids(model_ids)
+}
+
+async fn invoke_kiro_cli_list_models() -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new(resolve_kiro_cli_path())
+            .arg("chat")
+            .arg("--list-models")
+            .arg("--format")
+            .arg("json")
+            .output()
+            .map_err(|e| format!("启动 kiro-cli 失败: {}", e))?;
+        if !output.status.success() {
+            let stderr = strip_terminal_artifacts(&String::from_utf8_lossy(&output.stderr));
+            return Err(format!(
+                "kiro-cli 列出模型失败(code={}): {}",
+                output.status.code().unwrap_or(-1),
+                if stderr.is_empty() {
+                    "无输出".to_string()
+                } else {
+                    stderr
+                }
+            ));
+        }
+        Ok(parse_kiro_cli_model_ids(&output.stdout))
+    })
+    .await
+    .map_err(|e| format!("等待 kiro-cli 结束失败: {}", e))?
+}
+
+async fn load_model_ids_for_account(account: &KiroAccount) -> Result<Vec<String>, String> {
+    let _guard = request_lock().lock().await;
+    let account_clone = account.clone();
+    let auth_mode =
+        tokio::task::spawn_blocking(move || prepare_kiro_cli_auth_for_request(&account_clone))
+            .await
+            .map_err(|e| format!("准备 Kiro CLI 凭据任务失败: {}", e))??;
+
+    let result = invoke_kiro_cli_list_models().await;
+
+    if let KiroCliAuthMode::Injected(snapshot) = auth_mode {
+        let restore_result = tokio::task::spawn_blocking(move || restore_kiro_cli_auth(snapshot))
+            .await
+            .map_err(|e| format!("恢复 Kiro CLI 凭据任务失败: {}", e))?;
+
+        if let Err(restore_err) = restore_result {
+            logger::log_error(&format!(
+                "[KiroLocalAccess] 恢复 kiro-cli 登录态失败: {}",
+                restore_err
+            ));
+            if result.is_ok() {
+                return Err(format!("恢复 kiro-cli 登录态失败: {}", restore_err));
+            }
+        }
+    }
+
+    result
+}
+
+async fn resolve_gateway_model_ids(collection: &KiroLocalAccessCollection) -> Vec<String> {
+    let _ = collection;
+    gateway_model_ids()
+}
+
+async fn build_models_response(collection: &KiroLocalAccessCollection) -> Value {
+    let model_ids = resolve_gateway_model_ids(collection).await;
     json!({
         "object": "list",
-        "data": DEFAULT_KIRO_MODELS.iter().map(|id| json!({
+        "data": model_ids.iter().map(|id| json!({
             "id": id,
             "object": "model",
             "created": 1700000000i64,
@@ -445,7 +685,11 @@ async fn write_json_response(stream: &mut TcpStream, status: u16, value: &Value)
 }
 
 async fn write_upstream_response(stream: &mut TcpStream, result: &ProxyResult) {
-    let mut response = format!("HTTP/1.1 {} {}\r\n", result.status, status_text(result.status));
+    let mut response = format!(
+        "HTTP/1.1 {} {}\r\n",
+        result.status,
+        status_text(result.status)
+    );
     response.push_str("Access-Control-Allow-Origin: *\r\n");
     response.push_str("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n");
     response.push_str("Access-Control-Allow-Headers: Authorization, Content-Type, X-API-Key\r\n");
@@ -453,6 +697,7 @@ async fn write_upstream_response(stream: &mut TcpStream, result: &ProxyResult) {
     if result.is_stream {
         response.push_str("Content-Type: text/event-stream\r\n");
         response.push_str("Cache-Control: no-cache\r\n");
+        response.push_str(&format!("Content-Length: {}\r\n", result.body.len()));
         response.push_str("Connection: close\r\n\r\n");
     } else {
         for (name, value) in &result.headers {
@@ -470,6 +715,10 @@ async fn write_upstream_response(stream: &mut TcpStream, result: &ProxyResult) {
 
     let _ = stream.write_all(response.as_bytes()).await;
     let _ = stream.write_all(&result.body).await;
+    if result.is_stream {
+        let _ = stream.flush().await;
+        let _ = stream.shutdown().await;
+    }
 }
 
 fn normalize_text(input: &str) -> Option<String> {
@@ -593,6 +842,93 @@ fn parse_completion_request(body: &[u8]) -> Result<CompletionRequest, String> {
         model,
         stream,
         prompt,
+    })
+}
+
+fn parse_anthropic_messages_to_text(messages: &Value) -> Result<String, String> {
+    let items = messages
+        .as_array()
+        .ok_or_else(|| "messages 必须是数组".to_string())?;
+
+    let mut transcript = Vec::new();
+    for item in items {
+        let role = item
+            .get("role")
+            .and_then(|value| value.as_str())
+            .unwrap_or("user");
+        let content = message_content_to_text(item.get("content").unwrap_or(&Value::Null));
+        if content.trim().is_empty() {
+            continue;
+        }
+        transcript.push(format!("{}:\n{}", role_label(role), content));
+    }
+
+    if transcript.is_empty() {
+        return Err("messages 中没有可用的文本内容".to_string());
+    }
+
+    Ok(transcript.join("\n\n"))
+}
+
+fn parse_anthropic_system_to_text(system: Option<&Value>) -> String {
+    match system {
+        Some(Value::String(text)) => text.trim().to_string(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(extract_text_part)
+            .collect::<Vec<String>>()
+            .join("\n"),
+        Some(Value::Object(obj)) => obj
+            .get("text")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+fn parse_anthropic_request(body: &[u8]) -> Result<CompletionRequest, String> {
+    let value: Value =
+        serde_json::from_slice(body).map_err(|e| format!("解析请求体失败: {}", e))?;
+    let model = value
+        .get("model")
+        .and_then(|item| item.as_str())
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .unwrap_or_else(|| "auto".to_string());
+    let stream = value
+        .get("stream")
+        .and_then(|item| item.as_bool())
+        .unwrap_or(false);
+    let transcript = parse_anthropic_messages_to_text(
+        value
+            .get("messages")
+            .ok_or_else(|| "缺少 messages 字段".to_string())?,
+    )?;
+    let system_text = parse_anthropic_system_to_text(value.get("system"));
+
+    let mut prompt = String::new();
+    if !system_text.is_empty() {
+        prompt.push_str("System instructions:\n");
+        prompt.push_str(system_text.as_str());
+        prompt.push_str("\n\n");
+    }
+    prompt.push_str("Conversation:\n");
+    prompt.push_str(transcript.as_str());
+    prompt.push_str("\n\nRespond as the assistant to the final user message. Keep prior context when it matters.");
+
+    Ok(CompletionRequest {
+        model,
+        stream,
+        prompt,
+    })
+}
+
+fn build_anthropic_count_tokens_response(request: &CompletionRequest) -> Value {
+    let token_count = request.prompt.chars().count().div_ceil(4).max(1) as u64;
+    json!({
+        "input_tokens": token_count
     })
 }
 
@@ -720,6 +1056,99 @@ fn build_completion_response(model: &str, content: &str, stream: bool) -> ProxyR
     }
 }
 
+fn build_anthropic_response(model: &str, content: &str, stream: bool) -> ProxyResult {
+    let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
+
+    if stream {
+        let mut body = String::new();
+        let message_start = json!({
+            "type":"message_start",
+            "message":{
+                "id": message_id,
+                "type":"message",
+                "role":"assistant",
+                "model": model,
+                "content": [],
+                "stop_reason": Value::Null,
+                "stop_sequence": Value::Null,
+                "usage":{"input_tokens":0,"output_tokens":0}
+            }
+        });
+        body.push_str("event: message_start\n");
+        body.push_str("data: ");
+        body.push_str(&serde_json::to_string(&message_start).unwrap_or_default());
+        body.push_str("\n\n");
+
+        let block_start = json!({
+            "type":"content_block_start",
+            "index":0,
+            "content_block":{"type":"text","text":""}
+        });
+        body.push_str("event: content_block_start\n");
+        body.push_str("data: ");
+        body.push_str(&serde_json::to_string(&block_start).unwrap_or_default());
+        body.push_str("\n\n");
+
+        for chunk in chunk_text_for_stream(content, 160) {
+            let block_delta = json!({
+                "type":"content_block_delta",
+                "index":0,
+                "delta":{"type":"text_delta","text":chunk}
+            });
+            body.push_str("event: content_block_delta\n");
+            body.push_str("data: ");
+            body.push_str(&serde_json::to_string(&block_delta).unwrap_or_default());
+            body.push_str("\n\n");
+        }
+
+        let block_stop = json!({"type":"content_block_stop","index":0});
+        body.push_str("event: content_block_stop\n");
+        body.push_str("data: ");
+        body.push_str(&serde_json::to_string(&block_stop).unwrap_or_default());
+        body.push_str("\n\n");
+
+        let message_delta = json!({
+            "type":"message_delta",
+            "delta":{"stop_reason":"end_turn","stop_sequence": Value::Null},
+            "usage":{"output_tokens":0}
+        });
+        body.push_str("event: message_delta\n");
+        body.push_str("data: ");
+        body.push_str(&serde_json::to_string(&message_delta).unwrap_or_default());
+        body.push_str("\n\n");
+
+        let message_stop = json!({"type":"message_stop"});
+        body.push_str("event: message_stop\n");
+        body.push_str("data: ");
+        body.push_str(&serde_json::to_string(&message_stop).unwrap_or_default());
+        body.push_str("\n\n");
+
+        ProxyResult {
+            status: 200,
+            headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
+            body: body.into_bytes(),
+            is_stream: true,
+        }
+    } else {
+        let body = json!({
+            "id": message_id,
+            "type":"message",
+            "role":"assistant",
+            "model": model,
+            "content":[{"type":"text","text":content}],
+            "stop_reason":"end_turn",
+            "stop_sequence": Value::Null,
+            "usage":{"input_tokens":0,"output_tokens":0}
+        });
+        ProxyResult {
+            status: 200,
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            body: serde_json::to_vec(&body).unwrap_or_default(),
+            is_stream: false,
+        }
+    }
+}
+
 fn get_path_value<'a>(root: &'a Value, path: &[&str]) -> Option<&'a Value> {
     let mut current = root;
     for segment in path {
@@ -772,6 +1201,699 @@ fn extract_profile_arn(account: &KiroAccount) -> Option<String> {
     })
 }
 
+fn normalize_kiro_region(region: Option<&str>) -> Option<String> {
+    let region = region?.trim();
+    if region.is_empty() || !SUPPORTED_KIRO_REGIONS.contains(&region) {
+        return None;
+    }
+    Some(region.to_string())
+}
+
+fn parse_region_from_profile_arn(profile_arn: Option<&str>) -> Option<String> {
+    let profile_arn = profile_arn?.trim();
+    if profile_arn.is_empty() {
+        return None;
+    }
+
+    let mut segments = profile_arn.split(':');
+    let arn = segments.next()?;
+    let partition = segments.next()?;
+    let service = segments.next()?;
+    let region = segments.next()?;
+    if arn != "arn" || partition.is_empty() || service != "codewhisperer" {
+        return None;
+    }
+    normalize_kiro_region(Some(region))
+}
+
+fn resolve_kiro_upstream_region(account: &KiroAccount, profile_arn: Option<&str>) -> String {
+    parse_region_from_profile_arn(profile_arn)
+        .or_else(|| normalize_kiro_region(account.idc_region.as_deref()))
+        .unwrap_or_else(|| DEFAULT_KIRO_REGION.to_string())
+}
+
+fn get_kiro_data_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        return dirs::home_dir().map(|home| {
+            home.join("Library")
+                .join("Application Support")
+                .join("Kiro")
+        });
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return std::env::var("APPDATA")
+            .ok()
+            .map(|appdata| PathBuf::from(appdata).join("Kiro"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return dirs::home_dir().map(|home| home.join(".config").join("Kiro"));
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
+fn read_kiro_machine_id() -> String {
+    if let Some(path) = get_kiro_data_dir().map(|dir| dir.join("machineid")) {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            let value = content.trim();
+            if !value.is_empty() {
+                return value.to_string();
+            }
+        }
+    }
+    crate::modules::device::get_service_machine_id()
+}
+
+fn get_kiro_settings_path() -> Option<PathBuf> {
+    get_kiro_data_dir().map(|dir| dir.join("User").join("settings.json"))
+}
+
+fn read_kiro_settings_json() -> Option<Value> {
+    let path = get_kiro_settings_path()?;
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn get_setting_bool(json: &Value, key: &str) -> Option<bool> {
+    if let Some(value) = json.get(key).and_then(Value::as_bool) {
+        return Some(value);
+    }
+    let mut current = json;
+    for segment in key.split('.') {
+        current = current.get(segment)?;
+    }
+    current.as_bool()
+}
+
+fn get_setting_string(json: &Value, key: &str) -> Option<String> {
+    if let Some(value) = json.get(key).and_then(Value::as_str) {
+        return Some(value.to_string());
+    }
+    let mut current = json;
+    for segment in key.split('.') {
+        current = current.get(segment)?;
+    }
+    current.as_str().map(str::to_string)
+}
+
+fn should_send_codewhisperer_optout() -> bool {
+    let Some(json) = read_kiro_settings_json() else {
+        return true;
+    };
+    let content_collection_enabled = get_setting_bool(
+        &json,
+        "telemetry.dataSharingAndPromptLogging.contentCollectionForServiceImprovement",
+    )
+    .or_else(|| {
+        get_setting_bool(
+            &json,
+            "telemetry.dataSharing.contentCollectionForServiceImprovement",
+        )
+    })
+    .unwrap_or(false);
+    !content_collection_enabled
+}
+
+fn get_proxy_from_kiro_settings() -> Option<String> {
+    read_kiro_settings_json()
+        .and_then(|json| get_setting_string(&json, "http.proxy"))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn get_kiro_app_version() -> String {
+    let mut paths = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        let root = PathBuf::from("/Applications")
+            .join("Kiro.app")
+            .join("Contents")
+            .join("Resources")
+            .join("app");
+        paths.push(root.join("product.json"));
+        paths.push(root.join("package.json"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            let root = PathBuf::from(local_app_data)
+                .join("Programs")
+                .join("Kiro")
+                .join("resources")
+                .join("app");
+            paths.push(root.join("product.json"));
+            paths.push(root.join("package.json"));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        paths.push(PathBuf::from("/opt/Kiro/resources/app/product.json"));
+        paths.push(PathBuf::from("/opt/Kiro/resources/app/package.json"));
+    }
+
+    paths
+        .into_iter()
+        .find_map(|path| {
+            let content = std::fs::read_to_string(path).ok()?;
+            let json: Value = serde_json::from_str(&content).ok()?;
+            json.get("version")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "0.0.0".to_string())
+}
+
+fn build_kiro_custom_user_agent(machine_id: &str) -> String {
+    format!("KiroIDE {} {}", get_kiro_app_version(), machine_id)
+}
+
+fn build_kiro_http_client(streaming: bool) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .pool_idle_timeout(Duration::from_secs(120))
+        .pool_max_idle_per_host(20)
+        .tcp_keepalive(Duration::from_secs(60))
+        .http2_keep_alive_interval(Duration::from_secs(30))
+        .http2_keep_alive_timeout(Duration::from_secs(20))
+        .http2_keep_alive_while_idle(true);
+
+    if !streaming {
+        builder = builder.timeout(Duration::from_secs(300));
+    }
+
+    if let Some(proxy_url) = get_proxy_from_kiro_settings() {
+        if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
+            builder = builder.proxy(proxy);
+        }
+    }
+
+    builder
+        .build()
+        .map_err(|e| format!("创建 Kiro HTTP 客户端失败: {e}"))
+}
+
+fn account_token_needs_refresh(account: &KiroAccount) -> bool {
+    account
+        .expires_at
+        .map(|expires_at| expires_at <= chrono::Utc::now().timestamp() + 60)
+        .unwrap_or(false)
+}
+
+async fn prepare_kiro_upstream_credentials(
+    account: &KiroAccount,
+) -> Result<KiroUpstreamCredentials, String> {
+    let account = if account_token_needs_refresh(account) {
+        kiro_account::refresh_account_token(&account.id).await?
+    } else {
+        account.clone()
+    };
+    if account.access_token.trim().is_empty() {
+        return Err(format!("账号 {} 缺少 access_token", account.email));
+    }
+
+    let profile_arn = extract_profile_arn(&account);
+    let region = resolve_kiro_upstream_region(&account, profile_arn.as_deref());
+    let machine_id = read_kiro_machine_id();
+    Ok(KiroUpstreamCredentials {
+        access_token: account.access_token.trim().to_string(),
+        profile_arn,
+        region,
+        user_agent: build_kiro_custom_user_agent(&machine_id),
+        provider: account.login_provider.clone(),
+        account_email: account.email.clone(),
+    })
+}
+
+fn normalize_external_model_alias(external_model: &str) -> String {
+    external_model.trim().to_ascii_lowercase()
+}
+
+fn get_internal_model_id(external_model: &str) -> Result<String, String> {
+    let normalized_model = normalize_external_model_alias(external_model);
+    let model_id = match normalized_model.as_str() {
+        "gpt-5.5" | "gpt-5.5-turbo" | "gpt-5.5-preview" => "claude-opus-4.7",
+        "gpt-4o" | "gpt-4o-2024-11-20" | "gpt-4o-2024-08-06" => "claude-opus-4.7",
+        "gpt-4o-mini" | "gpt-4o-mini-2024-07-18" => "claude-sonnet-4.7",
+        "o1" | "o1-preview" | "o1-2024-12-17" => "claude-opus-4.7",
+        "o1-mini" | "o1-mini-2024-09-12" => "claude-sonnet-4.7",
+        "o3" | "o3-mini" | "o3-mini-2025-01-31" => "claude-sonnet-4.7",
+        "gpt-4-turbo" | "gpt-4-turbo-preview" | "gpt-4-1106-preview" | "gpt-4-0125-preview" => {
+            "claude-opus-4.7"
+        }
+        "gpt-4" | "gpt-4-0613" | "gpt-4-32k" => "claude-opus-4.7",
+        "gpt-3.5-turbo" | "gpt-3.5-turbo-16k" | "gpt-3.5-turbo-0125" => "claude-haiku-4.7",
+        "claude-opus-4-7" | "claude-opus-4.7" | "opus-4-7" | "opus" => "claude-opus-4.7",
+        "claude-opus-4-7-thinking" | "claude-opus-4.7-thinking" => "claude-opus-4.7",
+        "claude-sonnet-4-7" | "claude-sonnet-4.7" | "sonnet-4-7" | "sonnet" => "claude-sonnet-4.7",
+        "claude-sonnet-4-7-thinking" | "claude-sonnet-4.7-thinking" => "claude-sonnet-4.7",
+        "claude-haiku-4-7" | "claude-haiku-4.7" | "haiku-4-7" | "haiku" => "claude-haiku-4.7",
+        "claude-haiku-4-7-thinking" | "claude-haiku-4.7-thinking" => "claude-haiku-4.7",
+        "claude-opus-4-6-20260205" => "claude-opus-4.6",
+        "claude-opus-4-6" | "claude-opus-4.6" | "opus-4-6" => "claude-opus-4.6",
+        "claude-opus-4-6-thinking" | "claude-opus-4.6-thinking" => "claude-opus-4.6",
+        "claude-sonnet-4-6-20260217" => "claude-sonnet-4.6",
+        "claude-sonnet-4-6" | "claude-sonnet-4.6" | "sonnet-4-6" => "claude-sonnet-4.6",
+        "claude-sonnet-4-6-thinking" | "claude-sonnet-4.6-thinking" => "claude-sonnet-4.6",
+        "claude-haiku-4-6" | "claude-haiku-4.6" | "haiku-4-6" => "claude-haiku-4.6",
+        "claude-haiku-4-6-thinking" | "claude-haiku-4.6-thinking" => "claude-haiku-4.6",
+        "claude-opus-4-5" | "claude-opus-4.5" => "claude-opus-4-5-20251101",
+        "claude-opus-4-5-20251101" | "claude-opus-4-5-20251101-thinking" => {
+            "claude-opus-4-5-20251101"
+        }
+        "claude-sonnet-4-5" | "claude-sonnet-4.5" | "claude-sonnet-latest" => {
+            "claude-sonnet-4-5-20250929"
+        }
+        "claude-sonnet-4-5-20250929" | "claude-sonnet-4-5-20250929-thinking" => {
+            "claude-sonnet-4-5-20250929"
+        }
+        "claude-haiku-4-5" | "claude-haiku-4.5" => "claude-haiku-4-5-20251001",
+        "claude-haiku-4-5-20251001" | "claude-haiku-4-5-20251001-thinking" => {
+            "claude-haiku-4-5-20251001"
+        }
+        "claude-sonnet-4" | "claude-sonnet-4-20250514" => "claude-sonnet-4",
+        "claude-3-7-sonnet-20250219" | "claude-3.7-sonnet" => "claude-3-7-sonnet-20250219",
+        "claude-3-5-sonnet-20241022" | "claude-3-5-sonnet-latest" | "claude-3.5-sonnet" => {
+            "claude-3-5-sonnet-20241022"
+        }
+        "auto" | "default" => "auto",
+        other if other.starts_with("gpt-5.5-") => "claude-opus-4.7",
+        other if other.starts_with("claude-opus-4-7-") => "claude-opus-4.7",
+        other if other.starts_with("claude-sonnet-4-7-") => "claude-sonnet-4.7",
+        other if other.starts_with("claude-haiku-4-7-") => "claude-haiku-4.7",
+        other if other.starts_with("claude-opus-4-6-") => "claude-opus-4.6",
+        other if other.starts_with("claude-sonnet-4-6-") => "claude-sonnet-4.6",
+        other if other.starts_with("claude-haiku-4-6-") => "claude-haiku-4.6",
+        other => other,
+    };
+    Ok(model_id.to_string())
+}
+
+fn get_internal_model_id_with_fallback(
+    external_model: &str,
+    available_models: &[String],
+) -> Result<String, String> {
+    let mapped_model = get_internal_model_id(external_model)?;
+    if available_models.is_empty() || available_models.contains(&mapped_model) {
+        return Ok(mapped_model);
+    }
+
+    let fallback = if mapped_model.contains("opus-4.7") || mapped_model.contains("opus-4.6") {
+        "claude-opus-4.5"
+    } else if mapped_model.contains("sonnet-4.7") || mapped_model.contains("sonnet-4.6") {
+        "claude-sonnet-4.5"
+    } else if mapped_model.contains("haiku-4.7") || mapped_model.contains("haiku-4.6") {
+        "claude-haiku-4.5"
+    } else {
+        return Ok(mapped_model);
+    };
+
+    logger::log_warn(&format!(
+        "[KiroLocalAccess] 模型 {} 不在账号模型列表中，按 KiroAccountManager 逻辑降级到 {}",
+        mapped_model, fallback
+    ));
+    Ok(fallback.to_string())
+}
+
+fn value_to_plain_text(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| match item {
+                Value::String(text) => Some(text.clone()),
+                Value::Object(obj) => {
+                    let item_type = obj.get("type").and_then(Value::as_str).unwrap_or_default();
+                    match item_type {
+                        "text" | "input_text" | "output_text" => {
+                            obj.get("text").and_then(Value::as_str).map(str::to_string)
+                        }
+                        "image" | "image_url" | "input_image" => Some("[Image]".to_string()),
+                        "tool_result" | "web_search_tool_result" => {
+                            obj.get("content").map(value_to_plain_text)
+                        }
+                        "reasoning" | "thinking" => obj
+                            .get("summary")
+                            .or_else(|| obj.get("thinking"))
+                            .or_else(|| obj.get("text"))
+                            .map(value_to_plain_text),
+                        _ => obj.get("text").and_then(Value::as_str).map(str::to_string),
+                    }
+                }
+                other => Some(other.to_string()),
+            })
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Value::Object(obj) => obj
+            .get("text")
+            .or_else(|| obj.get("content"))
+            .map(value_to_plain_text)
+            .unwrap_or_else(|| value.to_string()),
+        other => other.to_string(),
+    }
+}
+
+fn json_string_or_value(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(text)) => text.clone(),
+        Some(value) => serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()),
+        None => "{}".to_string(),
+    }
+}
+
+fn parse_tool_arguments(arguments: &str) -> Value {
+    serde_json::from_str(arguments).unwrap_or_else(|_| json!({}))
+}
+
+fn extract_anthropic_tool_calls(content: &Value) -> Vec<GatewayToolCall> {
+    let Value::Array(items) = content else {
+        return Vec::new();
+    };
+
+    items
+        .iter()
+        .filter_map(|item| {
+            let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+            if item_type != "tool_use" && item_type != "server_tool_use" {
+                return None;
+            }
+            Some(GatewayToolCall {
+                id: item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                name: item
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                arguments: json_string_or_value(item.get("input")),
+            })
+        })
+        .filter(|call| !call.name.trim().is_empty())
+        .collect()
+}
+
+fn extract_anthropic_tool_result_id(content: &Value) -> Option<String> {
+    let Value::Array(items) = content else {
+        return None;
+    };
+    items.iter().find_map(|item| {
+        let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+        if item_type == "tool_result" || item_type == "web_search_tool_result" {
+            item.get("tool_use_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        } else {
+            None
+        }
+    })
+}
+
+fn convert_anthropic_tools(value: Option<&Value>) -> Vec<GatewayTool> {
+    let Some(items) = value.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    items
+        .iter()
+        .filter_map(|item| {
+            let name = item
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+            let description = item
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .chars()
+                .take(1024)
+                .collect::<String>();
+            let input_schema = item
+                .get("input_schema")
+                .or_else(|| item.get("inputSchema"))
+                .or_else(|| item.get("parameters"))
+                .cloned()
+                .unwrap_or_else(|| json!({ "type": "object" }));
+            Some(GatewayTool {
+                name: name.to_string(),
+                description,
+                input_schema,
+            })
+        })
+        .collect()
+}
+
+fn convert_openai_tools(value: Option<&Value>) -> Vec<GatewayTool> {
+    let Some(items) = value.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    items
+        .iter()
+        .filter_map(|item| {
+            let function = item.get("function").unwrap_or(item);
+            let name = function
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+            let description = function
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .chars()
+                .take(1024)
+                .collect::<String>();
+            let input_schema = function
+                .get("parameters")
+                .cloned()
+                .unwrap_or_else(|| json!({ "type": "object" }));
+            Some(GatewayTool {
+                name: name.to_string(),
+                description,
+                input_schema,
+            })
+        })
+        .collect()
+}
+
+fn normalize_anthropic_gateway_request(body: &[u8]) -> Result<GatewayProxyRequest, String> {
+    let value: Value =
+        serde_json::from_slice(body).map_err(|e| format!("解析请求体失败: {}", e))?;
+    let model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .unwrap_or("claude-sonnet-4-5-20250929")
+        .to_string();
+    let stream = value
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut messages = Vec::new();
+
+    if let Some(system) = value.get("system") {
+        let system_text = value_to_plain_text(system);
+        if !system_text.trim().is_empty() {
+            messages.push(GatewayMessage {
+                role: "system".to_string(),
+                content: Value::String(system_text),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+            });
+        }
+    }
+
+    let raw_messages = value
+        .get("messages")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "缺少 messages 字段".to_string())?;
+    for message in raw_messages {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("user")
+            .to_string();
+        let content = message.get("content").cloned().unwrap_or(Value::Null);
+        let tool_calls = extract_anthropic_tool_calls(&content);
+        let tool_call_id = extract_anthropic_tool_result_id(&content);
+        messages.push(GatewayMessage {
+            role,
+            content,
+            tool_calls,
+            tool_call_id,
+        });
+    }
+
+    if messages.iter().all(|message| message.role == "system") {
+        return Err("messages 中没有可发送给 Kiro 的用户消息".to_string());
+    }
+
+    Ok(GatewayProxyRequest {
+        model,
+        stream,
+        messages,
+        tools: convert_anthropic_tools(value.get("tools")),
+        previous_response_id: value
+            .get("previous_response_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
+fn normalize_openai_gateway_request(body: &[u8]) -> Result<GatewayProxyRequest, String> {
+    let value: Value =
+        serde_json::from_slice(body).map_err(|e| format!("解析请求体失败: {}", e))?;
+    let model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .unwrap_or("claude-sonnet-4-5-20250929")
+        .to_string();
+    let stream = value
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let raw_messages = value
+        .get("messages")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "缺少 messages 字段".to_string())?;
+    let mut messages = Vec::new();
+
+    for message in raw_messages {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("user")
+            .to_string();
+        let content = message.get("content").cloned().unwrap_or(Value::Null);
+        let tool_call_id = message
+            .get("tool_call_id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let tool_calls = message
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        let function = item.get("function")?;
+                        let name = function.get("name").and_then(Value::as_str)?;
+                        Some(GatewayToolCall {
+                            id: item
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                            name: name.to_string(),
+                            arguments: json_string_or_value(function.get("arguments")),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        messages.push(GatewayMessage {
+            role,
+            content,
+            tool_calls,
+            tool_call_id,
+        });
+    }
+
+    if messages.is_empty() {
+        return Err("messages 中没有可发送给 Kiro 的用户消息".to_string());
+    }
+
+    Ok(GatewayProxyRequest {
+        model,
+        stream,
+        messages,
+        tools: convert_openai_tools(value.get("tools")),
+        previous_response_id: value
+            .get("previous_response_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
+fn normalize_responses_gateway_request(body: &[u8]) -> Result<GatewayProxyRequest, String> {
+    let value: Value =
+        serde_json::from_slice(body).map_err(|e| format!("解析请求体失败: {}", e))?;
+    if value.get("messages").is_some() && value.get("input").is_none() {
+        return normalize_openai_gateway_request(body);
+    }
+
+    let model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .unwrap_or("claude-sonnet-4-5-20250929")
+        .to_string();
+    let stream = value
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut messages = Vec::new();
+    if let Some(instructions) = value.get("instructions") {
+        let text = value_to_plain_text(instructions);
+        if !text.trim().is_empty() {
+            messages.push(GatewayMessage {
+                role: "system".to_string(),
+                content: Value::String(text),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+            });
+        }
+    }
+
+    match value.get("input") {
+        Some(Value::String(text)) => messages.push(GatewayMessage {
+            role: "user".to_string(),
+            content: Value::String(text.clone()),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        }),
+        Some(Value::Array(items)) => {
+            let text = value_to_plain_text(&Value::Array(items.clone()));
+            if !text.trim().is_empty() {
+                messages.push(GatewayMessage {
+                    role: "user".to_string(),
+                    content: Value::String(text),
+                    tool_calls: Vec::new(),
+                    tool_call_id: None,
+                });
+            }
+        }
+        _ => {}
+    }
+
+    if messages.iter().all(|message| message.role == "system") {
+        return Err("Responses 请求缺少可转换的 input".to_string());
+    }
+
+    Ok(GatewayProxyRequest {
+        model,
+        stream,
+        messages,
+        tools: convert_openai_tools(value.get("tools")),
+        previous_response_id: value
+            .get("previous_response_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
 fn resolve_auth_storage_key(account: &KiroAccount) -> &'static str {
     let auth_method = normalize_ascii_lower(
         pick_string(
@@ -795,9 +1917,7 @@ fn resolve_auth_storage_key(account: &KiroAccount) -> &'static str {
 
     match provider.as_deref() {
         Some("external_idp") => EXTERNAL_IDP_AUTH_KEY,
-        Some("enterprise") | Some("builderid") | Some("internal") | Some("awsidc") => {
-            OIDC_AUTH_KEY
-        }
+        Some("enterprise") | Some("builderid") | Some("internal") | Some("awsidc") => OIDC_AUTH_KEY,
         _ => SOCIAL_AUTH_KEY,
     }
 }
@@ -889,7 +2009,11 @@ fn build_auth_record_value(account: &KiroAccount, auth_key: &str) -> Result<Stri
         }
     }
 
-    if let Some(value) = account.idc_region.as_ref().filter(|value| !value.trim().is_empty()) {
+    if let Some(value) = account
+        .idc_region
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         obj.insert("idc_region".to_string(), Value::String(value.clone()));
         obj.insert("region".to_string(), Value::String(value.clone()));
     }
@@ -900,10 +2024,18 @@ fn build_auth_record_value(account: &KiroAccount, auth_key: &str) -> Result<Stri
     {
         obj.insert("issuer_url".to_string(), Value::String(value.clone()));
     }
-    if let Some(value) = account.client_id.as_ref().filter(|value| !value.trim().is_empty()) {
+    if let Some(value) = account
+        .client_id
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         obj.insert("client_id".to_string(), Value::String(value.clone()));
     }
-    if let Some(value) = account.scopes.as_ref().filter(|value| !value.trim().is_empty()) {
+    if let Some(value) = account
+        .scopes
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         obj.insert("scope".to_string(), Value::String(value.clone()));
         obj.insert("scopes".to_string(), Value::String(value.clone()));
     }
@@ -927,8 +2059,8 @@ fn build_profile_record_value(account: &KiroAccount, auth_key: &str) -> Result<S
         .cloned()
         .unwrap_or_else(Map::new);
 
-    let profile_arn =
-        extract_profile_arn(account).ok_or_else(|| format!("账号 {} 缺少 profileArn", account.email))?;
+    let profile_arn = extract_profile_arn(account)
+        .ok_or_else(|| format!("账号 {} 缺少 profileArn", account.email))?;
     obj.insert("arn".to_string(), Value::String(profile_arn));
 
     let profile_name = obj
@@ -960,14 +2092,56 @@ fn kiro_cli_db_path() -> Result<PathBuf, String> {
     Ok(base_dir.join("kiro-cli").join("data.sqlite3"))
 }
 
-fn load_optional_text(
-    conn: &Connection,
-    sql: &str,
-    key: &str,
-) -> Result<Option<String>, String> {
+fn load_optional_text(conn: &Connection, sql: &str, key: &str) -> Result<Option<String>, String> {
     conn.query_row(sql, params![key], |row| row.get::<_, String>(0))
         .optional()
         .map_err(|e| format!("读取 Kiro CLI 数据库失败: {}", e))
+}
+
+fn read_kiro_cli_auth_snapshot() -> Result<KiroCliDbSnapshot, String> {
+    let db_path = kiro_cli_db_path()?;
+    let conn =
+        Connection::open(&db_path).map_err(|e| format!("打开 Kiro CLI 数据库失败: {}", e))?;
+
+    let mut snapshot = KiroCliDbSnapshot::default();
+    for key in KNOWN_AUTH_KEYS {
+        let value = load_optional_text(&conn, "SELECT value FROM auth_kv WHERE key = ?1", key)?;
+        snapshot.auth_values.insert(key.to_string(), value);
+    }
+    snapshot.profile_value = load_optional_text(
+        &conn,
+        "SELECT CAST(value AS TEXT) FROM state WHERE key = ?1",
+        PROFILE_STATE_KEY,
+    )?;
+    Ok(snapshot)
+}
+
+fn extract_profile_arn_from_text(value: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<Value>(value).ok()?;
+    pick_string(
+        Some(&parsed),
+        &[
+            &["arn"],
+            &["profileArn"],
+            &["profile_arn"],
+            &["profile", "arn"],
+        ],
+    )
+}
+
+fn current_kiro_cli_profile_matches(account: &KiroAccount) -> bool {
+    let Some(account_profile_arn) = extract_profile_arn(account) else {
+        return false;
+    };
+    let Ok(snapshot) = read_kiro_cli_auth_snapshot() else {
+        return false;
+    };
+    snapshot
+        .profile_value
+        .as_deref()
+        .and_then(extract_profile_arn_from_text)
+        .map(|current_profile_arn| current_profile_arn == account_profile_arn)
+        .unwrap_or(false)
 }
 
 fn prepare_kiro_cli_auth(account: &KiroAccount) -> Result<KiroCliDbSnapshot, String> {
@@ -977,8 +2151,8 @@ fn prepare_kiro_cli_auth(account: &KiroAccount) -> Result<KiroCliDbSnapshot, Str
             .map_err(|e| format!("创建 Kiro CLI 数据目录失败: {}", e))?;
     }
 
-    let mut conn = Connection::open(&db_path)
-        .map_err(|e| format!("打开 Kiro CLI 数据库失败: {}", e))?;
+    let mut conn =
+        Connection::open(&db_path).map_err(|e| format!("打开 Kiro CLI 数据库失败: {}", e))?;
     let tx = conn
         .transaction()
         .map_err(|e| format!("开启 Kiro CLI 事务失败: {}", e))?;
@@ -996,11 +2170,7 @@ fn prepare_kiro_cli_auth(account: &KiroAccount) -> Result<KiroCliDbSnapshot, Str
 
     let mut snapshot = KiroCliDbSnapshot::default();
     for key in KNOWN_AUTH_KEYS {
-        let value = load_optional_text(
-            &tx,
-            "SELECT value FROM auth_kv WHERE key = ?1",
-            key,
-        )?;
+        let value = load_optional_text(&tx, "SELECT value FROM auth_kv WHERE key = ?1", key)?;
         snapshot.auth_values.insert(key.to_string(), value);
     }
     snapshot.profile_value = load_optional_text(
@@ -1034,10 +2204,17 @@ fn prepare_kiro_cli_auth(account: &KiroAccount) -> Result<KiroCliDbSnapshot, Str
     Ok(snapshot)
 }
 
+fn prepare_kiro_cli_auth_for_request(account: &KiroAccount) -> Result<KiroCliAuthMode, String> {
+    if current_kiro_cli_profile_matches(account) {
+        return Ok(KiroCliAuthMode::ReuseCurrent);
+    }
+    prepare_kiro_cli_auth(account).map(KiroCliAuthMode::Injected)
+}
+
 fn restore_kiro_cli_auth(snapshot: KiroCliDbSnapshot) -> Result<(), String> {
     let db_path = kiro_cli_db_path()?;
-    let mut conn = Connection::open(&db_path)
-        .map_err(|e| format!("重新打开 Kiro CLI 数据库失败: {}", e))?;
+    let mut conn =
+        Connection::open(&db_path).map_err(|e| format!("重新打开 Kiro CLI 数据库失败: {}", e))?;
     let tx = conn
         .transaction()
         .map_err(|e| format!("开启恢复事务失败: {}", e))?;
@@ -1078,13 +2255,818 @@ fn restore_kiro_cli_auth(snapshot: KiroCliDbSnapshot) -> Result<(), String> {
             .map_err(|e| format!("恢复 profile 失败: {}", e))?;
         }
         None => {
-            tx.execute("DELETE FROM state WHERE key = ?1", params![PROFILE_STATE_KEY])
-                .map_err(|e| format!("清理注入 profile 失败: {}", e))?;
+            tx.execute(
+                "DELETE FROM state WHERE key = ?1",
+                params![PROFILE_STATE_KEY],
+            )
+            .map_err(|e| format!("清理注入 profile 失败: {}", e))?;
         }
     }
 
-    tx.commit()
-        .map_err(|e| format!("提交恢复事务失败: {}", e))
+    tx.commit().map_err(|e| format!("提交恢复事务失败: {}", e))
+}
+
+fn join_with_double_newline(left: &str, right: &str) -> String {
+    match (left.trim().is_empty(), right.trim().is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => right.to_string(),
+        (false, true) => left.to_string(),
+        (false, false) => format!("{}\n\n{}", left, right),
+    }
+}
+
+fn merge_adjacent_gateway_messages(messages: &[GatewayMessage]) -> Vec<GatewayMessage> {
+    let mut merged: Vec<GatewayMessage> = Vec::new();
+    for message in messages {
+        if let Some(last) = merged.last_mut() {
+            if last.role == message.role && message.tool_call_id.is_none() {
+                let existing = value_to_plain_text(&last.content);
+                let incoming = value_to_plain_text(&message.content);
+                last.content = Value::String(join_with_double_newline(&existing, &incoming));
+                last.tool_calls.extend(message.tool_calls.clone());
+                continue;
+            }
+        }
+        merged.push(message.clone());
+    }
+    merged
+}
+
+fn gateway_tools_to_kiro(tools: &[GatewayTool]) -> Option<Vec<Value>> {
+    if tools.is_empty() {
+        return None;
+    }
+    Some(
+        tools
+            .iter()
+            .map(|tool| {
+                json!({
+                    "toolSpecification": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "inputSchema": {
+                            "json": tool.input_schema
+                        }
+                    }
+                })
+            })
+            .collect(),
+    )
+}
+
+fn tool_result_content_to_text(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(value_to_plain_text)
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Some(value) => value_to_plain_text(value),
+        None => String::new(),
+    }
+}
+
+fn extract_kiro_tool_results(message: &GatewayMessage) -> Vec<Value> {
+    let mut results = Vec::new();
+
+    if message.role == "tool" {
+        if let Some(tool_use_id) = message.tool_call_id.as_deref() {
+            results.push(json!({
+                "content": [{ "text": value_to_plain_text(&message.content) }],
+                "status": "success",
+                "toolUseId": tool_use_id
+            }));
+        }
+        return results;
+    }
+
+    let Value::Array(items) = &message.content else {
+        return results;
+    };
+
+    for item in items {
+        let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+        if item_type != "tool_result" && item_type != "web_search_tool_result" {
+            continue;
+        }
+        let Some(tool_use_id) = item.get("tool_use_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let status = if item.get("is_error").and_then(Value::as_bool) == Some(true) {
+            "error"
+        } else {
+            "success"
+        };
+        results.push(json!({
+            "content": [{ "text": tool_result_content_to_text(item.get("content")) }],
+            "status": status,
+            "toolUseId": tool_use_id
+        }));
+    }
+    results
+}
+
+fn gateway_tool_uses(tool_calls: &[GatewayToolCall]) -> Option<Vec<Value>> {
+    if tool_calls.is_empty() {
+        return None;
+    }
+    Some(
+        tool_calls
+            .iter()
+            .map(|call| {
+                json!({
+                    "name": call.name,
+                    "input": parse_tool_arguments(&call.arguments),
+                    "toolUseId": call.id
+                })
+            })
+            .collect(),
+    )
+}
+
+fn build_kiro_user_context(tools: Option<Vec<Value>>, tool_results: Vec<Value>) -> Option<Value> {
+    if tools.is_none() && tool_results.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "toolResults": if tool_results.is_empty() { Value::Null } else { Value::Array(tool_results) },
+        "tools": tools.unwrap_or_default()
+    }))
+    .map(|mut context| {
+        if let Some(obj) = context.as_object_mut() {
+            obj.retain(|_, value| !value.is_null() && !matches!(value, Value::Array(items) if items.is_empty()));
+        }
+        context
+    })
+}
+
+async fn build_kiro_payload(
+    request: &GatewayProxyRequest,
+    profile_arn: Option<String>,
+    available_models: &[String],
+) -> Result<Value, String> {
+    let model_id = get_internal_model_id_with_fallback(&request.model, available_models)?;
+    let conversation_id = request
+        .previous_response_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let mut system_prompt = String::new();
+    let mut non_system_messages = Vec::new();
+
+    for message in &request.messages {
+        if message.role == "system" {
+            let text = value_to_plain_text(&message.content);
+            if !text.trim().is_empty() {
+                system_prompt = join_with_double_newline(&system_prompt, &text);
+            }
+        } else {
+            non_system_messages.push(message.clone());
+        }
+    }
+
+    if non_system_messages.is_empty() {
+        return Err("没有可发送给 Kiro 的消息".to_string());
+    }
+
+    let merged_messages = merge_adjacent_gateway_messages(&non_system_messages);
+    let first_user_index = merged_messages
+        .iter()
+        .position(|message| matches!(message.role.as_str(), "user" | "tool"));
+    let history = if merged_messages.len() > 1 {
+        let mut items = Vec::new();
+        for (index, message) in merged_messages[..merged_messages.len() - 1]
+            .iter()
+            .enumerate()
+        {
+            match message.role.as_str() {
+                "assistant" => {
+                    items.push(json!({
+                        "assistantResponseMessage": {
+                            "content": value_to_plain_text(&message.content),
+                            "toolUses": gateway_tool_uses(&message.tool_calls)
+                        }
+                    }));
+                }
+                "user" | "tool" => {
+                    let mut content = if message.role == "tool" {
+                        String::new()
+                    } else {
+                        value_to_plain_text(&message.content)
+                    };
+                    if Some(index) == first_user_index && !system_prompt.trim().is_empty() {
+                        content = join_with_double_newline(&system_prompt, &content);
+                    }
+                    items.push(json!({
+                        "userInputMessage": {
+                            "content": content,
+                            "modelId": model_id,
+                            "origin": "AI_EDITOR",
+                            "userInputMessageContext": build_kiro_user_context(
+                                None,
+                                extract_kiro_tool_results(message)
+                            )
+                        }
+                    }));
+                }
+                _ => {}
+            }
+        }
+        if items.is_empty() {
+            None
+        } else {
+            Some(items)
+        }
+    } else {
+        None
+    };
+
+    let current_message = merged_messages
+        .last()
+        .ok_or_else(|| "没有当前消息".to_string())?;
+    let mut current_content = if current_message.role == "tool" {
+        String::new()
+    } else {
+        value_to_plain_text(&current_message.content)
+    };
+    if history.is_none() && !system_prompt.trim().is_empty() {
+        current_content = join_with_double_newline(&system_prompt, &current_content);
+    }
+    if current_message.role == "assistant" || current_content.trim().is_empty() {
+        current_content = if current_content.trim().is_empty() {
+            "Continue".to_string()
+        } else {
+            current_content
+        };
+    }
+
+    let mut payload = json!({
+        "conversationState": {
+            "chatTriggerType": "MANUAL",
+            "conversationId": conversation_id,
+            "agentContinuationId": conversation_id,
+            "agentTaskType": "vibe",
+            "currentMessage": {
+                "userInputMessage": {
+                    "content": current_content,
+                    "modelId": model_id,
+                    "origin": "AI_EDITOR",
+                    "userInputMessageContext": build_kiro_user_context(
+                        gateway_tools_to_kiro(&request.tools),
+                        extract_kiro_tool_results(current_message)
+                    )
+                }
+            },
+            "history": history,
+            "customizationArn": Value::Null,
+            "workspaceId": Value::Null
+        },
+        "profileArn": profile_arn
+    });
+    prune_nulls(&mut payload);
+    Ok(payload)
+}
+
+fn prune_nulls(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for item in map.values_mut() {
+                prune_nulls(item);
+            }
+            map.retain(|_, value| {
+                !value.is_null() && !matches!(value, Value::Array(items) if items.is_empty())
+            });
+        }
+        Value::Array(items) => {
+            for item in items {
+                prune_nulls(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn trim_payload_history_if_needed(payload: &mut Value) {
+    while serde_json::to_vec(payload)
+        .map(|bytes| bytes.len() > MAX_KIRO_PAYLOAD_SIZE)
+        .unwrap_or(false)
+    {
+        let Some(history) = payload
+            .pointer_mut("/conversationState/history")
+            .and_then(Value::as_array_mut)
+        else {
+            break;
+        };
+        if history.is_empty() {
+            break;
+        }
+        history.remove(0);
+    }
+}
+
+fn map_direct_upstream_error(status: u16, body: &str) -> DirectProxyError {
+    let message = sanitize_upstream_error(&extract_upstream_error_message(body));
+    let mapped_status = if status == 401 {
+        401
+    } else if status == 403 {
+        403
+    } else if status == 429
+        || body.to_ascii_lowercase().contains("throttlingexception")
+        || body
+            .to_ascii_lowercase()
+            .contains("servicequotaexceededexception")
+    {
+        429
+    } else if status == 400 || body.to_ascii_lowercase().contains("validationexception") {
+        400
+    } else if status >= 500 {
+        502
+    } else {
+        status
+    };
+    DirectProxyError {
+        status: mapped_status,
+        message,
+    }
+}
+
+fn extract_upstream_error_message(body: &str) -> String {
+    if body.trim().is_empty() {
+        return "上游返回空错误响应".to_string();
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(body) {
+        for pointer in [
+            "/message",
+            "/Message",
+            "/error/message",
+            "/reason",
+            "/__type",
+            "/errorCode",
+        ] {
+            if let Some(text) = value.pointer(pointer).and_then(Value::as_str) {
+                return text.to_string();
+            }
+        }
+    }
+    body.to_string()
+}
+
+fn sanitize_upstream_error(message: &str) -> String {
+    let mut sanitized = message.to_string();
+    for pattern in [
+        r"Bearer\s+[A-Za-z0-9._\-]+",
+        r#""accessToken"\s*:\s*"[^"]+""#,
+        r#""refreshToken"\s*:\s*"[^"]+""#,
+        r#""clientSecret"\s*:\s*"[^"]+""#,
+    ] {
+        if let Ok(regex) = Regex::new(pattern) {
+            sanitized = regex.replace_all(&sanitized, "[REDACTED]").to_string();
+        }
+    }
+    sanitized
+}
+
+fn with_kiro_upstream_headers(
+    builder: reqwest::RequestBuilder,
+    upstream: &KiroUpstreamCredentials,
+    accept: &str,
+    include_agent_mode: bool,
+) -> reqwest::RequestBuilder {
+    let mut builder = builder
+        .header("Authorization", format!("Bearer {}", upstream.access_token))
+        .header("Content-Type", "application/json")
+        .header("Accept", accept)
+        .header("host", format!("q.{}.amazonaws.com", upstream.region))
+        .header("user-agent", upstream.user_agent.clone())
+        .header("x-amz-user-agent", upstream.user_agent.clone())
+        .header("amz-sdk-invocation-id", uuid::Uuid::new_v4().to_string())
+        .header("amz-sdk-request", "attempt=1; max=3");
+
+    if should_send_codewhisperer_optout() {
+        builder = builder.header("x-amzn-codewhisperer-optout", "true");
+    }
+    if include_agent_mode {
+        builder = builder.header("x-amzn-kiro-agent-mode", DEFAULT_AGENT_MODE);
+    }
+    if let Some(profile_arn) = upstream
+        .profile_arn
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        builder = builder.header("x-amzn-kiro-profile-arn", profile_arn);
+    }
+    if upstream
+        .provider
+        .as_deref()
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("Internal"))
+    {
+        builder = builder.header("redirect-for-internal", "true");
+    }
+    builder
+}
+
+async fn list_available_models_direct(
+    http: &reqwest::Client,
+    upstream: &KiroUpstreamCredentials,
+) -> Result<Vec<String>, DirectProxyError> {
+    let mut url = format!(
+        "https://q.{}.amazonaws.com/ListAvailableModels?origin=AI_EDITOR&maxResults=50",
+        upstream.region
+    );
+    if let Some(profile_arn) = upstream
+        .profile_arn
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        url.push_str("&profileArn=");
+        url.push_str(&urlencoding::encode(profile_arn));
+    }
+
+    let response = with_kiro_upstream_headers(http.get(&url), upstream, "application/json", false)
+        .send()
+        .await
+        .map_err(|e| DirectProxyError {
+            status: 502,
+            message: format!("ListAvailableModels 请求失败: {e}"),
+        })?;
+    let status = response.status().as_u16();
+    let body = response.text().await.unwrap_or_default();
+    if !(200..300).contains(&status) {
+        return Err(map_direct_upstream_error(status, &body));
+    }
+
+    let value: Value = serde_json::from_str(&body).map_err(|e| DirectProxyError {
+        status: 502,
+        message: format!("解析 ListAvailableModels 响应失败: {e}"),
+    })?;
+    Ok(value
+        .get("models")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.get("modelId")
+                        .or_else(|| item.get("id"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default())
+}
+
+async fn send_generate_request_direct(
+    http: &reqwest::Client,
+    upstream: &KiroUpstreamCredentials,
+    payload: &Value,
+) -> Result<Vec<u8>, DirectProxyError> {
+    let url = format!(
+        "https://q.{}.amazonaws.com/generateAssistantResponse",
+        upstream.region
+    );
+    let response = with_kiro_upstream_headers(
+        http.post(&url),
+        upstream,
+        "application/vnd.amazon.eventstream",
+        true,
+    )
+    .json(payload)
+    .send()
+    .await
+    .map_err(|e| DirectProxyError {
+        status: 502,
+        message: format!("上游请求失败: {e}"),
+    })?;
+
+    let status = response.status().as_u16();
+    if !(200..300).contains(&status) {
+        let body = response.text().await.unwrap_or_default();
+        return Err(map_direct_upstream_error(status, &body));
+    }
+
+    response
+        .bytes()
+        .await
+        .map(|bytes| bytes.to_vec())
+        .map_err(|e| DirectProxyError {
+            status: 502,
+            message: format!("读取上游响应失败: {e}"),
+        })
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFF_u32;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            let mask = if crc & 1 == 1 { 0xEDB8_8320 } else { 0 };
+            crc = (crc >> 1) ^ mask;
+        }
+    }
+    crc ^ 0xFFFF_FFFF
+}
+
+fn decode_eventstream_message(buffer: &[u8]) -> Result<Option<(Vec<u8>, usize)>, String> {
+    const MINIMUM_MESSAGE_LENGTH: usize = 16;
+    if buffer.len() < MINIMUM_MESSAGE_LENGTH {
+        return Ok(None);
+    }
+    let total_len = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
+    if total_len < MINIMUM_MESSAGE_LENGTH {
+        return Err(format!("EventStream 消息长度无效: {total_len}"));
+    }
+    if buffer.len() < total_len {
+        return Ok(None);
+    }
+
+    let msg = &buffer[..total_len];
+    let headers_len = u32::from_be_bytes([msg[4], msg[5], msg[6], msg[7]]) as usize;
+    let prelude_crc = u32::from_be_bytes([msg[8], msg[9], msg[10], msg[11]]);
+    if crc32(&msg[0..8]) != prelude_crc {
+        return Err("EventStream prelude CRC 校验失败".to_string());
+    }
+    let msg_crc = u32::from_be_bytes([
+        msg[total_len - 4],
+        msg[total_len - 3],
+        msg[total_len - 2],
+        msg[total_len - 1],
+    ]);
+    if crc32(&msg[0..total_len - 4]) != msg_crc {
+        return Err("EventStream message CRC 校验失败".to_string());
+    }
+
+    let payload_start = 12 + headers_len;
+    let payload_end = total_len - 4;
+    if payload_start > payload_end || payload_end > msg.len() {
+        return Err("EventStream payload 边界无效".to_string());
+    }
+    Ok(Some((msg[payload_start..payload_end].to_vec(), total_len)))
+}
+
+fn decode_eventstream_payload_text(bytes: &[u8]) -> String {
+    let mut offset = 0usize;
+    let mut payloads = Vec::new();
+    while offset < bytes.len() {
+        match decode_eventstream_message(&bytes[offset..]) {
+            Ok(Some((payload, consumed))) => {
+                if let Ok(text) = String::from_utf8(payload) {
+                    if !text.trim().is_empty() {
+                        payloads.push(text);
+                    }
+                }
+                offset += consumed;
+            }
+            Ok(None) => break,
+            Err(err) => {
+                logger::log_warn(&format!("[KiroLocalAccess] EventStream 解码失败: {err}"));
+                return String::from_utf8_lossy(bytes).to_string();
+            }
+        }
+    }
+    if payloads.is_empty() {
+        String::from_utf8_lossy(bytes).to_string()
+    } else {
+        payloads.join("\n")
+    }
+}
+
+fn extract_json_object(source: &str) -> Option<String> {
+    if !source.starts_with('{') {
+        return None;
+    }
+    let mut brace_count = 0i32;
+    let mut in_string = false;
+    let mut escape_next = false;
+    for (index, ch) in source.char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        if ch == '\\' && in_string {
+            escape_next = true;
+            continue;
+        }
+        if ch == '"' {
+            in_string = !in_string;
+            continue;
+        }
+        if !in_string {
+            if ch == '{' {
+                brace_count += 1;
+            } else if ch == '}' {
+                brace_count -= 1;
+                if brace_count == 0 {
+                    return Some(source[..=index].to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_kiro_event(json_str: &str) -> Option<KiroEvent> {
+    let value: Value = serde_json::from_str(json_str).ok()?;
+    if let Some(usage) = value.get("usage").and_then(Value::as_object) {
+        let input_tokens = usage
+            .get("inputTokens")
+            .or_else(|| usage.get("input_tokens"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0) as i32;
+        let output_tokens = usage
+            .get("outputTokens")
+            .or_else(|| usage.get("output_tokens"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0) as i32;
+        let cache_read_input_tokens = usage
+            .get("cacheReadInputTokens")
+            .or_else(|| usage.get("cache_read_input_tokens"))
+            .and_then(Value::as_i64)
+            .map(|value| value as i32);
+        let cache_creation_input_tokens = usage
+            .get("cacheCreationInputTokens")
+            .or_else(|| usage.get("cache_creation_input_tokens"))
+            .and_then(Value::as_i64)
+            .map(|value| value as i32);
+        if input_tokens > 0
+            || output_tokens > 0
+            || cache_read_input_tokens.is_some()
+            || cache_creation_input_tokens.is_some()
+        {
+            return Some(KiroEvent::Usage {
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+            });
+        }
+    }
+
+    if let Some(text) = value
+        .get("reasoningContentEvent")
+        .and_then(|item| item.get("text"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("delta")
+                .and_then(|item| item.get("thinking"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            value
+                .get("contentBlockDelta")
+                .and_then(|item| item.get("delta"))
+                .and_then(|item| item.get("thinking"))
+                .and_then(Value::as_str)
+        })
+    {
+        if !text.is_empty() {
+            return Some(KiroEvent::Thinking(text.to_string()));
+        }
+    }
+
+    if let Some(tool_use_id) = value.get("toolUseId").and_then(Value::as_str) {
+        if value.get("stop").and_then(Value::as_bool) == Some(true) {
+            return Some(KiroEvent::ToolUseStop {
+                id: tool_use_id.to_string(),
+            });
+        }
+        if let Some(input) = value.get("input") {
+            let input_delta = json_string_or_value(Some(input));
+            if !input_delta.is_empty() && input_delta != "{}" {
+                return Some(KiroEvent::ToolUseInputDelta {
+                    id: tool_use_id.to_string(),
+                    input_delta,
+                });
+            }
+        }
+        if let Some(name) = value.get("name").and_then(Value::as_str) {
+            if !name.is_empty() {
+                return Some(KiroEvent::ToolUseStart {
+                    id: tool_use_id.to_string(),
+                    name: name.to_string(),
+                });
+            }
+        }
+    }
+
+    if let Some(tool) = value
+        .get("assistantResponseEvent")
+        .and_then(|item| item.get("toolUses"))
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+    {
+        let id = tool
+            .get("toolUseId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let name = tool
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if !name.is_empty() {
+            return Some(KiroEvent::ToolUseStart { id, name });
+        }
+    }
+
+    if let Some(text) = value
+        .get("content")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("delta")
+                .and_then(|item| item.get("text"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            value
+                .get("contentBlockDelta")
+                .and_then(|item| item.get("delta"))
+                .and_then(|item| item.get("text"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            value
+                .get("assistantResponseEvent")
+                .and_then(|item| item.get("content"))
+                .and_then(Value::as_str)
+        })
+    {
+        if !text.is_empty() {
+            return Some(KiroEvent::Text(text.to_string()));
+        }
+    }
+    None
+}
+
+fn aggregate_kiro_response(raw: &str) -> AggregatedKiroResponse {
+    let mut aggregated = AggregatedKiroResponse::default();
+    let mut remaining = raw;
+    let mut tool_accumulators: HashMap<String, (String, String)> = HashMap::new();
+
+    while let Some(start) = remaining.find('{') {
+        remaining = &remaining[start..];
+        let Some(json_str) = extract_json_object(remaining) else {
+            break;
+        };
+        let json_len = json_str.len();
+        if let Some(event) = parse_kiro_event(&json_str) {
+            match event {
+                KiroEvent::Text(text) => aggregated.text.push_str(&text),
+                KiroEvent::Thinking(text) => aggregated.thinking.push_str(&text),
+                KiroEvent::ToolUseStart { id, name } => {
+                    tool_accumulators.entry(id).or_insert((name, String::new()));
+                }
+                KiroEvent::ToolUseInputDelta { id, input_delta } => {
+                    if let Some((_, current_input)) = tool_accumulators.get_mut(&id) {
+                        current_input.push_str(&input_delta);
+                    } else {
+                        tool_accumulators.insert(id, (String::new(), input_delta));
+                    }
+                }
+                KiroEvent::ToolUseStop { id } => {
+                    if let Some((name, input)) = tool_accumulators.remove(&id) {
+                        aggregated.tool_calls.push(GatewayToolCall {
+                            id,
+                            name,
+                            arguments: input,
+                        });
+                    }
+                }
+                KiroEvent::Usage {
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
+                } => {
+                    aggregated.input_tokens = input_tokens;
+                    aggregated.output_tokens = output_tokens;
+                    aggregated.cache_read_input_tokens = cache_read_input_tokens;
+                    aggregated.cache_creation_input_tokens = cache_creation_input_tokens;
+                }
+            }
+        }
+        remaining = &remaining[json_len..];
+    }
+
+    for (id, (name, input)) in tool_accumulators {
+        if !name.is_empty() || !input.is_empty() {
+            aggregated.tool_calls.push(GatewayToolCall {
+                id,
+                name,
+                arguments: input,
+            });
+        }
+    }
+    dedupe_gateway_tool_calls(&mut aggregated.tool_calls);
+    aggregated
+}
+
+fn dedupe_gateway_tool_calls(tool_calls: &mut Vec<GatewayToolCall>) {
+    let mut seen = HashSet::new();
+    tool_calls.retain(|call| seen.insert(call.id.clone()));
 }
 
 fn resolve_kiro_cli_path() -> String {
@@ -1182,38 +3164,482 @@ async fn invoke_kiro_cli(prompt: String, model: String) -> Result<String, String
     .map_err(|e| format!("等待 kiro-cli 结束失败: {}", e))?
 }
 
-async fn proxy_via_kiro_cli(
+async fn generate_via_kiro_cli(
     request: &CompletionRequest,
     account: &KiroAccount,
-) -> Result<ProxyResult, String> {
+) -> Result<String, String> {
     let _guard = request_lock().lock().await;
     let account_clone = account.clone();
-    let snapshot = tokio::task::spawn_blocking(move || prepare_kiro_cli_auth(&account_clone))
-        .await
-        .map_err(|e| format!("准备 Kiro CLI 凭据任务失败: {}", e))??;
+    let auth_mode =
+        tokio::task::spawn_blocking(move || prepare_kiro_cli_auth_for_request(&account_clone))
+            .await
+            .map_err(|e| format!("准备 Kiro CLI 凭据任务失败: {}", e))??;
 
     let result = invoke_kiro_cli(request.prompt.clone(), request.model.clone()).await;
 
-    let restore_result = tokio::task::spawn_blocking(move || restore_kiro_cli_auth(snapshot))
-        .await
-        .map_err(|e| format!("恢复 Kiro CLI 凭据任务失败: {}", e))?;
+    if let KiroCliAuthMode::Injected(snapshot) = auth_mode {
+        let restore_result = tokio::task::spawn_blocking(move || restore_kiro_cli_auth(snapshot))
+            .await
+            .map_err(|e| format!("恢复 Kiro CLI 凭据任务失败: {}", e))?;
 
-    if let Err(restore_err) = restore_result {
-        logger::log_error(&format!(
-            "[KiroLocalAccess] 恢复 kiro-cli 登录态失败: {}",
-            restore_err
-        ));
-        if result.is_ok() {
-            return Err(format!("恢复 kiro-cli 登录态失败: {}", restore_err));
+        if let Err(restore_err) = restore_result {
+            logger::log_error(&format!(
+                "[KiroLocalAccess] 恢复 kiro-cli 登录态失败: {}",
+                restore_err
+            ));
+            if result.is_ok() {
+                return Err(format!("恢复 kiro-cli 登录态失败: {}", restore_err));
+            }
         }
     }
 
-    let content = result?;
-    Ok(build_completion_response(
-        request.model.as_str(),
-        content.as_str(),
-        request.stream,
-    ))
+    result
+}
+
+fn anthropic_content_blocks(aggregated: &AggregatedKiroResponse) -> Vec<Value> {
+    let mut content = Vec::new();
+    if !aggregated.thinking.is_empty() {
+        content.push(json!({
+            "type": "thinking",
+            "thinking": aggregated.thinking
+        }));
+    }
+    if !aggregated.text.is_empty() {
+        content.push(json!({
+            "type": "text",
+            "text": aggregated.text
+        }));
+    }
+    for call in &aggregated.tool_calls {
+        content.push(json!({
+            "type": "tool_use",
+            "id": call.id,
+            "name": call.name,
+            "input": parse_tool_arguments(&call.arguments)
+        }));
+    }
+    if content.is_empty() {
+        content.push(json!({ "type": "text", "text": "" }));
+    }
+    content
+}
+
+fn build_direct_anthropic_response(
+    model: &str,
+    aggregated: &AggregatedKiroResponse,
+    stream: bool,
+) -> ProxyResult {
+    let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
+    let stop_reason = if aggregated.tool_calls.is_empty() {
+        "end_turn"
+    } else {
+        "tool_use"
+    };
+
+    if !stream {
+        let body = json!({
+            "id": message_id,
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": anthropic_content_blocks(aggregated),
+            "stop_reason": stop_reason,
+            "stop_sequence": Value::Null,
+            "usage": {
+                "input_tokens": aggregated.input_tokens,
+                "output_tokens": aggregated.output_tokens
+            }
+        });
+        return ProxyResult {
+            status: 200,
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            body: serde_json::to_vec(&body).unwrap_or_default(),
+            is_stream: false,
+        };
+    }
+
+    let mut body = String::new();
+    push_sse_event(
+        &mut body,
+        Some("message_start"),
+        &json!({
+            "type": "message_start",
+            "message": {
+                "id": message_id,
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": [],
+                "stop_reason": Value::Null,
+                "stop_sequence": Value::Null,
+                "usage": {
+                    "input_tokens": aggregated.input_tokens,
+                    "output_tokens": 0
+                }
+            }
+        }),
+    );
+
+    let mut index = 0usize;
+    if !aggregated.thinking.is_empty() {
+        push_sse_event(
+            &mut body,
+            Some("content_block_start"),
+            &json!({
+                "type": "content_block_start",
+                "index": index,
+                "content_block": { "type": "thinking", "thinking": "" }
+            }),
+        );
+        for chunk in chunk_text_for_stream(&aggregated.thinking, 160) {
+            push_sse_event(
+                &mut body,
+                Some("content_block_delta"),
+                &json!({
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": { "type": "thinking_delta", "thinking": chunk }
+                }),
+            );
+        }
+        push_sse_event(
+            &mut body,
+            Some("content_block_stop"),
+            &json!({ "type": "content_block_stop", "index": index }),
+        );
+        index += 1;
+    }
+
+    if !aggregated.text.is_empty() {
+        push_sse_event(
+            &mut body,
+            Some("content_block_start"),
+            &json!({
+                "type": "content_block_start",
+                "index": index,
+                "content_block": { "type": "text", "text": "" }
+            }),
+        );
+        for chunk in chunk_text_for_stream(&aggregated.text, 160) {
+            push_sse_event(
+                &mut body,
+                Some("content_block_delta"),
+                &json!({
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": { "type": "text_delta", "text": chunk }
+                }),
+            );
+        }
+        push_sse_event(
+            &mut body,
+            Some("content_block_stop"),
+            &json!({ "type": "content_block_stop", "index": index }),
+        );
+        index += 1;
+    }
+
+    for call in &aggregated.tool_calls {
+        push_sse_event(
+            &mut body,
+            Some("content_block_start"),
+            &json!({
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": call.id,
+                    "name": call.name,
+                    "input": {}
+                }
+            }),
+        );
+        if !call.arguments.trim().is_empty() {
+            push_sse_event(
+                &mut body,
+                Some("content_block_delta"),
+                &json!({
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": call.arguments
+                    }
+                }),
+            );
+        }
+        push_sse_event(
+            &mut body,
+            Some("content_block_stop"),
+            &json!({ "type": "content_block_stop", "index": index }),
+        );
+        index += 1;
+    }
+
+    push_sse_event(
+        &mut body,
+        Some("message_delta"),
+        &json!({
+            "type": "message_delta",
+            "delta": { "stop_reason": stop_reason, "stop_sequence": Value::Null },
+            "usage": { "output_tokens": aggregated.output_tokens }
+        }),
+    );
+    push_sse_event(
+        &mut body,
+        Some("message_stop"),
+        &json!({ "type": "message_stop" }),
+    );
+
+    ProxyResult {
+        status: 200,
+        headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
+        body: body.into_bytes(),
+        is_stream: true,
+    }
+}
+
+fn push_sse_event(body: &mut String, event: Option<&str>, payload: &Value) {
+    if let Some(event) = event {
+        body.push_str("event: ");
+        body.push_str(event);
+        body.push('\n');
+    }
+    body.push_str("data: ");
+    body.push_str(&serde_json::to_string(payload).unwrap_or_default());
+    body.push_str("\n\n");
+}
+
+fn build_direct_openai_response(
+    model: &str,
+    aggregated: &AggregatedKiroResponse,
+    stream: bool,
+) -> ProxyResult {
+    let request_id = format!("chatcmpl-{}", uuid::Uuid::new_v4().simple());
+    let created = chrono::Utc::now().timestamp();
+    let finish_reason = if aggregated.tool_calls.is_empty() {
+        "stop"
+    } else {
+        "tool_calls"
+    };
+
+    if !stream {
+        let tool_calls = if aggregated.tool_calls.is_empty() {
+            Value::Null
+        } else {
+            Value::Array(
+                aggregated
+                    .tool_calls
+                    .iter()
+                    .map(|call| {
+                        json!({
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": call.arguments
+                            }
+                        })
+                    })
+                    .collect(),
+            )
+        };
+        let mut message = json!({
+            "role": "assistant",
+            "content": if aggregated.text.is_empty() { Value::Null } else { Value::String(aggregated.text.clone()) },
+            "tool_calls": tool_calls
+        });
+        prune_nulls(&mut message);
+        let body = json!({
+            "id": request_id,
+            "object": "chat.completion",
+            "created": created,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "message": message,
+                "finish_reason": finish_reason
+            }],
+            "usage": {
+                "prompt_tokens": aggregated.input_tokens,
+                "completion_tokens": aggregated.output_tokens,
+                "total_tokens": aggregated.input_tokens + aggregated.output_tokens
+            }
+        });
+        return ProxyResult {
+            status: 200,
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            body: serde_json::to_vec(&body).unwrap_or_default(),
+            is_stream: false,
+        };
+    }
+
+    let mut body = String::new();
+    push_sse_data(
+        &mut body,
+        &json!({
+            "id": request_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{ "index": 0, "delta": { "role": "assistant" }, "finish_reason": Value::Null }]
+        }),
+    );
+    for chunk in chunk_text_for_stream(&aggregated.text, 160) {
+        push_sse_data(
+            &mut body,
+            &json!({
+                "id": request_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{ "index": 0, "delta": { "content": chunk }, "finish_reason": Value::Null }]
+            }),
+        );
+    }
+    push_sse_data(
+        &mut body,
+        &json!({
+            "id": request_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }]
+        }),
+    );
+    body.push_str("data: [DONE]\n\n");
+    ProxyResult {
+        status: 200,
+        headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
+        body: body.into_bytes(),
+        is_stream: true,
+    }
+}
+
+fn push_sse_data(body: &mut String, payload: &Value) {
+    body.push_str("data: ");
+    body.push_str(&serde_json::to_string(payload).unwrap_or_default());
+    body.push_str("\n\n");
+}
+
+fn build_direct_responses_response(
+    model: &str,
+    aggregated: &AggregatedKiroResponse,
+    stream: bool,
+) -> ProxyResult {
+    let response_id = format!("resp_{}", uuid::Uuid::new_v4().simple());
+    let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
+    let created_at = chrono::Utc::now().timestamp();
+    let response = json!({
+        "id": response_id,
+        "object": "response",
+        "created_at": created_at,
+        "status": "completed",
+        "model": model,
+        "output": [{
+            "id": message_id,
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text",
+                "text": aggregated.text,
+                "annotations": []
+            }]
+        }],
+        "usage": {
+            "input_tokens": aggregated.input_tokens,
+            "output_tokens": aggregated.output_tokens,
+            "total_tokens": aggregated.input_tokens + aggregated.output_tokens
+        }
+    });
+
+    if stream {
+        let mut body = String::new();
+        push_sse_data(
+            &mut body,
+            &json!({
+                "type": "response.completed",
+                "response": response
+            }),
+        );
+        body.push_str("data: [DONE]\n\n");
+        ProxyResult {
+            status: 200,
+            headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
+            body: body.into_bytes(),
+            is_stream: true,
+        }
+    } else {
+        ProxyResult {
+            status: 200,
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            body: serde_json::to_vec(&response).unwrap_or_default(),
+            is_stream: false,
+        }
+    }
+}
+
+async fn proxy_via_kiro_direct(
+    request: &GatewayProxyRequest,
+    account: &KiroAccount,
+    protocol: ApiProtocol,
+) -> Result<ProxyResult, String> {
+    let http = build_kiro_http_client(true)?;
+    let mut upstream = prepare_kiro_upstream_credentials(account).await?;
+    let available_models = match list_available_models_direct(&http, &upstream).await {
+        Ok(models) => models,
+        Err(err) => {
+            logger::log_warn(&format!(
+                "[KiroLocalAccess] 获取账号模型列表失败: account={}, status={}, error={}，继续按请求模型直连",
+                upstream.account_email, err.status, err.message
+            ));
+            Vec::new()
+        }
+    };
+    let mut payload =
+        build_kiro_payload(request, upstream.profile_arn.clone(), &available_models).await?;
+    trim_payload_history_if_needed(&mut payload);
+
+    let response_bytes = match send_generate_request_direct(&http, &upstream, &payload).await {
+        Ok(bytes) => bytes,
+        Err(err) if err.status == 401 || err.status == 403 => {
+            logger::log_warn(&format!(
+                "[KiroLocalAccess] Kiro 上游认证失败，尝试刷新账号后重试: account={}, status={}, error={}",
+                upstream.account_email, err.status, err.message
+            ));
+            let refreshed = kiro_account::refresh_account_token(&account.id).await?;
+            upstream = prepare_kiro_upstream_credentials(&refreshed).await?;
+            send_generate_request_direct(&http, &upstream, &payload)
+                .await
+                .map_err(|retry_err| {
+                    format!(
+                        "Kiro 上游请求失败(status={}): {}",
+                        retry_err.status, retry_err.message
+                    )
+                })?
+        }
+        Err(err) => {
+            return Err(format!(
+                "Kiro 上游请求失败(status={}): {}",
+                err.status, err.message
+            ));
+        }
+    };
+    let payload_text = decode_eventstream_payload_text(&response_bytes);
+    let aggregated = aggregate_kiro_response(&payload_text);
+
+    Ok(match protocol {
+        ApiProtocol::OpenAi => {
+            build_direct_openai_response(&request.model, &aggregated, request.stream)
+        }
+        ApiProtocol::Anthropic => {
+            build_direct_anthropic_response(&request.model, &aggregated, request.stream)
+        }
+        ApiProtocol::Responses => {
+            build_direct_responses_response(&request.model, &aggregated, request.stream)
+        }
+    })
 }
 
 async fn record_usage(success: bool, latency_ms: u64) {
@@ -1279,22 +3705,56 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
     }
 
     if parsed.target == "/v1/models" || parsed.target.starts_with("/v1/models?") {
-        let response = build_models_response();
+        let response = build_models_response(&collection).await;
         write_json_response(&mut stream, 200, &response).await;
         return Ok(());
     }
 
-    if !parsed.target.starts_with("/v1/chat/completions") {
-        write_error(&mut stream, 404, "仅支持 /v1/models 和 /v1/chat/completions").await;
+    if parsed.target.starts_with("/v1/messages/count_tokens") {
+        match parse_anthropic_request(&parsed.body) {
+            Ok(request) => {
+                let response = build_anthropic_count_tokens_response(&request);
+                write_json_response(&mut stream, 200, &response).await;
+            }
+            Err(err) => {
+                write_error(&mut stream, 400, err.as_str()).await;
+            }
+        }
         return Ok(());
     }
 
-    let completion_request = match parse_completion_request(&parsed.body) {
-        Ok(request) => request,
-        Err(err) => {
-            write_error(&mut stream, 400, err.as_str()).await;
-            return Ok(());
+    let (gateway_request, protocol) = if parsed.target.starts_with("/v1/chat/completions") {
+        match normalize_openai_gateway_request(&parsed.body) {
+            Ok(request) => (request, ApiProtocol::OpenAi),
+            Err(err) => {
+                write_error(&mut stream, 400, err.as_str()).await;
+                return Ok(());
+            }
         }
+    } else if parsed.target.starts_with("/v1/messages") {
+        match normalize_anthropic_gateway_request(&parsed.body) {
+            Ok(request) => (request, ApiProtocol::Anthropic),
+            Err(err) => {
+                write_error(&mut stream, 400, err.as_str()).await;
+                return Ok(());
+            }
+        }
+    } else if parsed.target.starts_with("/v1/responses") {
+        match normalize_responses_gateway_request(&parsed.body) {
+            Ok(request) => (request, ApiProtocol::Responses),
+            Err(err) => {
+                write_error(&mut stream, 400, err.as_str()).await;
+                return Ok(());
+            }
+        }
+    } else {
+        write_error(
+            &mut stream,
+            404,
+            "仅支持 /v1/models、/v1/chat/completions、/v1/messages、/v1/messages/count_tokens 和 /v1/responses",
+        )
+        .await;
+        return Ok(());
     };
 
     if collection.account_ids.is_empty() {
@@ -1323,7 +3783,7 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
             continue;
         }
 
-        match proxy_via_kiro_cli(&completion_request, &account).await {
+        match proxy_via_kiro_direct(&gateway_request, &account, protocol).await {
             Ok(result) => {
                 write_upstream_response(&mut stream, &result).await;
                 record_usage(true, start_time.elapsed().as_millis() as u64).await;
@@ -1673,10 +4133,7 @@ pub async fn test_local_access() -> Result<KiroLocalAccessTestResult, String> {
     };
     let latency_ms = started_at.elapsed().as_millis() as u64;
     let status = response.status().as_u16();
-    let response_text = response
-        .text()
-        .await
-        .unwrap_or_else(|_| String::new());
+    let response_text = response.text().await.unwrap_or_else(|_| String::new());
 
     if status != 200 {
         return Ok(build_failure_result(build_test_failure(
@@ -1745,7 +4202,10 @@ pub async fn restore_local_access_gateway() {
     ensure_runtime_loaded().await;
     let enabled = {
         let rt = gateway_runtime().lock().await;
-        rt.collection.as_ref().map(|item| item.enabled).unwrap_or(false)
+        rt.collection
+            .as_ref()
+            .map(|item| item.enabled)
+            .unwrap_or(false)
     };
     if enabled {
         if let Err(err) = ensure_gateway_running().await {
