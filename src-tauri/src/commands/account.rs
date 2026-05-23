@@ -52,9 +52,7 @@ fn ensure_legacy_antigravity_switch_supported() -> Result<(), String> {
             "antigravity",
         ))
     else {
-        modules::logger::log_info(
-            "[Antigravity] 未命中旧版安装版本缓存，放行旧版切号逻辑",
-        );
+        modules::logger::log_info("[Antigravity] 未命中旧版安装版本缓存，放行旧版切号逻辑");
         return Ok(());
     };
 

@@ -253,9 +253,7 @@ pub async fn kiro_local_access_get_state() -> Result<KiroLocalAccessState, Strin
 }
 
 #[tauri::command]
-pub async fn kiro_local_access_set_enabled(
-    enabled: bool,
-) -> Result<KiroLocalAccessState, String> {
+pub async fn kiro_local_access_set_enabled(enabled: bool) -> Result<KiroLocalAccessState, String> {
     kiro_local_access::set_local_access_enabled(enabled).await
 }
 
