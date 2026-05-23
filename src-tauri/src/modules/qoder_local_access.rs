@@ -43,7 +43,8 @@ MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
 XcW+ML9FoCI6AOvOzwIDAQAB
 -----END PUBLIC KEY-----";
 
-const QODER_CUSTOM_ALPHABET: &[u8] = b"_doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!";
+const QODER_CUSTOM_ALPHABET: &[u8] =
+    b"_doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!";
 const STD_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 const DEFAULT_QODER_MODELS: &[&str] = &["auto", "lite", "performance", "ultimate"];
@@ -164,9 +165,7 @@ fn build_cosy_session(account: &QoderAccount) -> Result<CosySession, String> {
     let name = account.display_name.clone().unwrap_or_default();
 
     // Generate temp key (16 bytes)
-    let temp_key: Vec<u8> = uuid::Uuid::new_v4()
-        .to_string()
-        .replace('-', "")[..16]
+    let temp_key: Vec<u8> = uuid::Uuid::new_v4().to_string().replace('-', "")[..16]
         .as_bytes()
         .to_vec();
 
@@ -236,8 +235,8 @@ fn build_cosy_bearer(session: &CosySession, encoded_body: &str) -> Result<String
     payload_map.insert("info".into(), json!(session.info));
     payload_map.insert("requestId".into(), json!(request_id));
     payload_map.insert("version".into(), json!("v1"));
-    let payload_json = serde_json::to_string(&payload_map)
-        .map_err(|e| format!("序列化 payload 失败: {}", e))?;
+    let payload_json =
+        serde_json::to_string(&payload_map).map_err(|e| format!("序列化 payload 失败: {}", e))?;
     let payload_b64 = general_purpose::STANDARD.encode(payload_json.as_bytes());
 
     let cosy_date = format!("{}", chrono::Utc::now().timestamp());
@@ -300,7 +299,15 @@ fn build_qoder_request_body(messages: &Value, model: &str) -> Value {
         }));
     }
 
-    let biz_name = if prompt.len() > 30 { &prompt[..prompt.char_indices().nth(30).map(|(i,_)|i).unwrap_or(prompt.len())] } else { prompt };
+    let biz_name = if prompt.len() > 30 {
+        &prompt[..prompt
+            .char_indices()
+            .nth(30)
+            .map(|(i, _)| i)
+            .unwrap_or(prompt.len())]
+    } else {
+        prompt
+    };
 
     json!({
         "request_id": nid,
@@ -352,11 +359,7 @@ fn build_qoder_request_body(messages: &Value, model: &str) -> Value {
 
 // ─── Qoder SSE → OpenAI 响应格式转换 ───
 
-fn parse_qoder_sse_to_openai(
-    sse_data: &str,
-    request_id: &str,
-    model: &str,
-) -> (Vec<String>, bool) {
+fn parse_qoder_sse_to_openai(sse_data: &str, request_id: &str, model: &str) -> (Vec<String>, bool) {
     let mut chunks = Vec::new();
     let mut finished = false;
     let created = chrono::Utc::now().timestamp();
@@ -401,7 +404,10 @@ fn parse_qoder_sse_to_openai(
                         "finish_reason": null
                     }]
                 });
-                chunks.push(format!("data: {}\n\n", serde_json::to_string(&chunk).unwrap_or_default()));
+                chunks.push(format!(
+                    "data: {}\n\n",
+                    serde_json::to_string(&chunk).unwrap_or_default()
+                ));
             }
         }
     }
@@ -423,8 +429,8 @@ fn load_collection_from_disk() -> Option<QoderLocalAccessCollection> {
 
 fn save_collection_to_disk(collection: &QoderLocalAccessCollection) -> Result<(), String> {
     let path = local_access_file_path()?;
-    let json = serde_json::to_string_pretty(collection)
-        .map_err(|e| format!("序列化配置失败: {}", e))?;
+    let json =
+        serde_json::to_string_pretty(collection).map_err(|e| format!("序列化配置失败: {}", e))?;
     write_string_atomic(&path, &json)
 }
 
@@ -442,8 +448,7 @@ fn load_stats_from_disk() -> QoderLocalAccessStats {
 
 fn save_stats_to_disk(stats: &QoderLocalAccessStats) -> Result<(), String> {
     let path = local_access_stats_file_path()?;
-    let json =
-        serde_json::to_string_pretty(stats).map_err(|e| format!("序列化统计失败: {}", e))?;
+    let json = serde_json::to_string_pretty(stats).map_err(|e| format!("序列化统计失败: {}", e))?;
     write_string_atomic(&path, &json)
 }
 
@@ -464,7 +469,11 @@ fn build_state_snapshot(rt: &GatewayRuntime) -> QoderLocalAccessState {
     let base_url = if rt.running {
         rt.actual_port.map(|p| {
             let host = rt.actual_bind_host.as_deref().unwrap_or(LOCALHOST_BIND);
-            let display_host = if host == LAN_BIND { LOCALHOST_BIND } else { host };
+            let display_host = if host == LAN_BIND {
+                LOCALHOST_BIND
+            } else {
+                host
+            };
             format!("http://{}:{}/v1", display_host, p)
         })
     } else {
@@ -526,10 +535,7 @@ fn extract_access_token(account: &QoderAccount) -> Option<String> {
 
 // ─── 账号选择（Round-Robin） ───
 
-fn select_account_ids(
-    collection: &QoderLocalAccessCollection,
-    skip: &[String],
-) -> Vec<String> {
+fn select_account_ids(collection: &QoderLocalAccessCollection, skip: &[String]) -> Vec<String> {
     let candidates: Vec<&String> = collection
         .account_ids
         .iter()
@@ -757,8 +763,7 @@ async fn read_http_request(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
 }
 
 fn find_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4)
-        .position(|w| w == b"\r\n\r\n")
+    buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
 fn parse_content_length(header_bytes: &[u8]) -> usize {
@@ -793,7 +798,12 @@ fn parse_http_request(raw: &[u8]) -> Result<ParsedRequest, String> {
         }
     }
     let body = raw[header_end + 4..].to_vec();
-    Ok(ParsedRequest { method, target, headers, body })
+    Ok(ParsedRequest {
+        method,
+        target,
+        headers,
+        body,
+    })
 }
 
 fn extract_api_key(headers: &[(String, String)]) -> Option<String> {
@@ -879,7 +889,12 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
 
     // /v1/chat/completions - 透传
     if !parsed.target.starts_with("/v1/chat/completions") {
-        write_error(&mut stream, 404, "仅支持 /v1/models 和 /v1/chat/completions").await;
+        write_error(
+            &mut stream,
+            404,
+            "仅支持 /v1/models 和 /v1/chat/completions",
+        )
+        .await;
         return Ok(());
     }
 
@@ -996,7 +1011,11 @@ async fn write_json_response(stream: &mut TcpStream, status: u16, value: &Value)
 }
 
 async fn write_upstream_response(stream: &mut TcpStream, result: &ProxyResult) {
-    let mut header_str = format!("HTTP/1.1 {} {}\r\n", result.status, status_text(result.status));
+    let mut header_str = format!(
+        "HTTP/1.1 {} {}\r\n",
+        result.status,
+        status_text(result.status)
+    );
     header_str.push_str("Access-Control-Allow-Origin: *\r\n");
     if result.is_stream {
         header_str.push_str("Content-Type: text/event-stream\r\n");
@@ -1006,7 +1025,10 @@ async fn write_upstream_response(stream: &mut TcpStream, result: &ProxyResult) {
     } else {
         for (name, value) in &result.headers {
             let lower = name.to_lowercase();
-            if lower == "transfer-encoding" || lower == "connection" || lower == "access-control-allow-origin" {
+            if lower == "transfer-encoding"
+                || lower == "connection"
+                || lower == "access-control-allow-origin"
+            {
                 continue;
             }
             header_str.push_str(&format!("{}: {}\r\n", name, value));
@@ -1060,10 +1082,7 @@ async fn start_gateway(bind_host: &str, port: u16) -> Result<(), String> {
 
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
-    let actual_port = listener
-        .local_addr()
-        .map(|a| a.port())
-        .unwrap_or(port);
+    let actual_port = listener.local_addr().map(|a| a.port()).unwrap_or(port);
 
     {
         let mut rt = gateway_runtime().lock().await;
@@ -1150,10 +1169,7 @@ async fn ensure_gateway_running() -> Result<(), String> {
 
     let bind_host = bind_host_for_scope(scope);
 
-    if already_running
-        && current_port == Some(port)
-        && current_host.as_deref() == Some(bind_host)
-    {
+    if already_running && current_port == Some(port) && current_host.as_deref() == Some(bind_host) {
         return Ok(());
     }
 

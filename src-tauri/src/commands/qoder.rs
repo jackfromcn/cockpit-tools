@@ -260,7 +260,9 @@ pub async fn qoder_local_access_get_state() -> Result<QoderLocalAccessState, Str
 }
 
 #[tauri::command]
-pub async fn qoder_local_access_set_enabled(enabled: bool) -> Result<QoderLocalAccessState, String> {
+pub async fn qoder_local_access_set_enabled(
+    enabled: bool,
+) -> Result<QoderLocalAccessState, String> {
     qoder_local_access::set_local_access_enabled(enabled).await
 }
 
