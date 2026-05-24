@@ -335,6 +335,41 @@ fn normalize_timestamp(raw: i64) -> Option<i64> {
     Some(raw)
 }
 
+fn get_kiro_data_dir() -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        return dirs::home_dir().map(|home| {
+            home.join("Library")
+                .join("Application Support")
+                .join("Kiro")
+        });
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return std::env::var("APPDATA")
+            .ok()
+            .map(|appdata| std::path::PathBuf::from(appdata).join("Kiro"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return dirs::home_dir().map(|home| home.join(".config").join("Kiro"));
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
+fn read_kiro_machine_id() -> String {
+    if let Some(path) = get_kiro_data_dir().map(|dir| dir.join("machineid")) {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            let value = content.trim();
+            if !value.is_empty() {
+                return value.to_string();
+            }
+        }
+    }
+    crate::modules::device::get_service_machine_id()
+}
+
 fn resolve_usage_root<'a>(usage: Option<&'a Value>) -> Option<&'a Value> {
     let usage = usage?;
     if let Some(state) = get_path_value(usage, &["kiro.resourceNotifications.usageState"]) {
@@ -1439,6 +1474,7 @@ pub(crate) fn build_payload_from_snapshot(
     Ok(KiroOAuthCompletePayload {
         email,
         user_id,
+        machine_id: Some(read_kiro_machine_id()),
         login_provider,
         access_token,
         refresh_token,
@@ -2535,6 +2571,7 @@ mod tests {
             id: "kiro_test".to_string(),
             email: "tester@example.com".to_string(),
             user_id: None,
+            machine_id: None,
             login_provider: Some("Enterprise".to_string()),
             tags: None,
             access_token: "access".to_string(),

@@ -6,6 +6,8 @@ pub struct KiroAccount {
     pub email: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub login_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -119,6 +121,7 @@ pub struct KiroOAuthStartResponse {
 pub struct KiroOAuthCompletePayload {
     pub email: String,
     pub user_id: Option<String>,
+    pub machine_id: Option<String>,
     pub login_provider: Option<String>,
 
     pub access_token: String,

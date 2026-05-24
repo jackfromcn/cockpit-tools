@@ -43,6 +43,7 @@ pub mod import;
 pub mod instance;
 pub mod instance_store;
 pub mod kiro_account;
+pub mod kiro_gateway;
 pub mod kiro_instance;
 pub mod kiro_local_access;
 pub mod kiro_oauth;

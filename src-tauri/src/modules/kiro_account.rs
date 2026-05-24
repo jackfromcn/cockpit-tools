@@ -692,6 +692,9 @@ fn apply_payload(account: &mut KiroAccount, payload: KiroOAuthCompletePayload) {
         account.email.clear();
     }
     account.user_id = payload.user_id;
+    if payload.machine_id.is_some() {
+        account.machine_id = payload.machine_id;
+    }
     account.login_provider = payload.login_provider;
     account.access_token = payload.access_token;
     account.refresh_token = payload.refresh_token;
@@ -766,6 +769,7 @@ pub fn upsert_account(payload: KiroOAuthCompletePayload) -> Result<KiroAccount, 
         id: account_id.clone(),
         email: payload.email.clone(),
         user_id: payload.user_id.clone(),
+        machine_id: payload.machine_id.clone(),
         login_provider: payload.login_provider.clone(),
         tags,
         access_token: payload.access_token.clone(),

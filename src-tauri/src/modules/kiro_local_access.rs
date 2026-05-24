@@ -4,20 +4,30 @@ use crate::models::kiro_local_access::{
     KiroLocalAccessTestFailure, KiroLocalAccessTestResult,
 };
 use crate::modules::atomic_write::write_string_atomic;
+use crate::modules::kiro_gateway::models::{
+    AggregatedKiroResponse, ApiProtocol, CompletionRequest, ConversationState, CurrentMessage,
+    DirectProxyError, GatewayMessage, GatewayProxyRequest, GatewayTool, GatewayToolCall,
+    HistoryAssistantMessage, HistoryItem, HistoryUserMessage, ImageBlock, ImageSource,
+    KiroCliAuthMode, KiroCliDbSnapshot, KiroEvent, KiroInputSchema, KiroPayload, KiroTool,
+    KiroToolResult, KiroToolResultContent, KiroToolSpec, KiroToolUse, KiroUpstreamCredentials,
+    ProxyResult, ResponsesSessionEntry, ServerToolCall, UserInputMessage, UserInputMessageContext,
+};
 use crate::modules::{kiro_account, logger};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{SecondsFormat, TimeZone};
 use rand::{distributions::Alphanumeric, Rng};
 use regex::Regex;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
-use std::net::{Ipv4Addr, TcpListener as StdTcpListener};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener as StdTcpListener};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::lookup_host;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, Mutex as TokioMutex};
 use tokio::time::{timeout, Duration};
@@ -29,6 +39,14 @@ const MAX_HTTP_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(15);
 const GATEWAY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_KIRO_PAYLOAD_SIZE: usize = 615 * 1024;
+const TOOL_DESCRIPTION_MAX_LENGTH: usize = 1024;
+const WEB_SEARCH_TOOL_NAME: &str = "web_search";
+const WEB_SEARCH_TOOL_DESCRIPTION: &str =
+    "Search the web for current information and return relevant results.";
+const MAX_SERVER_WEB_SEARCH_ITERATIONS: usize = 8;
+const MAX_IMAGE_SOURCE_BYTES: usize = 5 * 1024 * 1024;
+const MAX_IMAGE_REDIRECTS: usize = 3;
+const IMAGE_FETCH_TIMEOUT_SECONDS: u64 = 15;
 const DEFAULT_KIRO_REGION: &str = "us-east-1";
 const DEFAULT_AGENT_MODE: &str = "q-developer-converse";
 const KNOWN_AUTH_KEYS: [&str; 3] = [
@@ -104,6 +122,18 @@ struct GatewayRuntime {
     last_error: Option<String>,
     shutdown_sender: Option<watch::Sender<bool>>,
     task: Option<tokio::task::JoinHandle<()>>,
+    responses_sessions: HashMap<String, ResponsesSessionEntry>,
+}
+
+struct ProxyExecutionOutcome {
+    aggregated: AggregatedKiroResponse,
+    server_tool_calls: Vec<ServerToolCall>,
+}
+
+#[derive(Debug, Clone)]
+struct WebSearchSource {
+    title: String,
+    url: String,
 }
 
 #[derive(Debug)]
@@ -112,120 +142,6 @@ struct ParsedRequest {
     target: String,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
-}
-
-#[derive(Debug, Clone)]
-struct CompletionRequest {
-    model: String,
-    stream: bool,
-    prompt: String,
-}
-
-#[derive(Debug, Clone)]
-struct GatewayProxyRequest {
-    model: String,
-    stream: bool,
-    messages: Vec<GatewayMessage>,
-    tools: Vec<GatewayTool>,
-    previous_response_id: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct GatewayMessage {
-    role: String,
-    content: Value,
-    tool_calls: Vec<GatewayToolCall>,
-    tool_call_id: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct GatewayTool {
-    name: String,
-    description: String,
-    input_schema: Value,
-}
-
-#[derive(Debug, Clone)]
-struct GatewayToolCall {
-    id: String,
-    name: String,
-    arguments: String,
-}
-
-#[derive(Debug, Clone, Default)]
-struct AggregatedKiroResponse {
-    text: String,
-    thinking: String,
-    tool_calls: Vec<GatewayToolCall>,
-    input_tokens: i32,
-    output_tokens: i32,
-    cache_read_input_tokens: Option<i32>,
-    cache_creation_input_tokens: Option<i32>,
-}
-
-#[derive(Debug)]
-enum KiroEvent {
-    Text(String),
-    Thinking(String),
-    ToolUseStart {
-        id: String,
-        name: String,
-    },
-    ToolUseInputDelta {
-        id: String,
-        input_delta: String,
-    },
-    ToolUseStop {
-        id: String,
-    },
-    Usage {
-        input_tokens: i32,
-        output_tokens: i32,
-        cache_read_input_tokens: Option<i32>,
-        cache_creation_input_tokens: Option<i32>,
-    },
-}
-
-#[derive(Debug, Clone)]
-struct KiroUpstreamCredentials {
-    access_token: String,
-    profile_arn: Option<String>,
-    region: String,
-    user_agent: String,
-    provider: Option<String>,
-    account_email: String,
-}
-
-#[derive(Debug)]
-struct DirectProxyError {
-    status: u16,
-    message: String,
-}
-
-#[derive(Debug, Copy, Clone)]
-enum ApiProtocol {
-    OpenAi,
-    Anthropic,
-    Responses,
-}
-
-#[derive(Debug)]
-struct ProxyResult {
-    status: u16,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
-    is_stream: bool,
-}
-
-#[derive(Debug, Default)]
-struct KiroCliDbSnapshot {
-    auth_values: HashMap<String, Option<String>>,
-    profile_value: Option<String>,
-}
-
-enum KiroCliAuthMode {
-    ReuseCurrent,
-    Injected(KiroCliDbSnapshot),
 }
 
 fn gateway_runtime() -> &'static TokioMutex<GatewayRuntime> {
@@ -1416,7 +1332,13 @@ async fn prepare_kiro_upstream_credentials(
 
     let profile_arn = extract_profile_arn(&account);
     let region = resolve_kiro_upstream_region(&account, profile_arn.as_deref());
-    let machine_id = read_kiro_machine_id();
+    let machine_id = account
+        .machine_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(read_kiro_machine_id);
     Ok(KiroUpstreamCredentials {
         access_token: account.access_token.trim().to_string(),
         profile_arn,
@@ -1557,6 +1479,192 @@ fn value_to_plain_text(value: &Value) -> String {
     }
 }
 
+fn extract_text_blocks(value: &Value, text_types: &[&str]) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| {
+                let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+                if text_types.contains(&item_type) {
+                    item.get("text").and_then(Value::as_str).map(str::to_string)
+                } else if item_type == "image" {
+                    Some("[Image]".to_string())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Value::Object(map) => map
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+fn extract_text_content(content: Option<&Value>) -> String {
+    match content {
+        None => String::new(),
+        Some(Value::String(text)) => text.clone(),
+        Some(value @ Value::Array(_)) => {
+            extract_text_blocks(value, &["text", "input_text", "output_text"])
+        }
+        Some(other) => other.to_string(),
+    }
+}
+
+fn meaningful_optional_value(value: Option<Value>) -> Option<Value> {
+    match value {
+        Some(Value::Null) => None,
+        Some(Value::String(text)) if text.trim().is_empty() => None,
+        Some(Value::Array(items)) if items.is_empty() => None,
+        Some(Value::Object(map)) if map.is_empty() => None,
+        other => other,
+    }
+}
+
+fn extract_reasoning_content(content: Option<&Value>) -> Option<Value> {
+    let content = content?;
+
+    if let Some(existing) = content.get("reasoningContent") {
+        return meaningful_optional_value(Some(existing.clone()));
+    }
+
+    let content_items = content.get("content").unwrap_or(content);
+    let Value::Array(items) = content_items else {
+        return None;
+    };
+
+    let mut texts = Vec::new();
+    let mut signature: Option<Value> = None;
+    let mut redacted_content: Option<Value> = None;
+
+    for item in items {
+        let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+        if item_type != "reasoning" && item_type != "thinking" {
+            continue;
+        }
+
+        if let Some(text) = item
+            .get("summary")
+            .map(|value| extract_text_content(Some(value)))
+        {
+            if !text.is_empty() {
+                texts.push(text);
+            }
+        } else if let Some(text) = item.get("thinking").and_then(Value::as_str) {
+            if !text.is_empty() {
+                texts.push(text.to_string());
+            }
+        } else if let Some(text) = item.get("text").and_then(Value::as_str) {
+            if !text.is_empty() {
+                texts.push(text.to_string());
+            }
+        }
+
+        if signature.is_none() {
+            signature = item.get("signature").cloned();
+        }
+        if redacted_content.is_none() {
+            redacted_content = item.get("redactedContent").cloned();
+        }
+    }
+
+    if texts.is_empty() && signature.is_none() && redacted_content.is_none() {
+        return None;
+    }
+
+    let mut reasoning_text = Map::new();
+    let merged_text = texts.join("\n");
+    if !merged_text.is_empty() {
+        reasoning_text.insert("text".to_string(), Value::String(merged_text));
+    }
+    if let Some(signature) = signature {
+        reasoning_text.insert("signature".to_string(), signature);
+    }
+
+    let mut reasoning = Map::new();
+    if !reasoning_text.is_empty() {
+        reasoning.insert("reasoningText".to_string(), Value::Object(reasoning_text));
+    }
+    if let Some(redacted_content) = redacted_content {
+        reasoning.insert("redactedContent".to_string(), redacted_content);
+    }
+
+    meaningful_optional_value(Some(Value::Object(reasoning)))
+}
+
+fn assistant_metadata_value(message: &GatewayMessage, key: &str) -> Option<Value> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|value| value.get(key).cloned())
+        .or_else(|| message.content.get(key).cloned())
+}
+
+fn extract_responses_message_metadata(item: &Value, role: &str) -> Option<Value> {
+    if role != "assistant" {
+        return None;
+    }
+
+    let mut metadata = Map::new();
+    for key in [
+        "reasoningContent",
+        "references",
+        "supplementaryWebLinks",
+        "followupPrompt",
+        "cachePoint",
+    ] {
+        if let Some(value) = meaningful_optional_value(item.get(key).cloned()) {
+            metadata.insert(key.to_string(), value);
+        }
+    }
+
+    if let Some(message_id) = item
+        .get("messageId")
+        .or_else(|| item.get("id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        metadata.insert(
+            "messageId".to_string(),
+            Value::String(message_id.to_string()),
+        );
+    }
+
+    if !metadata.contains_key("reasoningContent") {
+        if let Some(reasoning) = extract_reasoning_content(item.get("content")) {
+            metadata.insert("reasoningContent".to_string(), reasoning);
+        }
+    }
+
+    if metadata.is_empty() {
+        None
+    } else {
+        Some(Value::Object(metadata))
+    }
+}
+
+fn extract_anthropic_message_metadata(message: &Value, role: &str) -> Option<Value> {
+    if role != "assistant" {
+        return None;
+    }
+
+    let mut metadata = Map::new();
+    if let Some(reasoning) = extract_reasoning_content(message.get("content")) {
+        metadata.insert("reasoningContent".to_string(), reasoning);
+    }
+
+    if metadata.is_empty() {
+        None
+    } else {
+        Some(Value::Object(metadata))
+    }
+}
+
 fn json_string_or_value(value: Option<&Value>) -> String {
     match value {
         Some(Value::String(text)) => text.clone(),
@@ -1623,6 +1731,10 @@ fn convert_anthropic_tools(value: Option<&Value>) -> Vec<GatewayTool> {
     items
         .iter()
         .filter_map(|item| {
+            let tool_type = item
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("function");
             let name = item
                 .get("name")
                 .and_then(Value::as_str)
@@ -1640,11 +1752,25 @@ fn convert_anthropic_tools(value: Option<&Value>) -> Vec<GatewayTool> {
                 .or_else(|| item.get("inputSchema"))
                 .or_else(|| item.get("parameters"))
                 .cloned()
-                .unwrap_or_else(|| json!({ "type": "object" }));
+                .unwrap_or_else(|| json!({ "type": "object", "properties": {}, "required": [] }));
             Some(GatewayTool {
+                tool_type: tool_type.to_string(),
                 name: name.to_string(),
                 description,
                 input_schema,
+                web_search_max_uses: item
+                    .get("max_uses")
+                    .and_then(Value::as_i64)
+                    .map(|value| value as i32),
+                allowed_domains: item
+                    .get("allowed_domains")
+                    .and_then(Value::as_array)
+                    .map(|values| string_array_from_values(values)),
+                blocked_domains: item
+                    .get("blocked_domains")
+                    .and_then(Value::as_array)
+                    .map(|values| string_array_from_values(values)),
+                user_location: item.get("user_location").cloned(),
             })
         })
         .collect()
@@ -1659,6 +1785,10 @@ fn convert_openai_tools(value: Option<&Value>) -> Vec<GatewayTool> {
         .iter()
         .filter_map(|item| {
             let function = item.get("function").unwrap_or(item);
+            let item_type = item
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("function");
             let name = function
                 .get("name")
                 .and_then(Value::as_str)
@@ -1674,14 +1804,369 @@ fn convert_openai_tools(value: Option<&Value>) -> Vec<GatewayTool> {
             let input_schema = function
                 .get("parameters")
                 .cloned()
-                .unwrap_or_else(|| json!({ "type": "object" }));
+                .unwrap_or_else(|| json!({ "type": "object", "properties": {}, "required": [] }));
             Some(GatewayTool {
+                tool_type: item_type.to_string(),
                 name: name.to_string(),
                 description,
                 input_schema,
+                web_search_max_uses: item
+                    .get("max_uses")
+                    .and_then(Value::as_i64)
+                    .map(|value| value as i32),
+                allowed_domains: item
+                    .get("allowed_domains")
+                    .and_then(Value::as_array)
+                    .map(|values| string_array_from_values(values)),
+                blocked_domains: item
+                    .get("blocked_domains")
+                    .and_then(Value::as_array)
+                    .map(|values| string_array_from_values(values)),
+                user_location: item.get("user_location").cloned(),
             })
         })
         .collect()
+}
+
+fn string_array_from_values(values: &[Value]) -> Vec<String> {
+    values
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn is_web_search_tool_type(tool_type: &str) -> bool {
+    tool_type.starts_with("web_search_") || tool_type == "remote_web_search"
+}
+
+fn normalize_tool_choice(
+    tool_choice: &Option<Value>,
+    tools: &[GatewayTool],
+) -> Result<Option<Value>, String> {
+    let Some(choice) = tool_choice.as_ref() else {
+        return Ok(None);
+    };
+
+    let choice_type = match choice {
+        Value::String(raw) => raw.trim(),
+        Value::Object(_) => choice
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .ok_or_else(|| "tool_choice.type 无效".to_string())?,
+        _ => return Err("tool_choice 格式无效".to_string()),
+    };
+
+    match choice_type {
+        "auto" => Ok(Some(json!({ "type": "auto" }))),
+        "none" => Ok(Some(json!({ "type": "none" }))),
+        "required" => {
+            if tools.is_empty() {
+                return Err("tool_choice=required 时必须同时提供 tools".to_string());
+            }
+            Ok(Some(json!({ "type": "required" })))
+        }
+        "function" => {
+            let name = choice
+                .get("name")
+                .or_else(|| choice.pointer("/function/name"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "tool_choice.function.name 不能为空".to_string())?;
+
+            if !tools.iter().any(|tool| tool.name == name) {
+                return Err(format!("tool_choice 指定的工具不存在: {name}"));
+            }
+
+            Ok(Some(json!({
+                "type": "function",
+                "name": name
+            })))
+        }
+        other => Err(format!("暂不支持的 tool_choice.type: {other}")),
+    }
+}
+
+fn convert_anthropic_content(content: &Value) -> Value {
+    match content {
+        Value::String(text) => Value::String(text.clone()),
+        Value::Array(items) => {
+            let has_tool_result = items
+                .iter()
+                .any(|item| item.get("type").and_then(Value::as_str) == Some("tool_result"));
+            if has_tool_result {
+                return content.clone();
+            }
+
+            let text = extract_text_blocks(content, &["text"]);
+            if text.is_empty() {
+                content.clone()
+            } else {
+                Value::String(text)
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+fn convert_openai_chat_content(content: &Value) -> Value {
+    match content {
+        Value::String(text) => Value::String(text.clone()),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| {
+                    if item.get("type").and_then(Value::as_str) == Some("text") {
+                        json!({
+                            "type": "input_text",
+                            "text": item.get("text").and_then(Value::as_str).unwrap_or_default()
+                        })
+                    } else {
+                        item.clone()
+                    }
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn create_tool_results_message(tool_results: &[(String, Value)]) -> GatewayMessage {
+    let mut content_array = Vec::new();
+    for (tool_call_id, content) in tool_results {
+        content_array.push(json!({
+            "type": "tool_result",
+            "tool_use_id": tool_call_id,
+            "content": content
+        }));
+    }
+
+    GatewayMessage {
+        role: "user".to_string(),
+        content: Value::Array(content_array),
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+        metadata: None,
+    }
+}
+
+fn convert_openai_chat_messages(messages: Option<&Value>) -> Vec<GatewayMessage> {
+    let Some(Value::Array(items)) = messages else {
+        return Vec::new();
+    };
+
+    let mut messages = Vec::new();
+    let mut pending_tool_results: Vec<(String, Value)> = Vec::new();
+
+    for item in items {
+        let Some(role) = item.get("role").and_then(Value::as_str) else {
+            continue;
+        };
+
+        match role {
+            "system" => {
+                let text = extract_text_content(item.get("content"));
+                if !text.is_empty() {
+                    messages.push(GatewayMessage {
+                        role: "system".to_string(),
+                        content: Value::String(text),
+                        tool_calls: Vec::new(),
+                        tool_call_id: None,
+                        metadata: None,
+                    });
+                }
+            }
+            "tool" => {
+                let tool_call_id = item
+                    .get("tool_call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let content = item
+                    .get("content")
+                    .cloned()
+                    .unwrap_or_else(|| Value::String(String::new()));
+                pending_tool_results.push((tool_call_id, content));
+            }
+            "user" | "assistant" => {
+                if !pending_tool_results.is_empty() {
+                    messages.push(create_tool_results_message(&pending_tool_results));
+                    pending_tool_results.clear();
+                }
+
+                let tool_calls = if role == "assistant" {
+                    item.get("tool_calls")
+                        .and_then(Value::as_array)
+                        .map(|calls| {
+                            calls
+                                .iter()
+                                .filter_map(|call| {
+                                    Some(GatewayToolCall {
+                                        id: call.get("id").and_then(Value::as_str)?.to_string(),
+                                        name: call
+                                            .get("function")?
+                                            .get("name")
+                                            .and_then(Value::as_str)?
+                                            .to_string(),
+                                        arguments: call
+                                            .get("function")?
+                                            .get("arguments")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("{}")
+                                            .to_string(),
+                                    })
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+
+                messages.push(GatewayMessage {
+                    role: role.to_string(),
+                    content: item
+                        .get("content")
+                        .map(convert_openai_chat_content)
+                        .unwrap_or(Value::Null),
+                    tool_calls,
+                    tool_call_id: None,
+                    metadata: extract_responses_message_metadata(item, role),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    if !pending_tool_results.is_empty() {
+        messages.push(create_tool_results_message(&pending_tool_results));
+    }
+
+    messages
+}
+
+fn responses_message_content(item: &Value) -> Option<Value> {
+    item.get("content")
+        .cloned()
+        .or_else(|| item.get("text").cloned())
+}
+
+fn responses_tool_output_content(output: Option<&Value>) -> Option<Value> {
+    match output {
+        None => None,
+        Some(Value::String(text)) => Some(Value::String(text.clone())),
+        Some(other) => Some(Value::String(other.to_string())),
+    }
+}
+
+fn flush_pending_responses_user_items(
+    messages: &mut Vec<GatewayMessage>,
+    pending_user_items: &mut Vec<Value>,
+) {
+    if pending_user_items.is_empty() {
+        return;
+    }
+
+    messages.push(GatewayMessage {
+        role: "user".to_string(),
+        content: Value::Array(std::mem::take(pending_user_items)),
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+        metadata: None,
+    });
+}
+
+fn convert_responses_input_items(items: &[Value]) -> Vec<GatewayMessage> {
+    let mut messages = Vec::new();
+    let mut pending_user_items = Vec::new();
+
+    for item in items {
+        let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+
+        if let Some(role) = item.get("role").and_then(Value::as_str) {
+            flush_pending_responses_user_items(&mut messages, &mut pending_user_items);
+            messages.push(GatewayMessage {
+                role: role.to_string(),
+                content: responses_message_content(item).unwrap_or(Value::Null),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                metadata: extract_responses_message_metadata(item, role),
+            });
+            continue;
+        }
+
+        match item_type {
+            "message" => {
+                flush_pending_responses_user_items(&mut messages, &mut pending_user_items);
+                let role = item
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("user")
+                    .to_string();
+                messages.push(GatewayMessage {
+                    role: role.clone(),
+                    content: responses_message_content(item).unwrap_or(Value::Null),
+                    tool_calls: Vec::new(),
+                    tool_call_id: None,
+                    metadata: extract_responses_message_metadata(item, &role),
+                });
+            }
+            "function_call" => {
+                flush_pending_responses_user_items(&mut messages, &mut pending_user_items);
+                messages.push(GatewayMessage {
+                    role: "assistant".to_string(),
+                    content: Value::Null,
+                    tool_calls: vec![GatewayToolCall {
+                        id: item
+                            .get("call_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        name: item
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        arguments: item
+                            .get("arguments")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                            .unwrap_or_else(|| {
+                                serde_json::to_string(
+                                    &item.get("arguments").cloned().unwrap_or_else(|| json!({})),
+                                )
+                                .unwrap_or_else(|_| "{}".to_string())
+                            }),
+                    }],
+                    tool_call_id: None,
+                    metadata: None,
+                });
+            }
+            "function_call_output" => {
+                flush_pending_responses_user_items(&mut messages, &mut pending_user_items);
+                messages.push(GatewayMessage {
+                    role: "tool".to_string(),
+                    content: responses_tool_output_content(item.get("output"))
+                        .unwrap_or(Value::Null),
+                    tool_calls: Vec::new(),
+                    tool_call_id: item
+                        .get("call_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    metadata: None,
+                });
+            }
+            "input_text" | "output_text" | "input_image" | "image_url" | "image" => {
+                pending_user_items.push(item.clone());
+            }
+            _ => {}
+        }
+    }
+
+    flush_pending_responses_user_items(&mut messages, &mut pending_user_items);
+    messages
 }
 
 fn normalize_anthropic_gateway_request(body: &[u8]) -> Result<GatewayProxyRequest, String> {
@@ -1701,13 +2186,14 @@ fn normalize_anthropic_gateway_request(body: &[u8]) -> Result<GatewayProxyReques
     let mut messages = Vec::new();
 
     if let Some(system) = value.get("system") {
-        let system_text = value_to_plain_text(system);
+        let system_text = extract_text_blocks(system, &["text"]);
         if !system_text.trim().is_empty() {
             messages.push(GatewayMessage {
                 role: "system".to_string(),
                 content: Value::String(system_text),
                 tool_calls: Vec::new(),
                 tool_call_id: None,
+                metadata: None,
             });
         }
     }
@@ -1722,14 +2208,18 @@ fn normalize_anthropic_gateway_request(body: &[u8]) -> Result<GatewayProxyReques
             .and_then(Value::as_str)
             .unwrap_or("user")
             .to_string();
-        let content = message.get("content").cloned().unwrap_or(Value::Null);
+        let content = message
+            .get("content")
+            .map(convert_anthropic_content)
+            .unwrap_or(Value::Null);
         let tool_calls = extract_anthropic_tool_calls(&content);
         let tool_call_id = extract_anthropic_tool_result_id(&content);
         messages.push(GatewayMessage {
-            role,
+            role: role.clone(),
             content,
             tool_calls,
             tool_call_id,
+            metadata: extract_anthropic_message_metadata(message, &role),
         });
     }
 
@@ -1742,6 +2232,7 @@ fn normalize_anthropic_gateway_request(body: &[u8]) -> Result<GatewayProxyReques
         stream,
         messages,
         tools: convert_anthropic_tools(value.get("tools")),
+        tool_choice: value.get("tool_choice").cloned(),
         previous_response_id: value
             .get("previous_response_id")
             .and_then(Value::as_str)
@@ -1763,52 +2254,7 @@ fn normalize_openai_gateway_request(body: &[u8]) -> Result<GatewayProxyRequest, 
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let raw_messages = value
-        .get("messages")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "缺少 messages 字段".to_string())?;
-    let mut messages = Vec::new();
-
-    for message in raw_messages {
-        let role = message
-            .get("role")
-            .and_then(Value::as_str)
-            .unwrap_or("user")
-            .to_string();
-        let content = message.get("content").cloned().unwrap_or(Value::Null);
-        let tool_call_id = message
-            .get("tool_call_id")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let tool_calls = message
-            .get("tool_calls")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| {
-                        let function = item.get("function")?;
-                        let name = function.get("name").and_then(Value::as_str)?;
-                        Some(GatewayToolCall {
-                            id: item
-                                .get("id")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_string(),
-                            name: name.to_string(),
-                            arguments: json_string_or_value(function.get("arguments")),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        messages.push(GatewayMessage {
-            role,
-            content,
-            tool_calls,
-            tool_call_id,
-        });
-    }
+    let messages = convert_openai_chat_messages(value.get("messages"));
 
     if messages.is_empty() {
         return Err("messages 中没有可发送给 Kiro 的用户消息".to_string());
@@ -1819,6 +2265,7 @@ fn normalize_openai_gateway_request(body: &[u8]) -> Result<GatewayProxyRequest, 
         stream,
         messages,
         tools: convert_openai_tools(value.get("tools")),
+        tool_choice: value.get("tool_choice").cloned(),
         previous_response_id: value
             .get("previous_response_id")
             .and_then(Value::as_str)
@@ -1846,13 +2293,14 @@ fn normalize_responses_gateway_request(body: &[u8]) -> Result<GatewayProxyReques
         .unwrap_or(false);
     let mut messages = Vec::new();
     if let Some(instructions) = value.get("instructions") {
-        let text = value_to_plain_text(instructions);
+        let text = extract_text_blocks(instructions, &["text", "input_text", "output_text"]);
         if !text.trim().is_empty() {
             messages.push(GatewayMessage {
                 role: "system".to_string(),
                 content: Value::String(text),
                 tool_calls: Vec::new(),
                 tool_call_id: None,
+                metadata: None,
             });
         }
     }
@@ -1863,18 +2311,9 @@ fn normalize_responses_gateway_request(body: &[u8]) -> Result<GatewayProxyReques
             content: Value::String(text.clone()),
             tool_calls: Vec::new(),
             tool_call_id: None,
+            metadata: None,
         }),
-        Some(Value::Array(items)) => {
-            let text = value_to_plain_text(&Value::Array(items.clone()));
-            if !text.trim().is_empty() {
-                messages.push(GatewayMessage {
-                    role: "user".to_string(),
-                    content: Value::String(text),
-                    tool_calls: Vec::new(),
-                    tool_call_id: None,
-                });
-            }
-        }
+        Some(Value::Array(items)) => messages.extend(convert_responses_input_items(items)),
         _ => {}
     }
 
@@ -1887,6 +2326,7 @@ fn normalize_responses_gateway_request(body: &[u8]) -> Result<GatewayProxyReques
         stream,
         messages,
         tools: convert_openai_tools(value.get("tools")),
+        tool_choice: value.get("tool_choice").cloned(),
         previous_response_id: value
             .get("previous_response_id")
             .and_then(Value::as_str)
@@ -2275,15 +2715,66 @@ fn join_with_double_newline(left: &str, right: &str) -> String {
     }
 }
 
+fn join_with_newline(left: &str, right: &str) -> String {
+    match (left.trim().is_empty(), right.trim().is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => right.to_string(),
+        (false, true) => left.to_string(),
+        (false, false) => format!("{}\n{}", left, right),
+    }
+}
+
+fn process_tools_with_long_descriptions(
+    tools: &[GatewayTool],
+) -> (Vec<GatewayTool>, Option<String>) {
+    if tools.is_empty() {
+        return (Vec::new(), None);
+    }
+
+    let mut processed = Vec::with_capacity(tools.len());
+    let mut long_docs = Vec::new();
+
+    for tool in tools {
+        if tool.description.len() > TOOL_DESCRIPTION_MAX_LENGTH {
+            long_docs.push(format!("## Tool: {}\n\n{}", tool.name, tool.description));
+            let mut downgraded = tool.clone();
+            downgraded.description = format!(
+                "[Full documentation in system prompt under '## Tool: {}']",
+                tool.name
+            );
+            processed.push(downgraded);
+        } else {
+            processed.push(tool.clone());
+        }
+    }
+
+    let docs = if long_docs.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "# Tool Documentation\n\n{}",
+            long_docs.join("\n\n")
+        ))
+    };
+
+    (processed, docs)
+}
+
 fn merge_adjacent_gateway_messages(messages: &[GatewayMessage]) -> Vec<GatewayMessage> {
     let mut merged: Vec<GatewayMessage> = Vec::new();
     for message in messages {
         if let Some(last) = merged.last_mut() {
-            if last.role == message.role && message.tool_call_id.is_none() {
-                let existing = value_to_plain_text(&last.content);
-                let incoming = value_to_plain_text(&message.content);
-                last.content = Value::String(join_with_double_newline(&existing, &incoming));
+            if last.role == message.role {
+                let existing = extract_text_content(Some(&last.content));
+                let incoming = extract_text_content(Some(&message.content));
+                last.content = Value::String(join_with_newline(&existing, &incoming));
                 last.tool_calls.extend(message.tool_calls.clone());
+                if last.tool_call_id.is_none() {
+                    last.tool_call_id = message.tool_call_id.clone();
+                }
+                if last.metadata.is_none() {
+                    last.metadata = message.metadata.clone();
+                }
                 continue;
             }
         }
@@ -2292,23 +2783,84 @@ fn merge_adjacent_gateway_messages(messages: &[GatewayMessage]) -> Vec<GatewayMe
     merged
 }
 
-fn gateway_tools_to_kiro(tools: &[GatewayTool]) -> Option<Vec<Value>> {
+fn normalize_json_schema(value: Value) -> Value {
+    let mut schema = match value {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    };
+
+    if !schema.contains_key("type") {
+        schema.insert("type".to_string(), Value::String("object".to_string()));
+    }
+    if !matches!(schema.get("properties"), Some(Value::Object(_))) {
+        schema.insert("properties".to_string(), Value::Object(Map::new()));
+    }
+    if !matches!(schema.get("required"), Some(Value::Array(_))) {
+        schema.insert("required".to_string(), Value::Array(Vec::new()));
+    }
+
+    Value::Object(schema)
+}
+
+fn tool_description(tool: &GatewayTool) -> String {
+    if is_web_search_tool_type(&tool.tool_type) {
+        let mut parts = vec![if tool.description.is_empty() {
+            WEB_SEARCH_TOOL_DESCRIPTION.to_string()
+        } else {
+            tool.description.clone()
+        }];
+        if let Some(domains) = tool
+            .allowed_domains
+            .as_ref()
+            .filter(|items| !items.is_empty())
+        {
+            parts.push(format!("Only return results from: {}", domains.join(", ")));
+        }
+        if let Some(domains) = tool
+            .blocked_domains
+            .as_ref()
+            .filter(|items| !items.is_empty())
+        {
+            parts.push(format!("Exclude results from: {}", domains.join(", ")));
+        }
+        return parts.join(" ");
+    }
+
+    tool.description.clone()
+}
+
+fn tool_input_schema(tool: &GatewayTool) -> Value {
+    if is_web_search_tool_type(&tool.tool_type) {
+        return json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query"
+                }
+            },
+            "required": ["query"]
+        });
+    }
+
+    normalize_json_schema(tool.input_schema.clone())
+}
+
+fn gateway_tools_to_kiro(tools: &[GatewayTool]) -> Option<Vec<KiroTool>> {
     if tools.is_empty() {
         return None;
     }
     Some(
         tools
             .iter()
-            .map(|tool| {
-                json!({
-                    "toolSpecification": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "inputSchema": {
-                            "json": tool.input_schema
-                        }
-                    }
-                })
+            .map(|tool| KiroTool::ToolSpecification {
+                tool_specification: KiroToolSpec {
+                    name: tool.name.clone(),
+                    description: tool_description(tool),
+                    input_schema: KiroInputSchema {
+                        json: tool_input_schema(tool),
+                    },
+                },
             })
             .collect(),
     )
@@ -2318,7 +2870,10 @@ fn tool_result_content_to_text(value: Option<&Value>) -> String {
     match value {
         Some(Value::Array(items)) => items
             .iter()
-            .map(value_to_plain_text)
+            .map(|item| match item.get("type").and_then(Value::as_str) {
+                Some("web_search_result") => item.to_string(),
+                _ => value_to_plain_text(item),
+            })
             .filter(|text| !text.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n"),
@@ -2327,16 +2882,18 @@ fn tool_result_content_to_text(value: Option<&Value>) -> String {
     }
 }
 
-fn extract_kiro_tool_results(message: &GatewayMessage) -> Vec<Value> {
+fn extract_kiro_tool_results(message: &GatewayMessage) -> Vec<KiroToolResult> {
     let mut results = Vec::new();
 
     if message.role == "tool" {
         if let Some(tool_use_id) = message.tool_call_id.as_deref() {
-            results.push(json!({
-                "content": [{ "text": value_to_plain_text(&message.content) }],
-                "status": "success",
-                "toolUseId": tool_use_id
-            }));
+            results.push(KiroToolResult {
+                content: vec![KiroToolResultContent::Text {
+                    text: value_to_plain_text(&message.content),
+                }],
+                status: "success".to_string(),
+                tool_use_id: tool_use_id.to_string(),
+            });
         }
         return results;
     }
@@ -2358,46 +2915,322 @@ fn extract_kiro_tool_results(message: &GatewayMessage) -> Vec<Value> {
         } else {
             "success"
         };
-        results.push(json!({
-            "content": [{ "text": tool_result_content_to_text(item.get("content")) }],
-            "status": status,
-            "toolUseId": tool_use_id
-        }));
+        results.push(KiroToolResult {
+            content: vec![KiroToolResultContent::Text {
+                text: tool_result_content_to_text(item.get("content")),
+            }],
+            status: status.to_string(),
+            tool_use_id: tool_use_id.to_string(),
+        });
     }
     results
 }
 
-fn gateway_tool_uses(tool_calls: &[GatewayToolCall]) -> Option<Vec<Value>> {
-    if tool_calls.is_empty() {
+fn extract_kiro_tool_results_from_tool_message(message: &GatewayMessage) -> Vec<KiroToolResult> {
+    vec![KiroToolResult {
+        content: vec![KiroToolResultContent::Text {
+            text: extract_text_content(Some(&message.content)),
+        }],
+        status: "success".to_string(),
+        tool_use_id: message.tool_call_id.clone().unwrap_or_default(),
+    }]
+}
+
+fn extract_tool_uses(message: &GatewayMessage) -> Option<Vec<KiroToolUse>> {
+    if message.tool_calls.is_empty() {
         return None;
     }
     Some(
-        tool_calls
+        message
+            .tool_calls
             .iter()
-            .map(|call| {
-                json!({
-                    "name": call.name,
-                    "input": parse_tool_arguments(&call.arguments),
-                    "toolUseId": call.id
-                })
+            .map(|call| KiroToolUse {
+                name: call.name.clone(),
+                input: parse_tool_arguments(&call.arguments),
+                tool_use_id: call.id.clone(),
             })
             .collect(),
     )
 }
 
-fn build_kiro_user_context(tools: Option<Vec<Value>>, tool_results: Vec<Value>) -> Option<Value> {
-    if tools.is_none() && tool_results.is_empty() {
+fn build_history_assistant_message(message: &GatewayMessage) -> HistoryAssistantMessage {
+    HistoryAssistantMessage {
+        content: extract_text_content(Some(&message.content)),
+        tool_uses: extract_tool_uses(message),
+        reasoning_content: assistant_metadata_value(message, "reasoningContent")
+            .or_else(|| extract_reasoning_content(Some(&message.content)))
+            .and_then(|value| meaningful_optional_value(Some(value))),
+        references: assistant_metadata_value(message, "references")
+            .and_then(|value| meaningful_optional_value(Some(value))),
+        supplementary_web_links: assistant_metadata_value(message, "supplementaryWebLinks")
+            .and_then(|value| meaningful_optional_value(Some(value))),
+        followup_prompt: assistant_metadata_value(message, "followupPrompt")
+            .and_then(|value| meaningful_optional_value(Some(value))),
+        message_id: assistant_metadata_value(message, "messageId")
+            .and_then(|value| value.as_str().map(str::to_string))
+            .filter(|value| !value.trim().is_empty()),
+        cache_point: assistant_metadata_value(message, "cachePoint")
+            .and_then(|value| meaningful_optional_value(Some(value))),
+    }
+}
+
+fn images_option(images: Vec<ImageBlock>) -> Option<Vec<ImageBlock>> {
+    if images.is_empty() {
         return None;
     }
-    Some(json!({
-        "toolResults": if tool_results.is_empty() { Value::Null } else { Value::Array(tool_results) },
-        "tools": tools.unwrap_or_default()
-    }))
-    .map(|mut context| {
-        if let Some(obj) = context.as_object_mut() {
-            obj.retain(|_, value| !value.is_null() && !matches!(value, Value::Array(items) if items.is_empty()));
+    Some(images)
+}
+
+async fn extract_images(content: Option<&Value>) -> Vec<ImageBlock> {
+    let Some(Value::Array(items)) = content else {
+        return Vec::new();
+    };
+
+    let mut images = Vec::new();
+    for item in items {
+        if let Some(image) = extract_image_block(item).await {
+            images.push(image);
         }
-        context
+    }
+    images
+}
+
+async fn extract_image_block(item: &Value) -> Option<ImageBlock> {
+    let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+    match item_type {
+        "image" => {
+            let source = item.get("source")?;
+            let bytes = source.get("data").and_then(Value::as_str)?.to_string();
+            if encoded_image_exceeds_limit(&bytes) {
+                return None;
+            }
+            let media_type = source
+                .get("media_type")
+                .and_then(Value::as_str)
+                .unwrap_or("image/png");
+            Some(ImageBlock {
+                format: media_type_to_format(media_type)?,
+                source: ImageSource::Bytes { bytes },
+            })
+        }
+        "image_url" => {
+            let url = item
+                .get("image_url")
+                .and_then(|value| value.get("url").or(Some(value)))
+                .and_then(Value::as_str)?;
+            let (format, bytes) = resolve_image_source(url).await?;
+            Some(ImageBlock {
+                format,
+                source: ImageSource::Bytes { bytes },
+            })
+        }
+        "input_image" => {
+            let url = item
+                .get("image_url")
+                .and_then(Value::as_str)
+                .or_else(|| item.get("url").and_then(Value::as_str))?;
+            let (format, bytes) = resolve_image_source(url).await?;
+            Some(ImageBlock {
+                format,
+                source: ImageSource::Bytes { bytes },
+            })
+        }
+        _ => None,
+    }
+}
+
+fn media_type_to_format(media_type: &str) -> Option<String> {
+    match media_type.trim().to_ascii_lowercase().as_str() {
+        "image/png" | "png" => Some("png".to_string()),
+        "image/jpeg" | "image/jpg" | "jpeg" | "jpg" => Some("jpeg".to_string()),
+        "image/gif" | "gif" => Some("gif".to_string()),
+        "image/webp" | "webp" => Some("webp".to_string()),
+        _ => None,
+    }
+}
+
+fn parse_data_url(url: &str) -> Option<(String, String)> {
+    let rest = url.strip_prefix("data:")?;
+    let (meta, bytes) = rest.split_once(',')?;
+    let media_type = meta.split(';').next().unwrap_or_default();
+    if encoded_image_exceeds_limit(bytes) {
+        return None;
+    }
+    Some((media_type_to_format(media_type)?, bytes.to_string()))
+}
+
+async fn resolve_image_source(url: &str) -> Option<(String, String)> {
+    if let Some(parsed) = parse_data_url(url) {
+        return Some(parsed);
+    }
+
+    let image_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(IMAGE_FETCH_TIMEOUT_SECONDS))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .ok()?;
+    let mut current_url = validate_remote_image_url(url).await?;
+
+    for _ in 0..=MAX_IMAGE_REDIRECTS {
+        let response = image_client.get(current_url.clone()).send().await.ok()?;
+        if response.status().is_redirection() {
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)?
+                .to_str()
+                .ok()?;
+            let next_url = current_url.join(location).ok()?;
+            current_url = validate_remote_image_url(next_url.as_str()).await?;
+            continue;
+        }
+        if !response.status().is_success() {
+            return None;
+        }
+        if response
+            .content_length()
+            .map(|length| length > MAX_IMAGE_SOURCE_BYTES as u64)
+            .unwrap_or(false)
+        {
+            return None;
+        }
+
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let final_url = response.url().clone();
+        let bytes = response.bytes().await.ok()?;
+        if bytes.len() > MAX_IMAGE_SOURCE_BYTES {
+            return None;
+        }
+        let format = content_type
+            .as_deref()
+            .and_then(|value| value.split(';').next())
+            .and_then(media_type_to_format)
+            .or_else(|| infer_image_format_from_url(final_url.as_str()))?;
+
+        return Some((format, STANDARD.encode(bytes)));
+    }
+
+    None
+}
+
+fn infer_image_format_from_url(url: &str) -> Option<String> {
+    let path = reqwest::Url::parse(url).ok()?.path().to_ascii_lowercase();
+    if path.ends_with(".png") {
+        Some("png".to_string())
+    } else if path.ends_with(".jpg") || path.ends_with(".jpeg") {
+        Some("jpeg".to_string())
+    } else if path.ends_with(".gif") {
+        Some("gif".to_string())
+    } else if path.ends_with(".webp") {
+        Some("webp".to_string())
+    } else {
+        None
+    }
+}
+
+async fn validate_remote_image_url(url: &str) -> Option<reqwest::Url> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        _ => return None,
+    }
+
+    let host = parsed.host_str()?;
+    if host.eq_ignore_ascii_case("localhost") {
+        return None;
+    }
+
+    let port = parsed.port_or_known_default()?;
+    let mut resolved_any = false;
+    for address in lookup_host((host, port)).await.ok()? {
+        resolved_any = true;
+        if is_restricted_remote_ip(address.ip()) {
+            return None;
+        }
+    }
+
+    if !resolved_any {
+        return None;
+    }
+
+    Some(parsed)
+}
+
+fn encoded_image_exceeds_limit(encoded: &str) -> bool {
+    encoded.len() > max_base64_len_for_bytes(MAX_IMAGE_SOURCE_BYTES)
+}
+
+fn max_base64_len_for_bytes(max_bytes: usize) -> usize {
+    max_bytes.div_ceil(3) * 4
+}
+
+fn is_restricted_remote_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(addr) => {
+            addr.is_private()
+                || addr.is_loopback()
+                || addr.is_link_local()
+                || addr.is_broadcast()
+                || addr.is_documentation()
+                || addr.is_unspecified()
+                || addr.is_multicast()
+                || is_ipv4_shared(addr)
+                || is_ipv4_reserved(addr)
+        }
+        IpAddr::V6(addr) => {
+            addr.is_loopback()
+                || addr.is_unspecified()
+                || addr.is_multicast()
+                || addr.is_unique_local()
+                || addr.is_unicast_link_local()
+                || is_ipv6_documentation(addr)
+        }
+    }
+}
+
+fn is_ipv4_shared(addr: Ipv4Addr) -> bool {
+    let octets = addr.octets();
+    octets[0] == 100 && (64..=127).contains(&octets[1])
+}
+
+fn is_ipv4_reserved(addr: Ipv4Addr) -> bool {
+    let octets = addr.octets();
+    octets[0] >= 240
+}
+
+fn is_ipv6_documentation(addr: Ipv6Addr) -> bool {
+    let segments = addr.segments();
+    segments[0] == 0x2001 && segments[1] == 0x0db8
+}
+
+fn build_kiro_user_context(
+    tools: Option<Vec<KiroTool>>,
+    tool_results: Vec<KiroToolResult>,
+    tool_choice: Option<Value>,
+) -> Option<UserInputMessageContext> {
+    if tools.is_none() && tool_results.is_empty() && tool_choice.is_none() {
+        return None;
+    }
+    Some(UserInputMessageContext {
+        additional_context: None,
+        app_studio_context: None,
+        console_state: None,
+        diagnostic: None,
+        editor_state: None,
+        env_state: None,
+        git_state: None,
+        shell_state: None,
+        tool_results: if tool_results.is_empty() {
+            None
+        } else {
+            Some(tool_results)
+        },
+        tools,
+        tool_choice,
+        user_settings: None,
     })
 }
 
@@ -2407,22 +3240,30 @@ async fn build_kiro_payload(
     available_models: &[String],
 ) -> Result<Value, String> {
     let model_id = get_internal_model_id_with_fallback(&request.model, available_models)?;
+    let normalized_tool_choice = normalize_tool_choice(&request.tool_choice, &request.tools)?;
     let conversation_id = request
         .previous_response_id
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let agent_continuation_id = conversation_id.clone();
+    let (processed_tools, tool_docs) = process_tools_with_long_descriptions(&request.tools);
+    let tool_docs_for_current = tool_docs.clone();
     let mut system_prompt = String::new();
     let mut non_system_messages = Vec::new();
 
     for message in &request.messages {
         if message.role == "system" {
-            let text = value_to_plain_text(&message.content);
+            let text = extract_text_content(Some(&message.content));
             if !text.trim().is_empty() {
                 system_prompt = join_with_double_newline(&system_prompt, &text);
             }
         } else {
             non_system_messages.push(message.clone());
         }
+    }
+
+    if let Some(tool_docs) = tool_docs {
+        system_prompt = join_with_double_newline(&system_prompt, &tool_docs);
     }
 
     if non_system_messages.is_empty() {
@@ -2435,39 +3276,58 @@ async fn build_kiro_payload(
         .position(|message| matches!(message.role.as_str(), "user" | "tool"));
     let history = if merged_messages.len() > 1 {
         let mut items = Vec::new();
+        let history_len = merged_messages.len() - 1;
         for (index, message) in merged_messages[..merged_messages.len() - 1]
             .iter()
             .enumerate()
         {
             match message.role.as_str() {
                 "assistant" => {
-                    items.push(json!({
-                        "assistantResponseMessage": {
-                            "content": value_to_plain_text(&message.content),
-                            "toolUses": gateway_tool_uses(&message.tool_calls)
-                        }
-                    }));
+                    let mut assistant_message = build_history_assistant_message(message);
+                    if history_len > 10 && index == history_len - 10 {
+                        assistant_message.cache_point = Some(json!({ "type": "default" }));
+                    }
+                    items.push(HistoryItem::Assistant {
+                        assistant_response_message: assistant_message,
+                    });
                 }
                 "user" | "tool" => {
-                    let mut content = if message.role == "tool" {
-                        String::new()
-                    } else {
-                        value_to_plain_text(&message.content)
-                    };
-                    if Some(index) == first_user_index && !system_prompt.trim().is_empty() {
-                        content = join_with_double_newline(&system_prompt, &content);
-                    }
-                    items.push(json!({
-                        "userInputMessage": {
-                            "content": content,
-                            "modelId": model_id,
-                            "origin": "AI_EDITOR",
-                            "userInputMessageContext": build_kiro_user_context(
-                                None,
-                                extract_kiro_tool_results(message)
-                            )
+                    let content = if message.role == "tool" {
+                        if Some(index) == first_user_index && !system_prompt.trim().is_empty() {
+                            system_prompt.clone()
+                        } else {
+                            String::new()
                         }
-                    }));
+                    } else {
+                        let mut content = extract_text_content(Some(&message.content));
+                        if Some(index) == first_user_index && !system_prompt.trim().is_empty() {
+                            content = join_with_double_newline(&system_prompt, &content);
+                        }
+                        content
+                    };
+                    let images = if message.role == "tool" {
+                        None
+                    } else {
+                        images_option(extract_images(Some(&message.content)).await)
+                    };
+                    let tool_results = if message.role == "tool" {
+                        extract_kiro_tool_results_from_tool_message(message)
+                    } else {
+                        extract_kiro_tool_results(message)
+                    };
+                    items.push(HistoryItem::User {
+                        user_input_message: HistoryUserMessage {
+                            content,
+                            model_id: model_id.clone(),
+                            origin: "AI_EDITOR".to_string(),
+                            images,
+                            user_input_message_context: build_kiro_user_context(
+                                None,
+                                tool_results,
+                                None,
+                            ),
+                        },
+                    });
                 }
                 _ => {}
             }
@@ -2484,13 +3344,12 @@ async fn build_kiro_payload(
     let current_message = merged_messages
         .last()
         .ok_or_else(|| "没有当前消息".to_string())?;
-    let mut current_content = if current_message.role == "tool" {
-        String::new()
-    } else {
-        value_to_plain_text(&current_message.content)
-    };
+    let mut current_content = extract_text_content(Some(&current_message.content));
     if history.is_none() && !system_prompt.trim().is_empty() {
         current_content = join_with_double_newline(&system_prompt, &current_content);
+    }
+    if let Some(tool_docs) = tool_docs_for_current {
+        current_content = join_with_double_newline(&tool_docs, &current_content);
     }
     if current_message.role == "assistant" || current_content.trim().is_empty() {
         current_content = if current_content.trim().is_empty() {
@@ -2499,32 +3358,42 @@ async fn build_kiro_payload(
             current_content
         };
     }
-
-    let mut payload = json!({
-        "conversationState": {
-            "chatTriggerType": "MANUAL",
-            "conversationId": conversation_id,
-            "agentContinuationId": conversation_id,
-            "agentTaskType": "vibe",
-            "currentMessage": {
-                "userInputMessage": {
-                    "content": current_content,
-                    "modelId": model_id,
-                    "origin": "AI_EDITOR",
-                    "userInputMessageContext": build_kiro_user_context(
-                        gateway_tools_to_kiro(&request.tools),
-                        extract_kiro_tool_results(current_message)
-                    )
-                }
+    let current_images = images_option(extract_images(Some(&current_message.content)).await);
+    let current_tool_results = if current_message.role == "tool" {
+        extract_kiro_tool_results_from_tool_message(current_message)
+    } else {
+        extract_kiro_tool_results(current_message)
+    };
+    let payload = KiroPayload {
+        conversation_state: ConversationState {
+            chat_trigger_type: "MANUAL".to_string(),
+            conversation_id,
+            agent_continuation_id: Some(agent_continuation_id),
+            agent_task_type: Some("vibe".to_string()),
+            current_message: CurrentMessage {
+                user_input_message: UserInputMessage {
+                    content: current_content,
+                    model_id,
+                    origin: "AI_EDITOR".to_string(),
+                    cache_point: None,
+                    client_cache_config: None,
+                    documents: None,
+                    images: current_images,
+                    user_input_message_context: build_kiro_user_context(
+                        gateway_tools_to_kiro(&processed_tools),
+                        current_tool_results,
+                        normalized_tool_choice,
+                    ),
+                    user_intent: None,
+                },
             },
-            "history": history,
-            "customizationArn": Value::Null,
-            "workspaceId": Value::Null
+            history,
+            customization_arn: None,
+            workspace_id: None,
         },
-        "profileArn": profile_arn
-    });
-    prune_nulls(&mut payload);
-    Ok(payload)
+        profile_arn,
+    };
+    serde_json::to_value(payload).map_err(|e| format!("序列化 Kiro payload 失败: {e}"))
 }
 
 fn prune_nulls(value: &mut Value) {
@@ -2547,19 +3416,62 @@ fn prune_nulls(value: &mut Value) {
 }
 
 fn trim_payload_history_if_needed(payload: &mut Value) {
-    while serde_json::to_vec(payload)
-        .map(|bytes| bytes.len() > MAX_KIRO_PAYLOAD_SIZE)
-        .unwrap_or(false)
-    {
+    let original_size = serde_json::to_vec(payload)
+        .ok()
+        .map(|bytes| bytes.len())
+        .unwrap_or(0);
+    if original_size <= MAX_KIRO_PAYLOAD_SIZE {
+        return;
+    }
+
+    loop {
+        let current_size = serde_json::to_vec(payload)
+            .ok()
+            .map(|bytes| bytes.len())
+            .unwrap_or(0);
+        if current_size <= MAX_KIRO_PAYLOAD_SIZE {
+            break;
+        }
+
         let Some(history) = payload
             .pointer_mut("/conversationState/history")
             .and_then(Value::as_array_mut)
         else {
             break;
         };
-        if history.is_empty() {
+
+        if history.len() <= 2 {
             break;
         }
+
+        let first_is_assistant_with_tools = history
+            .first()
+            .and_then(|msg| msg.get("assistantResponseMessage"))
+            .and_then(|msg| msg.get("toolUses"))
+            .and_then(Value::as_array)
+            .map(|arr| !arr.is_empty())
+            .unwrap_or(false);
+
+        if first_is_assistant_with_tools && history.len() > 1 {
+            let second_has_tool_results = history
+                .get(1)
+                .and_then(|msg| msg.get("userInputMessage"))
+                .and_then(|msg| msg.get("userInputMessageContext"))
+                .and_then(|ctx| ctx.get("toolResults"))
+                .and_then(Value::as_array)
+                .map(|arr| !arr.is_empty())
+                .unwrap_or(false);
+
+            if second_has_tool_results {
+                if history.len() > 3 {
+                    history.remove(0);
+                    history.remove(0);
+                    continue;
+                }
+                break;
+            }
+        }
+
         history.remove(0);
     }
 }
@@ -2725,34 +3637,55 @@ async fn send_generate_request_direct(
         "https://q.{}.amazonaws.com/generateAssistantResponse",
         upstream.region
     );
-    let response = with_kiro_upstream_headers(
-        http.post(&url),
-        upstream,
-        "application/vnd.amazon.eventstream",
-        true,
-    )
-    .json(payload)
-    .send()
-    .await
-    .map_err(|e| DirectProxyError {
-        status: 502,
-        message: format!("上游请求失败: {e}"),
-    })?;
+    const MAX_RETRIES: u32 = 3;
+    let mut attempt = 0;
 
-    let status = response.status().as_u16();
-    if !(200..300).contains(&status) {
-        let body = response.text().await.unwrap_or_default();
-        return Err(map_direct_upstream_error(status, &body));
-    }
-
-    response
-        .bytes()
+    loop {
+        attempt += 1;
+        let response = with_kiro_upstream_headers(
+            http.post(&url),
+            upstream,
+            "application/vnd.amazon.eventstream",
+            true,
+        )
+        .json(payload)
+        .send()
         .await
-        .map(|bytes| bytes.to_vec())
         .map_err(|e| DirectProxyError {
             status: 502,
-            message: format!("读取上游响应失败: {e}"),
-        })
+            message: format!("上游请求失败: {e}"),
+        })?;
+
+        let status = response.status().as_u16();
+        if (200..300).contains(&status) {
+            return response
+                .bytes()
+                .await
+                .map(|bytes| bytes.to_vec())
+                .map_err(|e| DirectProxyError {
+                    status: 502,
+                    message: format!("读取上游响应失败: {e}"),
+                });
+        }
+
+        let body = response.text().await.unwrap_or_default();
+        if status == 429 {
+            return Err(map_direct_upstream_error(status, &body));
+        }
+
+        let should_retry = attempt < MAX_RETRIES && (status == 403 || status >= 500);
+        if should_retry {
+            let backoff_ms = 1000 * 2u64.pow(attempt - 1);
+            logger::log_warn(&format!(
+                "[KiroLocalAccess] 上游请求失败(status={})，{}ms 后重试({}/{})",
+                status, backoff_ms, attempt, MAX_RETRIES
+            ));
+            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+            continue;
+        }
+
+        return Err(map_direct_upstream_error(status, &body));
+    }
 }
 
 fn crc32(data: &[u8]) -> u32 {
@@ -2902,6 +3835,33 @@ fn parse_kiro_event(json_str: &str) -> Option<KiroEvent> {
         }
     }
 
+    if let Some(percentage) = value.get("contextUsagePercentage").and_then(Value::as_f64) {
+        return Some(KiroEvent::ContextUsage {
+            percentage: percentage as f32,
+        });
+    }
+
+    if let Some(metering) = value.get("meteringEvent").and_then(Value::as_object) {
+        let unit = metering
+            .get("unit")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let unit_plural = metering
+            .get("unitPlural")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let usage = metering.get("usage").and_then(Value::as_f64).unwrap_or(0.0);
+        if !unit.is_empty() {
+            return Some(KiroEvent::Metering {
+                unit,
+                unit_plural,
+                usage,
+            });
+        }
+    }
+
     if let Some(text) = value
         .get("reasoningContentEvent")
         .and_then(|item| item.get("text"))
@@ -2923,6 +3883,14 @@ fn parse_kiro_event(json_str: &str) -> Option<KiroEvent> {
         if !text.is_empty() {
             return Some(KiroEvent::Thinking(text.to_string()));
         }
+    }
+
+    if let Some(citation) = parse_citation_event(&value) {
+        return Some(KiroEvent::Citation {
+            text: citation.text,
+            link: citation.link,
+            target: citation.target,
+        });
     }
 
     if let Some(tool_use_id) = value.get("toolUseId").and_then(Value::as_str) {
@@ -3046,6 +4014,21 @@ fn aggregate_kiro_response(raw: &str) -> AggregatedKiroResponse {
                     aggregated.cache_read_input_tokens = cache_read_input_tokens;
                     aggregated.cache_creation_input_tokens = cache_creation_input_tokens;
                 }
+                KiroEvent::ContextUsage { percentage } => {
+                    aggregated.context_usage_percentage = Some(percentage);
+                }
+                KiroEvent::Metering { usage, .. } => {
+                    aggregated.metering_usage = Some(usage);
+                }
+                KiroEvent::Citation { text, link, target } => {
+                    aggregated.citations.push(
+                        crate::modules::kiro_gateway::models::AggregatedCitation {
+                            text,
+                            link,
+                            target,
+                        },
+                    );
+                }
             }
         }
         remaining = &remaining[json_len..];
@@ -3062,6 +4045,44 @@ fn aggregate_kiro_response(raw: &str) -> AggregatedKiroResponse {
     }
     dedupe_gateway_tool_calls(&mut aggregated.tool_calls);
     aggregated
+}
+
+fn parse_citation_event(
+    value: &Value,
+) -> Option<crate::modules::kiro_gateway::models::AggregatedCitation> {
+    let target = value.get("target")?.clone();
+    let link = value
+        .get("citationLink")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())?
+        .to_string();
+    let text = value
+        .get("citationText")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string);
+    ensure_citation_target_supported(&target)?;
+
+    Some(crate::modules::kiro_gateway::models::AggregatedCitation { text, link, target })
+}
+
+fn ensure_citation_target_supported(target: &Value) -> Option<()> {
+    if let Some(range) = target.get("range") {
+        let start_index = range.get("start").and_then(Value::as_u64)? as usize;
+        let end_index = range.get("end").and_then(Value::as_u64)? as usize;
+        if end_index < start_index {
+            return None;
+        }
+        return Some(());
+    }
+
+    if target.get("location").and_then(Value::as_u64).is_some() {
+        return Some(());
+    }
+
+    None
 }
 
 fn dedupe_gateway_tool_calls(tool_calls: &mut Vec<GatewayToolCall>) {
@@ -3196,7 +4217,10 @@ async fn generate_via_kiro_cli(
     result
 }
 
-fn anthropic_content_blocks(aggregated: &AggregatedKiroResponse) -> Vec<Value> {
+fn anthropic_content_blocks(
+    aggregated: &AggregatedKiroResponse,
+    server_tool_calls: &[ServerToolCall],
+) -> Vec<Value> {
     let mut content = Vec::new();
     if !aggregated.thinking.is_empty() {
         content.push(json!({
@@ -3204,11 +4228,30 @@ fn anthropic_content_blocks(aggregated: &AggregatedKiroResponse) -> Vec<Value> {
             "thinking": aggregated.thinking
         }));
     }
-    if !aggregated.text.is_empty() {
+    for call in server_tool_calls {
         content.push(json!({
+            "type": "server_tool_use",
+            "id": call.id,
+            "name": call.name,
+            "input": call.input
+        }));
+        content.push(json!({
+            "type": "web_search_tool_result",
+            "tool_use_id": call.id,
+            "content": call.result_content
+        }));
+    }
+    if !aggregated.text.is_empty() {
+        let mut text_block = json!({
             "type": "text",
             "text": aggregated.text
-        }));
+        });
+        if let Some(citations) =
+            build_anthropic_text_citations(&aggregated.citations, &aggregated.text)
+        {
+            text_block["citations"] = citations;
+        }
+        content.push(text_block);
     }
     for call in &aggregated.tool_calls {
         content.push(json!({
@@ -3224,12 +4267,104 @@ fn anthropic_content_blocks(aggregated: &AggregatedKiroResponse) -> Vec<Value> {
     content
 }
 
+fn infer_citation_text(
+    citation: &crate::modules::kiro_gateway::models::AggregatedCitation,
+    message_text: &str,
+) -> String {
+    if let Some(text) = citation
+        .text
+        .as_ref()
+        .filter(|text| !text.trim().is_empty())
+    {
+        return text.clone();
+    }
+
+    if let Some(range) = citation.target.get("range") {
+        let start = range.get("start").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let end = range
+            .get("end")
+            .and_then(Value::as_u64)
+            .unwrap_or(start as u64) as usize;
+        let chars: Vec<char> = message_text.chars().collect();
+        if start < chars.len() && end <= chars.len() && start < end {
+            return chars[start..end].iter().collect();
+        }
+    }
+
+    String::new()
+}
+
+fn extract_anthropic_citation_bounds(
+    citation: &crate::modules::kiro_gateway::models::AggregatedCitation,
+    message_text: &str,
+) -> Option<(usize, usize)> {
+    let range = citation.target.get("range")?;
+    let start = range.get("start").and_then(Value::as_u64)? as usize;
+    let end = range.get("end").and_then(Value::as_u64)? as usize;
+    if start > end || end > message_text.chars().count() {
+        return None;
+    }
+    Some((start, end))
+}
+
+fn build_anthropic_text_citation(
+    citation: &crate::modules::kiro_gateway::models::AggregatedCitation,
+    message_text: &str,
+) -> Option<Value> {
+    let (start_char_index, end_char_index) =
+        extract_anthropic_citation_bounds(citation, message_text)?;
+    let cited_text = infer_citation_text(citation, message_text);
+
+    Some(json!({
+        "type": "char_location",
+        "cited_text": cited_text,
+        "document_index": 0,
+        "document_title": citation.link,
+        "start_char_index": start_char_index,
+        "end_char_index": end_char_index,
+        "file_id": Value::Null
+    }))
+}
+
+fn build_anthropic_text_citations(
+    citations: &[crate::modules::kiro_gateway::models::AggregatedCitation],
+    message_text: &str,
+) -> Option<Value> {
+    let mapped: Vec<Value> = citations
+        .iter()
+        .filter_map(|citation| build_anthropic_text_citation(citation, message_text))
+        .collect();
+
+    if mapped.is_empty() {
+        None
+    } else {
+        Some(Value::Array(mapped))
+    }
+}
+
+fn build_anthropic_citation_delta_event(
+    index: usize,
+    citation: &crate::modules::kiro_gateway::models::AggregatedCitation,
+    message_text: &str,
+) -> Option<Value> {
+    Some(json!({
+        "type": "content_block_delta",
+        "index": index,
+        "delta": {
+            "type": "citations_delta",
+            "citation": build_anthropic_text_citation(citation, message_text)?
+        }
+    }))
+}
+
 fn build_direct_anthropic_response(
     model: &str,
     aggregated: &AggregatedKiroResponse,
+    server_tool_calls: &[ServerToolCall],
     stream: bool,
+    response_id: Option<String>,
 ) -> ProxyResult {
-    let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
+    let message_id = response_id.unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4().simple()));
     let stop_reason = if aggregated.tool_calls.is_empty() {
         "end_turn"
     } else {
@@ -3242,7 +4377,7 @@ fn build_direct_anthropic_response(
             "type": "message",
             "role": "assistant",
             "model": model,
-            "content": anthropic_content_blocks(aggregated),
+            "content": anthropic_content_blocks(aggregated, server_tool_calls),
             "stop_reason": stop_reason,
             "stop_sequence": Value::Null,
             "usage": {
@@ -3310,6 +4445,49 @@ fn build_direct_anthropic_response(
         index += 1;
     }
 
+    for call in server_tool_calls {
+        push_sse_event(
+            &mut body,
+            Some("content_block_start"),
+            &json!({
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {
+                    "type": "server_tool_use",
+                    "id": call.id,
+                    "name": call.name,
+                    "input": call.input
+                }
+            }),
+        );
+        push_sse_event(
+            &mut body,
+            Some("content_block_stop"),
+            &json!({ "type": "content_block_stop", "index": index }),
+        );
+        index += 1;
+
+        push_sse_event(
+            &mut body,
+            Some("content_block_start"),
+            &json!({
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": call.id,
+                    "content": call.result_content
+                }
+            }),
+        );
+        push_sse_event(
+            &mut body,
+            Some("content_block_stop"),
+            &json!({ "type": "content_block_stop", "index": index }),
+        );
+        index += 1;
+    }
+
     if !aggregated.text.is_empty() {
         push_sse_event(
             &mut body,
@@ -3330,6 +4508,13 @@ fn build_direct_anthropic_response(
                     "delta": { "type": "text_delta", "text": chunk }
                 }),
             );
+        }
+        for citation in &aggregated.citations {
+            if let Some(delta) =
+                build_anthropic_citation_delta_event(index, citation, &aggregated.text)
+            {
+                push_sse_event(&mut body, Some("content_block_delta"), &delta);
+            }
         }
         push_sse_event(
             &mut body,
@@ -3376,6 +4561,27 @@ fn build_direct_anthropic_response(
         index += 1;
     }
 
+    if let Some(percentage) = aggregated.context_usage_percentage {
+        push_sse_event(
+            &mut body,
+            Some("context_usage"),
+            &json!({
+                "type": "context_usage",
+                "percentage": percentage
+            }),
+        );
+    }
+    if let Some(usage) = aggregated.metering_usage {
+        push_sse_event(
+            &mut body,
+            Some("metering"),
+            &json!({
+                "type": "metering",
+                "usage": usage
+            }),
+        );
+    }
+
     push_sse_event(
         &mut body,
         Some("message_delta"),
@@ -3414,8 +4620,10 @@ fn build_direct_openai_response(
     model: &str,
     aggregated: &AggregatedKiroResponse,
     stream: bool,
+    response_id: Option<String>,
 ) -> ProxyResult {
-    let request_id = format!("chatcmpl-{}", uuid::Uuid::new_v4().simple());
+    let request_id =
+        response_id.unwrap_or_else(|| format!("chatcmpl-{}", uuid::Uuid::new_v4().simple()));
     let created = chrono::Utc::now().timestamp();
     let finish_reason = if aggregated.tool_calls.is_empty() {
         "stop"
@@ -3522,46 +4730,488 @@ fn push_sse_data(body: &mut String, payload: &Value) {
     body.push_str("\n\n");
 }
 
-fn build_direct_responses_response(
+fn build_responses_citation_annotations(
+    citations: &[crate::modules::kiro_gateway::models::AggregatedCitation],
+) -> Vec<Value> {
+    citations
+        .iter()
+        .map(|citation| {
+            let mut value = json!({
+                "type": "url_citation",
+                "url": citation.link.clone(),
+                "target": citation.target.clone(),
+                "citationLink": citation.link.clone()
+            });
+            if let Some(range) = citation.target.get("range") {
+                if let Some(start_index) = range.get("start").and_then(Value::as_u64) {
+                    value["start_index"] = Value::from(start_index);
+                }
+                if let Some(end_index) = range.get("end").and_then(Value::as_u64) {
+                    value["end_index"] = Value::from(end_index);
+                }
+            }
+            if let Some(text) = citation.text.as_ref() {
+                value["citationText"] = Value::String(text.clone());
+            }
+            value
+        })
+        .collect()
+}
+
+fn build_responses_annotation_added_event(
+    response_id: &str,
+    message_id: &str,
+    annotation: Value,
+    annotation_index: usize,
+    sequence_number: usize,
+) -> Value {
+    json!({
+        "type": "response.output_text.annotation.added",
+        "response_id": response_id,
+        "item_id": message_id,
+        "output_index": 0,
+        "content_index": 0,
+        "annotation_index": annotation_index,
+        "annotation": annotation,
+        "sequence_number": sequence_number
+    })
+}
+
+fn extract_web_search_sources(server_tool_calls: &[ServerToolCall]) -> Vec<WebSearchSource> {
+    let mut seen = HashSet::new();
+    let mut sources = Vec::new();
+
+    for call in server_tool_calls.iter().filter(|call| call.name == WEB_SEARCH_TOOL_NAME) {
+        let Some(results) = call.result_content.as_array() else {
+            continue;
+        };
+
+        for item in results {
+            let Some(url) = item
+                .get("url")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+
+            if !seen.insert(url.to_string()) {
+                continue;
+            }
+
+            let title = item
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(url)
+                .to_string();
+
+            sources.push(WebSearchSource {
+                title,
+                url: url.to_string(),
+            });
+        }
+    }
+
+    sources
+}
+
+fn build_responses_output_text(
+    aggregated: &AggregatedKiroResponse,
+    server_tool_calls: &[ServerToolCall],
+) -> Value {
+    let mut text = aggregated.text.clone();
+    let mut annotations = build_responses_citation_annotations(&aggregated.citations);
+    let sources = extract_web_search_sources(server_tool_calls);
+
+    if !sources.is_empty() {
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str("Sources:\n");
+
+        for (index, source) in sources.iter().enumerate() {
+            let prefix = format!("[{}] ", index + 1);
+            let start_index = text.chars().count() + prefix.chars().count();
+            text.push_str(&prefix);
+            text.push_str(&source.title);
+            let end_index = start_index + source.title.chars().count();
+            annotations.push(json!({
+                "type": "url_citation",
+                "start_index": start_index,
+                "end_index": end_index,
+                "url": source.url,
+                "title": source.title
+            }));
+            text.push('\n');
+        }
+
+        let _ = text.pop();
+    }
+
+    json!({
+        "text": text,
+        "annotations": annotations
+    })
+}
+
+fn build_responses_web_search_call(call: &ServerToolCall) -> Value {
+    let mut action = json!({
+        "type": "search"
+    });
+    if let Some(query) = call
+        .input
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        action["query"] = Value::String(query.to_string());
+    }
+
+    let sources = extract_web_search_sources(std::slice::from_ref(call));
+    if !sources.is_empty() {
+        action["sources"] = Value::Array(
+            sources
+                .into_iter()
+                .map(|source| {
+                    json!({
+                        "type": "source",
+                        "url": source.url,
+                        "title": source.title
+                    })
+                })
+                .collect(),
+        );
+    }
+
+    json!({
+        "id": call.id,
+        "type": "web_search_call",
+        "status": "completed",
+        "action": action
+    })
+}
+
+fn build_responses_message_content(
+    aggregated: &AggregatedKiroResponse,
+    server_tool_calls: &[ServerToolCall],
+) -> Vec<Value> {
+    let output_text = build_responses_output_text(aggregated, server_tool_calls);
+    let mut content = Vec::new();
+    if output_text
+        .get("text")
+        .and_then(Value::as_str)
+        .is_some_and(|text| !text.is_empty())
+    {
+        content.push(json!({
+            "type": "output_text",
+            "text": output_text.get("text").cloned().unwrap_or(Value::String(String::new())),
+            "annotations": output_text.get("annotations").cloned().unwrap_or(Value::Array(Vec::new()))
+        }));
+    }
+    if !aggregated.thinking.is_empty() {
+        content.push(json!({
+            "type": "reasoning",
+            "summary": aggregated.thinking
+        }));
+    }
+    for call in &aggregated.tool_calls {
+        content.push(json!({
+            "type": "function_call",
+            "call_id": call.id,
+            "name": call.name,
+            "arguments": call.arguments
+        }));
+    }
+    content
+}
+
+fn build_responses_response_with_ids(
     model: &str,
     aggregated: &AggregatedKiroResponse,
-    stream: bool,
-) -> ProxyResult {
-    let response_id = format!("resp_{}", uuid::Uuid::new_v4().simple());
-    let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
-    let created_at = chrono::Utc::now().timestamp();
-    let response = json!({
+    server_tool_calls: &[ServerToolCall],
+    response_id: &str,
+    message_id: &str,
+    created_at: i64,
+    previous_response_id: Option<&str>,
+) -> Value {
+    let output_text = build_responses_output_text(aggregated, server_tool_calls);
+    let mut output: Vec<Value> = server_tool_calls
+        .iter()
+        .filter(|call| call.name == WEB_SEARCH_TOOL_NAME)
+        .map(build_responses_web_search_call)
+        .collect();
+    output.push(json!({
+        "id": message_id,
+        "type": "message",
+        "role": "assistant",
+        "content": build_responses_message_content(aggregated, server_tool_calls)
+    }));
+    json!({
         "id": response_id,
         "object": "response",
         "created_at": created_at,
         "status": "completed",
         "model": model,
-        "output": [{
-            "id": message_id,
-            "type": "message",
-            "status": "completed",
-            "role": "assistant",
-            "content": [{
-                "type": "output_text",
-                "text": aggregated.text,
-                "annotations": []
-            }]
-        }],
+        "previous_response_id": previous_response_id,
+        "output": output,
+        "output_text": output_text.get("text").cloned().unwrap_or(Value::String(String::new())),
         "usage": {
             "input_tokens": aggregated.input_tokens,
             "output_tokens": aggregated.output_tokens,
             "total_tokens": aggregated.input_tokens + aggregated.output_tokens
         }
-    });
+    })
+}
+
+fn build_stream_responses_completed_event(
+    model: &str,
+    aggregated: &AggregatedKiroResponse,
+    server_tool_calls: &[ServerToolCall],
+    response_id: &str,
+    message_id: &str,
+    created_at: i64,
+    previous_response_id: Option<&str>,
+) -> Value {
+    json!({
+        "type": "response.completed",
+        "response": build_responses_response_with_ids(
+            model,
+            aggregated,
+            server_tool_calls,
+            response_id,
+            message_id,
+            created_at,
+            previous_response_id,
+        )
+    })
+}
+
+fn build_stream_responses_function_call_arguments_done_event(
+    response_id: &str,
+    call_id: &str,
+    arguments: &str,
+) -> Value {
+    json!({
+        "type": "response.function_call_arguments.done",
+        "response_id": response_id,
+        "call_id": call_id,
+        "arguments": arguments
+    })
+}
+
+fn build_stream_responses_output_text_done_event(response_id: &str, text: &str) -> Value {
+    json!({
+        "type": "response.output_text.done",
+        "response_id": response_id,
+        "text": text
+    })
+}
+
+fn build_stream_responses_reasoning_done_event(response_id: &str, text: &str) -> Value {
+    json!({
+        "type": "response.reasoning.done",
+        "response_id": response_id,
+        "text": text
+    })
+}
+
+fn build_direct_responses_response(
+    model: &str,
+    aggregated: &AggregatedKiroResponse,
+    server_tool_calls: &[ServerToolCall],
+    stream: bool,
+    response_id_override: Option<String>,
+    previous_response_id: Option<&str>,
+) -> ProxyResult {
+    let response_id =
+        response_id_override.unwrap_or_else(|| format!("resp_{}", uuid::Uuid::new_v4().simple()));
+    let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
+    let created_at = chrono::Utc::now().timestamp();
+    let response = build_responses_response_with_ids(
+        model,
+        aggregated,
+        server_tool_calls,
+        &response_id,
+        &message_id,
+        created_at,
+        previous_response_id,
+    );
 
     if stream {
         let mut body = String::new();
         push_sse_data(
             &mut body,
             &json!({
-                "type": "response.completed",
-                "response": response
+                "type": "response.created",
+                "response": {
+                    "id": response_id,
+                    "object": "response",
+                    "created_at": created_at,
+                    "status": "in_progress",
+                    "model": model,
+                    "output": []
+                }
             }),
+        );
+        push_sse_data(
+            &mut body,
+            &json!({
+                "type": "response.output_item.added",
+                "response_id": response_id,
+                "output_index": 0,
+                "item": {
+                    "id": message_id,
+                    "type": "message",
+                    "status": "in_progress",
+                    "role": "assistant",
+                    "content": []
+                }
+            }),
+        );
+        for (index, call) in server_tool_calls.iter().enumerate() {
+            push_sse_data(
+                &mut body,
+                &json!({
+                    "type": "response.output_item.added",
+                    "response_id": response_id,
+                    "output_index": index + 1,
+                    "item": build_responses_web_search_call(call)
+                }),
+            );
+        }
+        for (index, call) in aggregated.tool_calls.iter().enumerate() {
+            let output_index = index + 1 + server_tool_calls.len();
+            push_sse_data(
+                &mut body,
+                &json!({
+                    "type": "response.output_item.added",
+                    "response_id": response_id,
+                    "output_index": output_index,
+                    "item": {
+                        "id": call.id,
+                        "type": "function_call",
+                        "status": "in_progress",
+                        "call_id": call.id,
+                        "name": call.name,
+                        "arguments": ""
+                    }
+                }),
+            );
+            push_sse_data(
+                &mut body,
+                &json!({
+                    "type": "response.function_call_arguments.delta",
+                    "response_id": response_id,
+                    "call_id": call.id,
+                    "delta": call.arguments
+                }),
+            );
+            push_sse_data(
+                &mut body,
+                &build_stream_responses_function_call_arguments_done_event(
+                    &response_id,
+                    &call.id,
+                    &call.arguments,
+                ),
+            );
+            push_sse_data(
+                &mut body,
+                &json!({
+                    "type": "response.output_item.done",
+                    "response_id": response_id,
+                    "output_index": output_index,
+                    "item": {
+                        "id": call.id,
+                        "type": "function_call",
+                        "status": "completed",
+                        "call_id": call.id,
+                        "name": call.name,
+                        "arguments": call.arguments
+                    }
+                }),
+            );
+        }
+        for (index, annotation) in build_responses_citation_annotations(&aggregated.citations)
+            .into_iter()
+            .enumerate()
+        {
+            push_sse_data(
+                &mut body,
+                &build_responses_annotation_added_event(
+                    &response_id,
+                    &message_id,
+                    annotation,
+                    index,
+                    index,
+                ),
+            );
+        }
+        if !aggregated.text.is_empty() {
+            push_sse_data(
+                &mut body,
+                &json!({
+                    "type": "response.output_text.delta",
+                    "response_id": response_id,
+                    "delta": aggregated.text
+                }),
+            );
+        }
+        if !aggregated.thinking.is_empty() {
+            push_sse_data(
+                &mut body,
+                &json!({
+                    "type": "response.reasoning.delta",
+                    "response_id": response_id,
+                    "delta": aggregated.thinking
+                }),
+            );
+        }
+        if let Some(text) = build_responses_output_text(aggregated, server_tool_calls)
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+        {
+            push_sse_data(
+                &mut body,
+                &build_stream_responses_output_text_done_event(&response_id, text),
+            );
+        }
+        if !aggregated.thinking.is_empty() {
+            push_sse_data(
+                &mut body,
+                &build_stream_responses_reasoning_done_event(&response_id, &aggregated.thinking),
+            );
+        }
+        push_sse_data(
+            &mut body,
+            &json!({
+                "type": "response.output_item.done",
+                "response_id": response_id,
+                "output_index": 0,
+                "item": {
+                    "id": message_id,
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": build_responses_message_content(aggregated, server_tool_calls)
+                }
+            }),
+        );
+        push_sse_data(
+            &mut body,
+            &build_stream_responses_completed_event(
+                model,
+                aggregated,
+                server_tool_calls,
+                &response_id,
+                &message_id,
+                created_at,
+                previous_response_id,
+            ),
         );
         body.push_str("data: [DONE]\n\n");
         ProxyResult {
@@ -3578,6 +5228,305 @@ fn build_direct_responses_response(
             is_stream: false,
         }
     }
+}
+
+fn has_server_web_search_tool(request: &GatewayProxyRequest) -> bool {
+    request
+        .tools
+        .iter()
+        .any(|tool| is_web_search_tool_type(&tool.tool_type))
+}
+
+fn server_web_search_iteration_limit(max_uses: Option<i32>) -> usize {
+    max_uses
+        .unwrap_or(MAX_SERVER_WEB_SEARCH_ITERATIONS as i32)
+        .max(0)
+        .min(MAX_SERVER_WEB_SEARCH_ITERATIONS as i32) as usize
+}
+
+fn normalized_assistant_message_from_aggregated(
+    aggregated: &AggregatedKiroResponse,
+) -> GatewayMessage {
+    GatewayMessage {
+        role: "assistant".to_string(),
+        content: if aggregated.text.is_empty() {
+            Value::String(String::new())
+        } else {
+            Value::String(aggregated.text.clone())
+        },
+        tool_calls: aggregated.tool_calls.clone(),
+        tool_call_id: None,
+        metadata: if aggregated.thinking.is_empty() {
+            None
+        } else {
+            Some(json!({
+                "reasoningContent": {
+                    "reasoningText": {
+                        "text": aggregated.thinking
+                    }
+                }
+            }))
+        },
+    }
+}
+
+fn build_web_search_mcp_arguments(input: &Value) -> Value {
+    let query = input
+        .get("query")
+        .and_then(Value::as_str)
+        .or_else(|| input.get("search_query").and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_string();
+    json!({ "query": query })
+}
+
+fn extract_domain_from_url(url: &str) -> Option<String> {
+    url::Url::parse(url)
+        .ok()?
+        .host_str()
+        .map(|host| host.trim_start_matches("www.").to_ascii_lowercase())
+}
+
+fn domain_matches_rule(domain: &str, rule: &str) -> bool {
+    let normalized = rule.trim().trim_start_matches("www.").to_ascii_lowercase();
+    domain == normalized || domain.ends_with(&format!(".{normalized}"))
+}
+
+fn domain_matches_filters(item: &Value, tool: Option<&GatewayTool>) -> bool {
+    let Some(tool) = tool else {
+        return true;
+    };
+    let domain = item
+        .get("url")
+        .and_then(Value::as_str)
+        .and_then(extract_domain_from_url);
+    let Some(domain) = domain else {
+        return true;
+    };
+
+    if let Some(allowed) = tool.allowed_domains.as_ref().filter(|items| !items.is_empty()) {
+        if !allowed.iter().any(|entry| domain_matches_rule(&domain, entry)) {
+            return false;
+        }
+    }
+    if let Some(blocked) = tool.blocked_domains.as_ref() {
+        if blocked.iter().any(|entry| domain_matches_rule(&domain, entry)) {
+            return false;
+        }
+    }
+    true
+}
+
+fn normalize_anthropic_web_search_result(item: Value) -> Value {
+    match item {
+        Value::Object(mut map) => {
+            map.insert(
+                "type".to_string(),
+                Value::String("web_search_result".to_string()),
+            );
+            Value::Object(map)
+        }
+        other => other,
+    }
+}
+
+fn parse_web_search_mcp_result(result: &Value, tool: Option<&GatewayTool>) -> (Value, String) {
+    let text = result
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().find_map(|item| {
+                if item.get("type").and_then(Value::as_str) == Some("text") {
+                    item.get("text").and_then(Value::as_str).map(str::to_string)
+                } else {
+                    None
+                }
+            })
+        })
+        .unwrap_or_else(|| result.to_string());
+
+    let filtered_results = serde_json::from_str::<Value>(&text)
+        .ok()
+        .and_then(|value| value.get("results").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|item| domain_matches_filters(item, tool))
+        .map(normalize_anthropic_web_search_result)
+        .collect::<Vec<_>>();
+
+    let tool_result_text = if filtered_results.is_empty() {
+        text
+    } else {
+        json!({ "results": filtered_results.clone() }).to_string()
+    };
+
+    (Value::Array(filtered_results), tool_result_text)
+}
+
+async fn call_mcp_tool(
+    http: &reqwest::Client,
+    upstream: &KiroUpstreamCredentials,
+    tool_name: &str,
+    arguments: Value,
+) -> Result<Value, String> {
+    let url = format!("https://q.{}.amazonaws.com/mcp", upstream.region);
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "id": uuid::Uuid::new_v4().simple().to_string(),
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "arguments": arguments
+        }
+    });
+
+    let response = with_kiro_upstream_headers(http.post(&url), upstream, "application/json", false)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("MCP 上游请求失败: {e}"))?;
+    let status = response.status().as_u16();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("读取 MCP 上游响应失败: {e}"))?;
+    if !(200..300).contains(&status) {
+        let err = map_direct_upstream_error(status, &body);
+        return Err(format!("MCP 上游请求失败(status={}): {}", err.status, err.message));
+    }
+
+    let value: Value = serde_json::from_str(&body)
+        .unwrap_or_else(|_| json!({ "result": { "content": [{ "type": "text", "text": body }] } }));
+    if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("MCP 工具调用失败");
+        return Err(sanitize_upstream_error(message));
+    }
+
+    Ok(value.get("result").cloned().unwrap_or(value))
+}
+
+async fn send_generate_request_with_refresh(
+    http: &reqwest::Client,
+    upstream: &mut KiroUpstreamCredentials,
+    account: &KiroAccount,
+    payload: &Value,
+) -> Result<Vec<u8>, String> {
+    match send_generate_request_direct(http, upstream, payload).await {
+        Ok(bytes) => Ok(bytes),
+        Err(err) if err.status == 401 || err.status == 403 => {
+            logger::log_warn(&format!(
+                "[KiroLocalAccess] Kiro 上游认证失败，尝试刷新账号后重试: account={}, status={}, error={}",
+                upstream.account_email, err.status, err.message
+            ));
+            let refreshed = kiro_account::refresh_account_token(&account.id).await?;
+            *upstream = prepare_kiro_upstream_credentials(&refreshed).await?;
+            send_generate_request_direct(http, upstream, payload)
+                .await
+                .map_err(|retry_err| {
+                    format!(
+                        "Kiro 上游请求失败(status={}): {}",
+                        retry_err.status, retry_err.message
+                    )
+                })
+        }
+        Err(err) => Err(format!(
+            "Kiro 上游请求失败(status={}): {}",
+            err.status, err.message
+        )),
+    }
+}
+
+async fn execute_request_with_server_tools(
+    http: &reqwest::Client,
+    request: &GatewayProxyRequest,
+    account: &KiroAccount,
+    upstream: &mut KiroUpstreamCredentials,
+    available_models: &[String],
+) -> Result<ProxyExecutionOutcome, String> {
+    let mut working_request = request.clone();
+    let web_search_tool = request
+        .tools
+        .iter()
+        .find(|tool| is_web_search_tool_type(&tool.tool_type))
+        .cloned();
+    let max_uses = server_web_search_iteration_limit(
+        web_search_tool.as_ref().and_then(|tool| tool.web_search_max_uses),
+    );
+    let mut server_tool_calls = Vec::new();
+
+    for _ in 0..max_uses {
+        let mut payload =
+            build_kiro_payload(&working_request, upstream.profile_arn.clone(), available_models)
+                .await?;
+        trim_payload_history_if_needed(&mut payload);
+        if let Ok(serialized) = serde_json::to_string_pretty(&payload) {
+            logger::log_info(&format!(
+                "[KiroLocalAccess] 上游 payload: account={}, bytes={}, body={}",
+                upstream.account_email,
+                serialized.len(),
+                serialized
+            ));
+        }
+
+        let response_bytes =
+            send_generate_request_with_refresh(http, upstream, account, &payload).await?;
+        let payload_text = decode_eventstream_payload_text(&response_bytes);
+        let aggregated = aggregate_kiro_response(&payload_text);
+        let web_search_calls: Vec<GatewayToolCall> = aggregated
+            .tool_calls
+            .iter()
+            .filter(|call| call.name == WEB_SEARCH_TOOL_NAME)
+            .cloned()
+            .collect();
+
+        if web_search_calls.is_empty() {
+            return Ok(ProxyExecutionOutcome {
+                aggregated,
+                server_tool_calls,
+            });
+        }
+
+        working_request
+            .messages
+            .push(normalized_assistant_message_from_aggregated(&aggregated));
+
+        let mut tool_result_blocks = Vec::new();
+        for call in web_search_calls {
+            let input = serde_json::from_str(&call.arguments)
+                .unwrap_or_else(|_| json!({ "query": call.arguments }));
+            let mcp_arguments = build_web_search_mcp_arguments(&input);
+            let mcp_result = call_mcp_tool(http, upstream, &call.name, mcp_arguments).await?;
+            let (result_content, tool_result_text) =
+                parse_web_search_mcp_result(&mcp_result, web_search_tool.as_ref());
+
+            server_tool_calls.push(ServerToolCall {
+                id: call.id.clone(),
+                name: call.name.clone(),
+                input: input.clone(),
+                result_content: result_content.clone(),
+                tool_result_text,
+            });
+
+            tool_result_blocks.push(json!({
+                "type": "web_search_tool_result",
+                "tool_use_id": call.id,
+                "content": result_content
+            }));
+        }
+
+        working_request.messages.push(GatewayMessage {
+            role: "user".to_string(),
+            content: Value::Array(tool_result_blocks),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+            metadata: None,
+        });
+    }
+
+    Err("web_search 代理循环超过最大轮数".to_string())
 }
 
 async fn proxy_via_kiro_direct(
@@ -3597,47 +5546,94 @@ async fn proxy_via_kiro_direct(
             Vec::new()
         }
     };
-    let mut payload =
-        build_kiro_payload(request, upstream.profile_arn.clone(), &available_models).await?;
-    trim_payload_history_if_needed(&mut payload);
+    let mut effective_request = request.clone();
+    if request.previous_response_id.is_some() {
+        effective_request.messages = restore_responses_session_messages(request).await;
+    }
 
-    let response_bytes = match send_generate_request_direct(&http, &upstream, &payload).await {
-        Ok(bytes) => bytes,
-        Err(err) if err.status == 401 || err.status == 403 => {
-            logger::log_warn(&format!(
-                "[KiroLocalAccess] Kiro 上游认证失败，尝试刷新账号后重试: account={}, status={}, error={}",
-                upstream.account_email, err.status, err.message
+    let outcome = if has_server_web_search_tool(&effective_request) {
+        execute_request_with_server_tools(
+            &http,
+            &effective_request,
+            account,
+            &mut upstream,
+            &available_models,
+        )
+        .await?
+    } else {
+        let mut payload =
+            build_kiro_payload(&effective_request, upstream.profile_arn.clone(), &available_models)
+                .await?;
+        trim_payload_history_if_needed(&mut payload);
+        if let Ok(serialized) = serde_json::to_string_pretty(&payload) {
+            logger::log_info(&format!(
+                "[KiroLocalAccess] 上游 payload: account={}, protocol={:?}, bytes={}, body={}",
+                upstream.account_email,
+                protocol,
+                serialized.len(),
+                serialized
             ));
-            let refreshed = kiro_account::refresh_account_token(&account.id).await?;
-            upstream = prepare_kiro_upstream_credentials(&refreshed).await?;
-            send_generate_request_direct(&http, &upstream, &payload)
-                .await
-                .map_err(|retry_err| {
-                    format!(
-                        "Kiro 上游请求失败(status={}): {}",
-                        retry_err.status, retry_err.message
-                    )
-                })?
         }
-        Err(err) => {
-            return Err(format!(
-                "Kiro 上游请求失败(status={}): {}",
-                err.status, err.message
-            ));
+        let response_bytes =
+            send_generate_request_with_refresh(&http, &mut upstream, account, &payload).await?;
+        ProxyExecutionOutcome {
+            aggregated: aggregate_kiro_response(&decode_eventstream_payload_text(&response_bytes)),
+            server_tool_calls: Vec::new(),
         }
     };
-    let payload_text = decode_eventstream_payload_text(&response_bytes);
-    let aggregated = aggregate_kiro_response(&payload_text);
 
+    let assistant_message = normalized_assistant_message_from_aggregated(&outcome.aggregated);
     Ok(match protocol {
+        ApiProtocol::Responses => {
+            let response_id = format!("resp_{}", uuid::Uuid::new_v4().simple());
+            persist_responses_session_entry(
+                &response_id,
+                effective_request.messages.clone(),
+                request.previous_response_id.clone(),
+                assistant_message.clone(),
+            )
+            .await;
+            build_direct_responses_response(
+                &request.model,
+                &outcome.aggregated,
+                &outcome.server_tool_calls,
+                request.stream,
+                Some(response_id),
+                request.previous_response_id.as_deref(),
+            )
+        }
         ApiProtocol::OpenAi => {
-            build_direct_openai_response(&request.model, &aggregated, request.stream)
+            let response_id = format!("chatcmpl-{}", uuid::Uuid::new_v4().simple());
+            persist_responses_session_entry(
+                &response_id,
+                effective_request.messages.clone(),
+                request.previous_response_id.clone(),
+                assistant_message.clone(),
+            )
+            .await;
+            build_direct_openai_response(
+                &request.model,
+                &outcome.aggregated,
+                request.stream,
+                Some(response_id),
+            )
         }
         ApiProtocol::Anthropic => {
-            build_direct_anthropic_response(&request.model, &aggregated, request.stream)
-        }
-        ApiProtocol::Responses => {
-            build_direct_responses_response(&request.model, &aggregated, request.stream)
+            let response_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
+            persist_responses_session_entry(
+                &response_id,
+                effective_request.messages.clone(),
+                request.previous_response_id.clone(),
+                assistant_message,
+            )
+            .await;
+            build_direct_anthropic_response(
+                &request.model,
+                &outcome.aggregated,
+                &outcome.server_tool_calls,
+                request.stream,
+                Some(response_id),
+            )
         }
     })
 }
@@ -3660,6 +5656,56 @@ async fn record_usage(success: bool, latency_ms: u64) {
 async fn set_last_error(message: Option<String>) {
     let mut rt = gateway_runtime().lock().await;
     rt.last_error = message;
+}
+
+async fn restore_responses_session_messages(request: &GatewayProxyRequest) -> Vec<GatewayMessage> {
+    let Some(mut current_response_id) = request.previous_response_id.clone() else {
+        return request.messages.clone();
+    };
+
+    let rt = gateway_runtime().lock().await;
+    let mut chain = Vec::new();
+    while let Some(entry) = rt.responses_sessions.get(&current_response_id) {
+        chain.push(entry.clone());
+        let Some(previous) = entry.previous_response_id.clone() else {
+            break;
+        };
+        current_response_id = previous;
+    }
+    drop(rt);
+
+    if chain.is_empty() {
+        return request.messages.clone();
+    }
+
+    chain.reverse();
+    let mut merged = Vec::new();
+    for entry in chain {
+        merged.extend(entry.request_messages.clone());
+        merged.push(entry.assistant_message.clone());
+    }
+    merged.extend(request.messages.clone());
+    merged
+}
+
+async fn persist_responses_session_entry(
+    response_id: &str,
+    request_messages: Vec<GatewayMessage>,
+    previous_response_id: Option<String>,
+    assistant_message: GatewayMessage,
+) {
+    let mut rt = gateway_runtime().lock().await;
+    rt.responses_sessions
+        .retain(|_, entry| entry.updated_at.elapsed() < Duration::from_secs(60 * 60));
+    rt.responses_sessions.insert(
+        response_id.to_string(),
+        ResponsesSessionEntry {
+            previous_response_id,
+            request_messages,
+            assistant_message,
+            updated_at: Instant::now(),
+        },
+    );
 }
 
 async fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
@@ -4212,5 +6258,885 @@ pub async fn restore_local_access_gateway() {
             logger::log_warn(&format!("[KiroLocalAccess] 恢复网关失败: {}", err));
             set_last_error(Some(err)).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_responses_gateway_request_preserves_message_content_items() {
+        let payload = json!({
+            "model": "claude-3-7-sonnet-20250219",
+            "stream": true,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "input_text", "text": "第一段" },
+                        { "type": "input_text", "text": "第二段" },
+                        { "type": "input_image", "image_url": "data:image/png;base64,aGVsbG8=" }
+                    ]
+                }
+            ]
+        });
+
+        let converted = normalize_responses_gateway_request(
+            serde_json::to_string(&payload).unwrap().as_bytes(),
+        )
+        .expect("responses payload should convert");
+
+        assert!(converted.stream);
+        assert_eq!(converted.messages.len(), 1);
+        assert_eq!(converted.messages[0].role, "user");
+        assert_eq!(
+            converted.messages[0].content,
+            json!([
+                { "type": "input_text", "text": "第一段" },
+                { "type": "input_text", "text": "第二段" },
+                { "type": "input_image", "image_url": "data:image/png;base64,aGVsbG8=" }
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn build_kiro_payload_moves_long_tool_docs_into_prompt() {
+        let request = GatewayProxyRequest {
+            model: "claude-sonnet-4-5-20250929".to_string(),
+            stream: true,
+            messages: vec![
+                GatewayMessage {
+                    role: "system".to_string(),
+                    content: Value::String("系统要求".to_string()),
+                    tool_calls: Vec::new(),
+                    tool_call_id: None,
+                    metadata: None,
+                },
+                GatewayMessage {
+                    role: "assistant".to_string(),
+                    content: Value::String("我先调用工具".to_string()),
+                    tool_calls: vec![GatewayToolCall {
+                        id: "call_1".to_string(),
+                        name: "search_docs".to_string(),
+                        arguments: "{\"q\":\"gateway\"}".to_string(),
+                    }],
+                    tool_call_id: None,
+                    metadata: None,
+                },
+                GatewayMessage {
+                    role: "tool".to_string(),
+                    content: Value::String("命中结果".to_string()),
+                    tool_calls: Vec::new(),
+                    tool_call_id: Some("call_1".to_string()),
+                    metadata: None,
+                },
+                GatewayMessage {
+                    role: "user".to_string(),
+                    content: Value::String("继续总结".to_string()),
+                    tool_calls: Vec::new(),
+                    tool_call_id: None,
+                    metadata: None,
+                },
+            ],
+            tools: vec![GatewayTool {
+                tool_type: "function".to_string(),
+                name: "search_docs".to_string(),
+                description: "A".repeat(TOOL_DESCRIPTION_MAX_LENGTH + 32),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": { "q": { "type": "string" } },
+                    "required": ["q"]
+                }),
+                web_search_max_uses: None,
+                allowed_domains: None,
+                blocked_domains: None,
+                user_location: None,
+            }],
+            tool_choice: None,
+            previous_response_id: None,
+        };
+
+        let payload = build_kiro_payload(&request, Some("arn:test".to_string()), &[])
+            .await
+            .expect("payload should build");
+
+        let current_content = payload
+            .pointer("/conversationState/currentMessage/userInputMessage/content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(current_content.contains("Tool Documentation"));
+
+        let history = payload
+            .pointer("/conversationState/history")
+            .and_then(Value::as_array)
+            .expect("history should exist");
+        assert_eq!(history.len(), 2);
+        assert_eq!(
+            history[0]
+                .pointer("/assistantResponseMessage/toolUses")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            history[1]
+                .pointer("/userInputMessage/userInputMessageContext/toolResults")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn trim_payload_history_preserves_tool_call_result_pair() {
+        let mut payload = json!({
+            "conversationState": {
+                "history": [
+                    {
+                        "assistantResponseMessage": {
+                            "content": "old assistant",
+                            "toolUses": [{ "name": "search_docs", "toolUseId": "call_1", "input": { "q": "gateway" } }]
+                        }
+                    },
+                    {
+                        "userInputMessage": {
+                            "content": "",
+                            "userInputMessageContext": {
+                                "toolResults": [{ "toolUseId": "call_1", "status": "success", "content": [{ "text": "命中结果" }] }]
+                            }
+                        }
+                    },
+                    {
+                        "assistantResponseMessage": {
+                            "content": "recent assistant"
+                        }
+                    },
+                    {
+                        "userInputMessage": {
+                            "content": "recent user"
+                        }
+                    }
+                ]
+            }
+        });
+
+        let filler = "X".repeat(MAX_KIRO_PAYLOAD_SIZE);
+        payload["conversationState"]["history"][0]["assistantResponseMessage"]["content"] =
+            Value::String(filler);
+
+        trim_payload_history_if_needed(&mut payload);
+
+        let history = payload
+            .pointer("/conversationState/history")
+            .and_then(Value::as_array)
+            .expect("history should remain");
+        assert_eq!(history.len(), 2);
+        assert!(
+            history[0].get("assistantResponseMessage").is_some()
+                || history[0].get("userInputMessage").is_some()
+        );
+        assert_eq!(
+            history[0]
+                .pointer("/assistantResponseMessage/content")
+                .and_then(Value::as_str),
+            Some("recent assistant")
+        );
+        assert_eq!(
+            history[1]
+                .pointer("/userInputMessage/content")
+                .and_then(Value::as_str),
+            Some("recent user")
+        );
+    }
+
+    #[tokio::test]
+    async fn build_kiro_payload_extracts_base64_images() {
+        let request = GatewayProxyRequest {
+            model: "claude-sonnet-4-5-20250929".to_string(),
+            stream: false,
+            messages: vec![GatewayMessage {
+                role: "user".to_string(),
+                content: json!([
+                    { "type": "input_text", "text": "看这张图" },
+                    { "type": "input_image", "image_url": "data:image/png;base64,aGVsbG8=" }
+                ]),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                metadata: None,
+            }],
+            tools: Vec::new(),
+            tool_choice: None,
+            previous_response_id: None,
+        };
+
+        let payload = build_kiro_payload(&request, None, &[])
+            .await
+            .expect("payload should build");
+        assert_eq!(
+            payload
+                .pointer("/conversationState/currentMessage/userInputMessage/images")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            payload
+                .pointer("/conversationState/currentMessage/userInputMessage/images/0/format")
+                .and_then(Value::as_str),
+            Some("png")
+        );
+    }
+
+    #[tokio::test]
+    async fn build_kiro_payload_reuses_previous_response_id_as_conversation_id() {
+        let request = GatewayProxyRequest {
+            model: "claude-sonnet-4-5-20250929".to_string(),
+            stream: false,
+            messages: vec![GatewayMessage {
+                role: "user".to_string(),
+                content: Value::String("继续".to_string()),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                metadata: None,
+            }],
+            tools: Vec::new(),
+            tool_choice: None,
+            previous_response_id: Some("resp_prev_123".to_string()),
+        };
+
+        let payload = build_kiro_payload(&request, None, &[])
+            .await
+            .expect("payload should build");
+
+        assert_eq!(
+            payload
+                .pointer("/conversationState/conversationId")
+                .and_then(Value::as_str),
+            Some("resp_prev_123")
+        );
+    }
+
+    #[tokio::test]
+    async fn build_kiro_payload_rejects_private_remote_images() {
+        use std::io::{Read, Write};
+        use std::thread;
+
+        let expected_bytes = vec![137, 80, 78, 71, 13, 10, 26, 10];
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        listener
+            .set_nonblocking(true)
+            .expect("listener should set nonblocking");
+        let address = format!(
+            "http://{}",
+            listener.local_addr().expect("local addr should resolve")
+        );
+
+        let handle = thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut buffer = [0u8; 1024];
+                        let _ = stream.read(&mut buffer);
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            expected_bytes.len()
+                        );
+                        stream
+                            .write_all(response.as_bytes())
+                            .expect("headers should write");
+                        stream
+                            .write_all(&expected_bytes)
+                            .expect("body should write");
+                        return true;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            return false;
+                        }
+                        thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(_) => return false,
+                }
+            }
+        });
+
+        let request = GatewayProxyRequest {
+            model: "claude-sonnet-4-5-20250929".to_string(),
+            stream: false,
+            messages: vec![GatewayMessage {
+                role: "user".to_string(),
+                content: json!([
+                    { "type": "input_text", "text": "看图回答" },
+                    { "type": "input_image", "image_url": format!("{address}/sample.png") }
+                ]),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                metadata: None,
+            }],
+            tools: Vec::new(),
+            tool_choice: None,
+            previous_response_id: None,
+        };
+
+        let payload = build_kiro_payload(&request, None, &[])
+            .await
+            .expect("payload should build");
+
+        assert!(
+            !handle.join().expect("server thread should finish"),
+            "client should not fetch private image"
+        );
+        assert!(payload
+            .pointer("/conversationState/currentMessage/userInputMessage/images")
+            .and_then(Value::as_array)
+            .map(Vec::is_empty)
+            .unwrap_or(true));
+    }
+
+    #[tokio::test]
+    async fn build_kiro_payload_rejects_oversized_data_url_images() {
+        let oversized = STANDARD.encode(vec![0u8; 6 * 1024 * 1024]);
+        let request = GatewayProxyRequest {
+            model: "claude-sonnet-4-5-20250929".to_string(),
+            stream: false,
+            messages: vec![GatewayMessage {
+                role: "user".to_string(),
+                content: json!([
+                    { "type": "input_text", "text": "看图回答" },
+                    { "type": "input_image", "image_url": format!("data:image/png;base64,{oversized}") }
+                ]),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                metadata: None,
+            }],
+            tools: Vec::new(),
+            tool_choice: None,
+            previous_response_id: None,
+        };
+
+        let payload = build_kiro_payload(&request, None, &[])
+            .await
+            .expect("payload should build");
+
+        assert!(payload
+            .pointer("/conversationState/currentMessage/userInputMessage/images")
+            .and_then(Value::as_array)
+            .map(Vec::is_empty)
+            .unwrap_or(true));
+    }
+
+    #[tokio::test]
+    async fn build_kiro_payload_preserves_assistant_message_metadata() {
+        let request = GatewayProxyRequest {
+            model: "claude-sonnet-4-5-20250929".to_string(),
+            stream: false,
+            messages: vec![
+                GatewayMessage {
+                    role: "assistant".to_string(),
+                    content: json!([
+                        { "type": "output_text", "text": "历史回答" },
+                        { "type": "reasoning", "summary": "内部推理" }
+                    ]),
+                    tool_calls: vec![GatewayToolCall {
+                        id: "call_1".to_string(),
+                        name: "search_docs".to_string(),
+                        arguments: "{\"q\":\"gateway\"}".to_string(),
+                    }],
+                    tool_call_id: None,
+                    metadata: Some(json!({
+                        "reasoningContent": {
+                            "reasoningText": {
+                                "text": "内部推理",
+                                "signature": "sig_1"
+                            }
+                        },
+                        "references": [
+                            {
+                                "licenseName": "MIT",
+                                "repository": "repo",
+                                "url": "https://example.com/ref"
+                            }
+                        ],
+                        "supplementaryWebLinks": [
+                            {
+                                "url": "https://example.com",
+                                "title": "example",
+                                "snippet": "snippet"
+                            }
+                        ],
+                        "followupPrompt": {
+                            "content": "继续",
+                            "userIntent": "SHOW_EXAMPLES"
+                        },
+                        "messageId": "msg_123",
+                        "cachePoint": {
+                            "type": "default"
+                        }
+                    })),
+                },
+                GatewayMessage {
+                    role: "user".to_string(),
+                    content: Value::String("继续".to_string()),
+                    tool_calls: Vec::new(),
+                    tool_call_id: None,
+                    metadata: None,
+                },
+            ],
+            tools: Vec::new(),
+            tool_choice: None,
+            previous_response_id: None,
+        };
+
+        let payload = build_kiro_payload(&request, None, &[])
+            .await
+            .expect("payload should build");
+        let history = payload
+            .pointer("/conversationState/history")
+            .and_then(Value::as_array)
+            .expect("history should exist");
+
+        assert_eq!(
+            history[0]
+                .pointer("/assistantResponseMessage/content")
+                .and_then(Value::as_str),
+            Some("历史回答")
+        );
+        assert_eq!(
+            history[0].pointer("/assistantResponseMessage/reasoningContent"),
+            Some(&json!({
+                "reasoningText": {
+                    "text": "内部推理",
+                    "signature": "sig_1"
+                }
+            }))
+        );
+        assert_eq!(
+            history[0].pointer("/assistantResponseMessage/references"),
+            Some(&json!([
+                {
+                    "licenseName": "MIT",
+                    "repository": "repo",
+                    "url": "https://example.com/ref"
+                }
+            ]))
+        );
+        assert_eq!(
+            history[0].pointer("/assistantResponseMessage/supplementaryWebLinks"),
+            Some(&json!([
+                {
+                    "url": "https://example.com",
+                    "title": "example",
+                    "snippet": "snippet"
+                }
+            ]))
+        );
+        assert_eq!(
+            history[0].pointer("/assistantResponseMessage/followupPrompt"),
+            Some(&json!({
+                "content": "继续",
+                "userIntent": "SHOW_EXAMPLES"
+            }))
+        );
+        assert_eq!(
+            history[0]
+                .pointer("/assistantResponseMessage/messageId")
+                .and_then(Value::as_str),
+            Some("msg_123")
+        );
+        assert_eq!(
+            history[0].pointer("/assistantResponseMessage/cachePoint"),
+            Some(&json!({ "type": "default" }))
+        );
+        assert_eq!(
+            history[0]
+                .pointer("/assistantResponseMessage/toolUses/0/name")
+                .and_then(Value::as_str),
+            Some("search_docs")
+        );
+    }
+
+    #[tokio::test]
+    async fn build_kiro_payload_preserves_responses_tool_choice() {
+        let request = GatewayProxyRequest {
+            model: "claude-sonnet-4-5-20250929".to_string(),
+            stream: false,
+            messages: vec![GatewayMessage {
+                role: "user".to_string(),
+                content: Value::String("hello".to_string()),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                metadata: None,
+            }],
+            tools: vec![GatewayTool {
+                tool_type: "function".to_string(),
+                name: "search_docs".to_string(),
+                description: "搜索文档".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": { "q": { "type": "string" } }
+                }),
+                web_search_max_uses: None,
+                allowed_domains: None,
+                blocked_domains: None,
+                user_location: None,
+            }],
+            tool_choice: Some(json!({ "type": "function", "name": "search_docs" })),
+            previous_response_id: None,
+        };
+
+        let payload = build_kiro_payload(&request, None, &[])
+            .await
+            .expect("payload should build");
+
+        assert_eq!(
+            payload
+                .pointer("/conversationState/currentMessage/userInputMessage/userInputMessageContext/toolChoice")
+                .cloned(),
+            Some(json!({ "type": "function", "name": "search_docs" }))
+        );
+    }
+
+    #[tokio::test]
+    async fn build_kiro_payload_rejects_unknown_tool_choice_function() {
+        let request = GatewayProxyRequest {
+            model: "claude-sonnet-4-5-20250929".to_string(),
+            stream: false,
+            messages: vec![GatewayMessage {
+                role: "user".to_string(),
+                content: Value::String("hello".to_string()),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                metadata: None,
+            }],
+            tools: vec![GatewayTool {
+                tool_type: "function".to_string(),
+                name: "search_docs".to_string(),
+                description: "搜索文档".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": { "q": { "type": "string" } }
+                }),
+                web_search_max_uses: None,
+                allowed_domains: None,
+                blocked_domains: None,
+                user_location: None,
+            }],
+            tool_choice: Some(json!({ "type": "function", "name": "missing_tool" })),
+            previous_response_id: None,
+        };
+
+        let error = build_kiro_payload(&request, None, &[])
+            .await
+            .expect_err("unknown tool choice should fail");
+
+        assert!(error.contains("tool_choice 指定的工具不存在"));
+    }
+
+    #[test]
+    fn build_direct_responses_response_preserves_previous_response_id() {
+        let aggregated = AggregatedKiroResponse {
+            text: "hello".to_string(),
+            ..Default::default()
+        };
+
+        let response = build_direct_responses_response(
+            "claude-sonnet-4-5-20250929",
+            &aggregated,
+            &[],
+            false,
+            Some("resp_new_1".to_string()),
+            Some("resp_prev_123"),
+        );
+
+        let value: Value = serde_json::from_slice(&response.body).expect("valid json");
+        assert_eq!(value["id"], "resp_new_1");
+        assert_eq!(value["previous_response_id"], "resp_prev_123");
+    }
+
+    #[test]
+    fn build_direct_responses_response_stream_emits_kam_like_events() {
+        let aggregated = AggregatedKiroResponse {
+            text: "hello".to_string(),
+            thinking: "reason".to_string(),
+            tool_calls: vec![GatewayToolCall {
+                id: "call_1".to_string(),
+                name: "search_docs".to_string(),
+                arguments: "{\"q\":\"gateway\"}".to_string(),
+            }],
+            citations: vec![crate::modules::kiro_gateway::models::AggregatedCitation {
+                text: Some("hello".to_string()),
+                link: "https://example.com".to_string(),
+                target: json!({"range":{"start":0,"end":5}}),
+            }],
+            ..Default::default()
+        };
+
+        let response = build_direct_responses_response(
+            "claude-sonnet-4-5-20250929",
+            &aggregated,
+            &[],
+            true,
+            Some("resp_new_1".to_string()),
+            Some("resp_prev_123"),
+        );
+        let body = String::from_utf8(response.body).expect("stream should be utf8");
+
+        assert!(body.contains("\"type\":\"response.created\""));
+        assert!(body.contains("\"type\":\"response.output_item.added\""));
+        assert!(body.contains("\"type\":\"response.function_call_arguments.done\""));
+        assert!(body.contains("\"type\":\"response.output_text.annotation.added\""));
+        assert!(body.contains("\"type\":\"response.output_text.done\""));
+        assert!(body.contains("\"type\":\"response.reasoning.done\""));
+        assert!(body.contains("\"type\":\"response.output_item.done\""));
+        assert!(body.contains("\"type\":\"response.completed\""));
+        assert!(body.contains("data: [DONE]"));
+    }
+
+    #[test]
+    fn build_direct_anthropic_response_stream_emits_citation_and_usage_events() {
+        let aggregated = AggregatedKiroResponse {
+            text: "hello".to_string(),
+            citations: vec![crate::modules::kiro_gateway::models::AggregatedCitation {
+                text: Some("hello".to_string()),
+                link: "https://example.com".to_string(),
+                target: json!({"range":{"start":0,"end":5}}),
+            }],
+            context_usage_percentage: Some(42.0),
+            metering_usage: Some(0.25),
+            ..Default::default()
+        };
+
+        let response = build_direct_anthropic_response(
+            "claude-sonnet-4-5-20250929",
+            &aggregated,
+            &[],
+            true,
+            None,
+        );
+        let body = String::from_utf8(response.body).expect("stream should be utf8");
+
+        assert!(body.contains("event: message_start"));
+        assert!(body.contains("\"type\":\"citations_delta\""));
+        assert!(body.contains("event: context_usage"));
+        assert!(body.contains("\"percentage\":42.0"));
+        assert!(body.contains("event: metering"));
+        assert!(body.contains("\"usage\":0.25"));
+        assert!(body.contains("event: message_stop"));
+    }
+
+    #[test]
+    fn build_direct_anthropic_response_emits_server_tool_blocks() {
+        let aggregated = AggregatedKiroResponse {
+            text: "hello".to_string(),
+            ..Default::default()
+        };
+        let server_tool_calls = vec![ServerToolCall {
+            id: "toolu_web_1".to_string(),
+            name: "web_search".to_string(),
+            input: json!({"query":"rust async"}),
+            result_content: json!([{
+                "type":"web_search_result",
+                "title":"Rust Async",
+                "url":"https://example.com/rust-async"
+            }]),
+            tool_result_text: "{\"results\":[]}".to_string(),
+        }];
+
+        let response = build_direct_anthropic_response(
+            "claude-sonnet-4-5-20250929",
+            &aggregated,
+            &server_tool_calls,
+            false,
+            None,
+        );
+        let value: Value = serde_json::from_slice(&response.body).expect("valid json");
+
+        assert_eq!(value["content"][0]["type"], "server_tool_use");
+        assert_eq!(value["content"][1]["type"], "web_search_tool_result");
+        assert_eq!(value["content"][1]["tool_use_id"], "toolu_web_1");
+    }
+
+    #[test]
+    fn build_direct_responses_response_includes_web_search_sources() {
+        let aggregated = AggregatedKiroResponse {
+            text: "hello".to_string(),
+            ..Default::default()
+        };
+        let server_tool_calls = vec![ServerToolCall {
+            id: "toolu_web_1".to_string(),
+            name: "web_search".to_string(),
+            input: json!({"query":"rust async"}),
+            result_content: json!([{
+                "type":"web_search_result",
+                "title":"Rust Async",
+                "url":"https://example.com/rust-async"
+            }]),
+            tool_result_text: "{\"results\":[]}".to_string(),
+        }];
+
+        let response = build_direct_responses_response(
+            "claude-sonnet-4-5-20250929",
+            &aggregated,
+            &server_tool_calls,
+            false,
+            Some("resp_new_1".to_string()),
+            None,
+        );
+        let value: Value = serde_json::from_slice(&response.body).expect("valid json");
+
+        assert_eq!(value["output"][0]["type"], "web_search_call");
+        assert!(
+            value["output_text"]
+                .as_str()
+                .is_some_and(|text| text.contains("Sources:\n[1] Rust Async"))
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_responses_session_messages_replays_previous_assistant_turn() {
+        {
+            let mut rt = gateway_runtime().lock().await;
+            rt.responses_sessions.clear();
+            rt.responses_sessions.insert(
+                "resp_prev_123".to_string(),
+                ResponsesSessionEntry {
+                    previous_response_id: None,
+                    request_messages: vec![GatewayMessage {
+                        role: "user".to_string(),
+                        content: Value::String("第一次提问".to_string()),
+                        tool_calls: Vec::new(),
+                        tool_call_id: None,
+                        metadata: None,
+                    }],
+                    assistant_message: GatewayMessage {
+                        role: "assistant".to_string(),
+                        content: Value::String("第一次回答".to_string()),
+                        tool_calls: vec![GatewayToolCall {
+                            id: "call_1".to_string(),
+                            name: "search_docs".to_string(),
+                            arguments: "{\"q\":\"gateway\"}".to_string(),
+                        }],
+                        tool_call_id: None,
+                        metadata: None,
+                    },
+                    updated_at: Instant::now(),
+                },
+            );
+        }
+
+        let request = GatewayProxyRequest {
+            model: "claude-sonnet-4-5-20250929".to_string(),
+            stream: false,
+            messages: vec![GatewayMessage {
+                role: "user".to_string(),
+                content: Value::String("第二次提问".to_string()),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                metadata: None,
+            }],
+            tools: Vec::new(),
+            tool_choice: None,
+            previous_response_id: Some("resp_prev_123".to_string()),
+        };
+
+        let merged = restore_responses_session_messages(&request).await;
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].role, "user");
+        assert_eq!(merged[1].role, "assistant");
+        assert_eq!(merged[2].role, "user");
+        assert_eq!(merged[1].tool_calls.len(), 1);
+        assert_eq!(merged[1].tool_calls[0].name, "search_docs");
+    }
+
+    #[tokio::test]
+    async fn restore_responses_session_messages_preserves_assistant_metadata() {
+        {
+            let mut rt = gateway_runtime().lock().await;
+            rt.responses_sessions.clear();
+            rt.responses_sessions.insert(
+                "msg_prev_123".to_string(),
+                ResponsesSessionEntry {
+                    previous_response_id: None,
+                    request_messages: vec![GatewayMessage {
+                        role: "user".to_string(),
+                        content: Value::String("第一次提问".to_string()),
+                        tool_calls: Vec::new(),
+                        tool_call_id: None,
+                        metadata: None,
+                    }],
+                    assistant_message: GatewayMessage {
+                        role: "assistant".to_string(),
+                        content: Value::String("第一次回答".to_string()),
+                        tool_calls: Vec::new(),
+                        tool_call_id: None,
+                        metadata: Some(json!({
+                            "reasoningContent": {
+                                "reasoningText": {
+                                    "text": "内部推理"
+                                }
+                            }
+                        })),
+                    },
+                    updated_at: Instant::now(),
+                },
+            );
+        }
+
+        let request = GatewayProxyRequest {
+            model: "claude-sonnet-4-5-20250929".to_string(),
+            stream: false,
+            messages: vec![GatewayMessage {
+                role: "user".to_string(),
+                content: Value::String("第二次提问".to_string()),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+                metadata: None,
+            }],
+            tools: Vec::new(),
+            tool_choice: None,
+            previous_response_id: Some("msg_prev_123".to_string()),
+        };
+
+        let merged = restore_responses_session_messages(&request).await;
+        assert_eq!(merged.len(), 3);
+        assert_eq!(
+            merged[1]
+                .metadata
+                .as_ref()
+                .and_then(|value| value.pointer("/reasoningContent/reasoningText/text"))
+                .and_then(Value::as_str),
+            Some("内部推理")
+        );
+    }
+
+    #[test]
+    fn gateway_tools_to_kiro_includes_web_search_domain_hints() {
+        let tools = vec![GatewayTool {
+            tool_type: "web_search_20260209".to_string(),
+            name: "web_search".to_string(),
+            description: "搜索网络".to_string(),
+            input_schema: json!({}),
+            web_search_max_uses: Some(3),
+            allowed_domains: Some(vec!["blog.rust-lang.org".to_string()]),
+            blocked_domains: Some(vec!["example.com".to_string()]),
+            user_location: Some(json!({"type":"approximate","city":"Singapore"})),
+        }];
+
+        let converted = gateway_tools_to_kiro(&tools).expect("tool should convert");
+        let converted_value = serde_json::to_value(&converted[0]).expect("tool should serialize");
+        let description = converted_value
+            .pointer("/toolSpecification/description")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(description.contains("Only return results from: blog.rust-lang.org"));
+        assert!(description.contains("Exclude results from: example.com"));
+        assert_eq!(
+            converted_value
+                .pointer("/toolSpecification/inputSchema/json/required/0")
+                .and_then(Value::as_str),
+            Some("query")
+        );
     }
 }
