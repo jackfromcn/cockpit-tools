@@ -39,6 +39,19 @@ fn should_skip_sidecar_build(output: &Path) -> bool {
     std::env::var("COCKPIT_SKIP_CLIPROXY_BUILD").ok().as_deref() == Some("1") && output.exists()
 }
 
+fn should_force_skip_sidecar_build() -> bool {
+    std::env::var("COCKPIT_SKIP_CLIPROXY_BUILD").ok().as_deref() == Some("1")
+}
+
+fn is_dev_profile() -> bool {
+    std::env::var("PROFILE").ok().as_deref() == Some("debug")
+        || std::env::var("COCKPIT_TOOLS_PROFILE").ok().as_deref() == Some("dev")
+}
+
+fn can_run_go() -> bool {
+    Command::new("go").arg("version").status().is_ok()
+}
+
 fn emit_sidecar_rerun_inputs(path: &Path) {
     if path.file_name().and_then(|name| name.to_str()) == Some("bin") {
         return;
@@ -147,8 +160,27 @@ fn build_cockpit_cliproxy_sidecar() {
     let output_dir = sidecar_dir.join("bin");
 
     println!("cargo:rerun-if-env-changed=COCKPIT_SKIP_CLIPROXY_BUILD");
+    println!("cargo:rerun-if-env-changed=COCKPIT_TOOLS_PROFILE");
+    println!("cargo:rerun-if-env-changed=PROFILE");
     emit_sidecar_rerun_inputs(&sidecar_dir);
     std::fs::create_dir_all(&output_dir).expect("failed to create cockpit-cliproxy bin dir");
+
+    if should_force_skip_sidecar_build() {
+        println!(
+            "cargo:warning=Skipping cockpit-cliproxy sidecar build because COCKPIT_SKIP_CLIPROXY_BUILD=1"
+        );
+        return;
+    }
+
+    if !can_run_go() {
+        if is_dev_profile() {
+            println!(
+                "cargo:warning=Go toolchain not found; skipping cockpit-cliproxy sidecar build for local dev"
+            );
+            return;
+        }
+        panic!("go command not found; install Go or set COCKPIT_SKIP_CLIPROXY_BUILD=1 for local dev");
+    }
 
     if cfg!(target_os = "macos") && target == "universal-apple-darwin" {
         build_macos_universal_sidecar(&sidecar_dir, &output_dir);
