@@ -9,7 +9,6 @@ use modules::logger;
 use std::sync::OnceLock;
 #[cfg(target_os = "macos")]
 use tauri::ActivationPolicy;
-#[cfg(target_os = "macos")]
 use tauri::RunEvent;
 use tauri::WindowEvent;
 use tauri::{Emitter, Manager};
@@ -495,6 +494,7 @@ pub fn run() {
             commands::codex::export_codex_accounts,
             commands::codex::import_codex_from_files,
             commands::codex::refresh_codex_quota,
+            commands::codex::refresh_codex_subscription_info,
             commands::codex::refresh_all_codex_quotas,
             commands::codex::refresh_current_codex_quota,
             commands::codex::codex_oauth_login_start,
@@ -532,13 +532,26 @@ pub fn run() {
             commands::codex::codex_local_access_rotate_api_key,
             commands::codex::codex_local_access_update_bound_oauth_account,
             commands::codex::codex_local_access_clear_stats,
+            commands::codex::codex_local_access_query_request_logs,
             commands::codex::codex_local_access_prepare_restart,
             commands::codex::codex_local_access_kill_port,
             commands::codex::codex_local_access_update_port,
             commands::codex::codex_local_access_update_routing_strategy,
             commands::codex::codex_local_access_update_custom_routing,
+            commands::codex::codex_local_access_update_model_rules,
+            commands::codex::codex_local_access_update_model_pricings,
+            commands::codex::codex_local_access_update_routing_options,
+            commands::codex::codex_local_access_update_timeouts,
+            commands::codex::codex_local_access_update_timeout_presets,
             commands::codex::codex_local_access_update_upstream_proxy_config,
+            commands::codex::codex_local_access_update_gateway_mode,
+            commands::codex::codex_local_access_update_debug_logs,
             commands::codex::codex_local_access_update_access_scope,
+            commands::codex::codex_local_access_update_image_generation_mode,
+            commands::codex::codex_local_access_create_api_key,
+            commands::codex::codex_local_access_update_api_key,
+            commands::codex::codex_local_access_rotate_named_api_key,
+            commands::codex::codex_local_access_delete_api_key,
             commands::codex::codex_local_access_set_enabled,
             commands::codex::codex_local_access_activate,
             commands::codex::codex_local_access_test,
@@ -892,6 +905,15 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
+        match &event {
+            RunEvent::ExitRequested { .. } | RunEvent::Exit => {
+                tauri::async_runtime::block_on(async {
+                    modules::codex_local_access::shutdown_local_access_gateway_for_app_exit().await;
+                });
+            }
+            _ => {}
+        }
+
         #[cfg(target_os = "macos")]
         {
             match event {
