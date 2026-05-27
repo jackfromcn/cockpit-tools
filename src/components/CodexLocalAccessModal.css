@@ -30,6 +30,112 @@
   overflow: hidden;
 }
 
+.codex-local-access-modal.codex-local-access-modal-members {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99) 0%, rgba(248, 250, 252, 0.98) 100%) !important;
+  border-color: rgba(148, 163, 184, 0.16);
+  box-shadow:
+    0 34px 90px rgba(2, 6, 23, 0.2),
+    0 10px 32px rgba(15, 23, 42, 0.12);
+}
+
+.codex-local-access-modal.codex-local-access-modal-members::before,
+.codex-local-access-modal.codex-local-access-modal-members::after {
+  display: none;
+}
+
+.codex-local-access-modal.codex-local-access-modal-members .modal-header,
+.codex-local-access-modal.codex-local-access-modal-members .codex-local-access-modal-header,
+.codex-local-access-modal.codex-local-access-modal-members .modal-body,
+.codex-local-access-modal.codex-local-access-modal-members .codex-local-access-modal-body,
+.codex-local-access-modal.codex-local-access-modal-members .modal-footer,
+.codex-local-access-modal.codex-local-access-modal-members .codex-local-access-modal-footer {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96)) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.codex-local-access-modal.codex-local-access-modal-panel {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99) 0%, rgba(248, 250, 252, 0.98) 100%) !important;
+  border-color: rgba(148, 163, 184, 0.16);
+  box-shadow:
+    0 34px 90px rgba(2, 6, 23, 0.2),
+    0 10px 32px rgba(15, 23, 42, 0.12);
+}
+
+.codex-local-access-modal.codex-local-access-modal-panel::before,
+.codex-local-access-modal.codex-local-access-modal-panel::after {
+  display: none;
+}
+
+.codex-local-access-modal.codex-local-access-modal-panel .modal-header,
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-modal-header,
+.codex-local-access-modal.codex-local-access-modal-panel .modal-body,
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-modal-body,
+.codex-local-access-modal.codex-local-access-modal-panel .modal-footer,
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-modal-footer {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96)) !important;
+  border-color: rgba(148, 163, 184, 0.14);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-section-surface,
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-config-card,
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-stat-card,
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-account-stat-row {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.95)) !important;
+  border-color: rgba(148, 163, 184, 0.14);
+  box-shadow:
+    0 18px 32px -28px rgba(2, 6, 23, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-code,
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-port-row input,
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-header-upstream-url input,
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-header-routing .single-select-dropdown-trigger,
+.codex-local-access-modal.codex-local-access-modal-panel .folder-icon-btn,
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-upstream-save-btn,
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-subtle-badge,
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-test-pill,
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-stats-range-tabs {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(241, 245, 249, 0.92)) !important;
+  border-color: rgba(148, 163, 184, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 8px 18px -16px rgba(15, 23, 42, 0.14);
+}
+
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-toolbar-btn.is-primary,
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-stats-range-tab.is-active {
+  background:
+    linear-gradient(180deg, rgba(219, 234, 254, 0.96), rgba(239, 246, 255, 0.94)) !important;
+  border-color: rgba(96, 165, 250, 0.24);
+  box-shadow: 0 10px 18px -14px rgba(59, 130, 246, 0.28);
+}
+
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-toolbar-btn.is-danger {
+  background:
+    linear-gradient(180deg, rgba(254, 242, 242, 0.98), rgba(254, 226, 226, 0.92)) !important;
+  border-color: rgba(248, 113, 113, 0.22);
+}
+
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-close {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(148, 163, 184, 0.16);
+  box-shadow: 0 10px 24px -18px rgba(15, 23, 42, 0.18);
+}
+
+.codex-local-access-modal.codex-local-access-modal-panel .codex-local-access-close:hover {
+  background: rgba(255, 255, 255, 1);
+}
+
 .codex-local-access-modal::before,
 .codex-local-access-modal::after {
   content: '';
@@ -54,7 +160,7 @@
   z-index: 1;
 }
 
-.codex-local-access-modal-members {
+.codex-local-access-modal.codex-local-access-modal-members {
   max-width: min(780px, calc(100vw - 32px));
 }
 
@@ -1047,6 +1153,19 @@
   overflow: hidden;
 }
 
+.codex-local-access-modal-members .codex-local-access-section-surface {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(248, 250, 252, 0.97)),
+    color-mix(in srgb, var(--bg-card) 99%, white 1%);
+  box-shadow:
+    0 20px 38px -34px rgba(15, 23, 42, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.codex-local-access-modal-members .codex-local-access-section-surface::before {
+  display: none;
+}
+
 .codex-local-access-section-surface::before {
   content: '';
   position: absolute;
@@ -1627,6 +1746,13 @@
   padding: 0 16px 0 40px;
 }
 
+.codex-local-access-modal-members .group-account-search input,
+.codex-local-access-modal-members .group-account-empty,
+.codex-local-access-modal-members .codex-local-access-free-toggle {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96));
+}
+
 .codex-local-access-member-section .group-account-item {
   position: relative;
   align-items: flex-start;
@@ -1634,9 +1760,9 @@
   border-radius: 16px;
   border: 1px solid rgba(148, 163, 184, 0.14);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.38)),
-    color-mix(in srgb, var(--bg-card) 95%, white 5%);
-  box-shadow: 0 14px 28px -24px rgba(15, 23, 42, 0.38);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(248, 250, 252, 0.94)),
+    color-mix(in srgb, var(--bg-card) 98%, white 2%);
+  box-shadow: 0 14px 28px -24px rgba(15, 23, 42, 0.22);
   transition:
     transform 0.18s ease,
     border-color 0.18s ease,
@@ -1647,44 +1773,46 @@
 .codex-local-access-member-section .group-account-item:hover {
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--primary) 20%, rgba(148, 163, 184, 0.16));
-  box-shadow: 0 20px 34px -28px rgba(15, 23, 42, 0.45);
+  box-shadow: 0 20px 34px -28px rgba(15, 23, 42, 0.28);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.48)),
-    color-mix(in srgb, var(--bg-card) 95%, white 5%);
+    linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(248, 250, 252, 0.98)),
+    color-mix(in srgb, var(--bg-card) 98%, white 2%);
 }
 
 .codex-local-access-member-section .group-account-item.is-current {
   border-color: color-mix(in srgb, var(--primary) 28%, rgba(148, 163, 184, 0.16));
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(236, 245, 255, 0.62)),
-    color-mix(in srgb, var(--primary) 5%, var(--bg-card));
+    linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(236, 245, 255, 0.96)),
+    color-mix(in srgb, var(--primary) 7%, var(--bg-card));
   box-shadow:
     0 24px 36px -28px rgba(29, 78, 216, 0.34),
     inset 0 1px 0 rgba(255, 255, 255, 0.62);
 }
 
 .codex-local-access-member-section .group-account-item.is-disabled {
-  opacity: 0.72;
+  opacity: 0.94;
 }
 
 .codex-local-access-member-section .group-account-item.is-disabled:hover {
   transform: none;
   border-color: rgba(148, 163, 184, 0.14);
-  box-shadow: 0 14px 28px -24px rgba(15, 23, 42, 0.38);
+  box-shadow: 0 14px 28px -24px rgba(15, 23, 42, 0.22);
 }
 
 .codex-local-access-member-section .group-account-item.group-account-item-header {
   min-height: 46px;
   padding: 10px 14px;
   border-style: dashed;
-  background: rgba(255, 255, 255, 0.34);
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(241, 245, 249, 0.94));
   box-shadow: none;
 }
 
 .codex-local-access-member-section .group-account-item.group-account-item-header:hover {
   transform: none;
   border-color: rgba(148, 163, 184, 0.14);
-  background: rgba(255, 255, 255, 0.34);
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(241, 245, 249, 0.94));
   box-shadow: none;
 }
 

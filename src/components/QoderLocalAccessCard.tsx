@@ -405,7 +405,7 @@ export function QoderLocalAccessCard({
   return (
     <>
       <div
-        className={`ghcp-account-card codex-account-card folder-inline-card codex-local-access-card codex-local-access-card--${cardLayoutClass} ${
+        className={`ghcp-account-card codex-account-card folder-inline-card codex-local-access-card provider-local-access-card provider-local-access-card--qoder codex-local-access-card--${cardLayoutClass} ${
           shouldMarkCurrent ? 'current' : ''
         } is-expanded`}
       >
@@ -585,14 +585,6 @@ export function QoderLocalAccessCard({
                 disabled={actionBusy || accounts.length === 0 || !collection}
               >
                 {loading ? <RefreshCw size={14} className="loading-spinner" /> : <FolderPlus size={14} />}
-              </button>
-              <button
-                className="card-action-btn"
-                onClick={() => void handleRotateKey()}
-                title="轮换 API Key"
-                disabled={actionBusy || !collection}
-              >
-                <KeyRound size={14} />
               </button>
               <button
                 className="card-action-btn"

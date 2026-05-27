@@ -431,9 +431,16 @@ export function CodexLocalAccessModal({
     setCustomRoutingBulkPriority('10');
     setCustomRoutingBulkWeight('1');
     if (mode === 'members') {
-      window.setTimeout(() => {
-        searchInputRef.current?.focus();
-      }, 0);
+      const focusSearchInput = () => {
+        const input = searchInputRef.current;
+        if (!input) return;
+        input.focus();
+        input.select();
+      };
+      window.requestAnimationFrame(() => {
+        focusSearchInput();
+        window.setTimeout(focusSearchInput, 50);
+      });
     }
   }, [
     collection?.accountIds,
@@ -2027,6 +2034,7 @@ export function CodexLocalAccessModal({
                   <input
                     ref={searchInputRef}
                     type="text"
+                    autoFocus
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                     placeholder={t('accounts.search')}

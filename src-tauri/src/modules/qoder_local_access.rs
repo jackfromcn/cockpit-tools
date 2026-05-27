@@ -53,6 +53,14 @@ static GATEWAY_RUNTIME: OnceLock<TokioMutex<GatewayRuntime>> = OnceLock::new();
 static ROUND_ROBIN_CURSOR: AtomicUsize = AtomicUsize::new(0);
 static HTTP_CLIENT: OnceLock<Mutex<Option<Client>>> = OnceLock::new();
 
+struct ParsedQoderResponse {
+    chunks: Vec<String>,
+    finished: bool,
+    finish_reason: &'static str,
+    content: Option<String>,
+    tool_calls: Vec<Value>,
+}
+
 #[derive(Default)]
 struct GatewayRuntime {
     loaded: bool,
@@ -251,7 +259,12 @@ fn build_cosy_bearer(session: &CosySession, encoded_body: &str) -> Result<String
 
 // ─── OpenAI → Qoder 请求格式转换 ───
 
-fn build_qoder_request_body(messages: &Value, model: &str) -> Value {
+fn build_qoder_request_body(
+    messages: &Value,
+    model: &str,
+    tools: Option<&Vec<Value>>,
+    tool_choice: Option<&Value>,
+) -> Value {
     let nid = uuid::Uuid::new_v4().to_string();
     let now_ms = chrono::Utc::now().timestamp_millis();
 
@@ -265,6 +278,8 @@ fn build_qoder_request_body(messages: &Value, model: &str) -> Value {
                 .and_then(|m| m.get("content").and_then(|c| c.as_str()))
         })
         .unwrap_or("");
+
+    let tool_instruction = build_tool_instruction(tools, tool_choice);
 
     // Build messages in Qoder format
     let mut qoder_messages = Vec::new();
@@ -294,6 +309,14 @@ fn build_qoder_request_body(messages: &Value, model: &str) -> Value {
         qoder_messages.insert(0, json!({
             "role": "system",
             "content": "You are a helpful assistant. Respond concisely.",
+            "response_meta": {"id": "", "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}},
+            "reasoning_content_signature": ""
+        }));
+    }
+    if let Some(instruction) = tool_instruction {
+        qoder_messages.insert(0, json!({
+            "role": "system",
+            "content": instruction,
             "response_meta": {"id": "", "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}},
             "reasoning_content_signature": ""
         }));
@@ -359,10 +382,10 @@ fn build_qoder_request_body(messages: &Value, model: &str) -> Value {
 
 // ─── Qoder SSE → OpenAI 响应格式转换 ───
 
-fn parse_qoder_sse_to_openai(sse_data: &str, request_id: &str, model: &str) -> (Vec<String>, bool) {
-    let mut chunks = Vec::new();
+fn parse_qoder_sse_to_openai(sse_data: &str, request_id: &str, model: &str) -> ParsedQoderResponse {
     let mut finished = false;
     let created = chrono::Utc::now().timestamp();
+    let mut text = String::new();
 
     for line in sse_data.lines() {
         if !line.starts_with("data:") {
@@ -389,10 +412,39 @@ fn parse_qoder_sse_to_openai(sse_data: &str, request_id: &str, model: &str) -> (
                 let empty_obj = json!({});
                 let delta = choice.get("delta").unwrap_or(&empty_obj);
                 let content = delta.get("content").and_then(|c| c.as_str()).unwrap_or("");
-                let role = delta.get("role").and_then(|r| r.as_str()).unwrap_or("");
-                if content.is_empty() && role.is_empty() {
+                if content.is_empty() {
                     continue;
                 }
+                text.push_str(content);
+            }
+        }
+    }
+
+    let extracted = extract_tool_calls_from_text(&text);
+    if !extracted.tool_calls.is_empty() {
+        let mut chunks = Vec::new();
+        if let Some(content) = extracted.content.as_ref().filter(|s| !s.is_empty()) {
+            let text_chunk = json!({
+                "id": request_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": content},
+                    "finish_reason": null
+                }]
+            });
+            chunks.push(format!(
+                "data: {}\n\n",
+                serde_json::to_string(&text_chunk).unwrap_or_default()
+            ));
+        }
+        let tool_chunks = extracted
+            .tool_calls
+            .iter()
+            .enumerate()
+            .map(|(index, tool_call)| {
                 let chunk = json!({
                     "id": request_id,
                     "object": "chat.completion.chunk",
@@ -400,23 +452,286 @@ fn parse_qoder_sse_to_openai(sse_data: &str, request_id: &str, model: &str) -> (
                     "model": model,
                     "choices": [{
                         "index": 0,
-                        "delta": delta,
+                        "delta": {
+                            "tool_calls": [{
+                                "index": index,
+                                "id": tool_call.get("id").cloned().unwrap_or_else(|| json!(format!("call_{}", uuid::Uuid::new_v4().simple()))),
+                                "type": "function",
+                                "function": {
+                                    "name": tool_call.get("function").and_then(|f| f.get("name")).cloned().unwrap_or_else(|| json!("")),
+                                    "arguments": tool_call.get("function").and_then(|f| f.get("arguments")).cloned().unwrap_or_else(|| json!("{}"))
+                                }
+                            }]
+                        },
                         "finish_reason": null
                     }]
                 });
-                chunks.push(format!(
+                format!(
                     "data: {}\n\n",
                     serde_json::to_string(&chunk).unwrap_or_default()
-                ));
+                )
+            })
+            .collect::<Vec<_>>();
+        chunks.extend(tool_chunks);
+        return ParsedQoderResponse {
+            chunks,
+            finished,
+            finish_reason: "tool_calls",
+            content: extracted.content,
+            tool_calls: extracted.tool_calls,
+        };
+    }
+
+    let chunks = if text.is_empty() {
+        Vec::new()
+    } else {
+        let chunk = json!({
+            "id": request_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {"content": text},
+                "finish_reason": null
+            }]
+        });
+        vec![format!(
+            "data: {}\n\n",
+            serde_json::to_string(&chunk).unwrap_or_default()
+        )]
+    };
+
+    ParsedQoderResponse {
+        chunks,
+        finished,
+        finish_reason: "stop",
+        content: if text.is_empty() { None } else { Some(text) },
+        tool_calls: Vec::new(),
+    }
+}
+
+fn build_tool_instruction(tools: Option<&Vec<Value>>, tool_choice: Option<&Value>) -> Option<String> {
+    let tools = tools?;
+    if tools.is_empty() {
+        return None;
+    }
+
+    let tool_lines = tools
+        .iter()
+        .filter_map(|tool| {
+            let function = tool.get("function")?;
+            let name = function.get("name")?.as_str()?;
+            let description = function
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let parameters = function.get("parameters").cloned().unwrap_or_else(|| json!({}));
+            Some(format!(
+                "- {}: {} | parameters={}",
+                name,
+                description,
+                serde_json::to_string(&parameters).unwrap_or_else(|_| "{}".into())
+            ))
+        })
+        .collect::<Vec<_>>();
+    if tool_lines.is_empty() {
+        return None;
+    }
+
+    let choice_hint = match tool_choice {
+        Some(Value::String(mode)) if mode == "required" => {
+            "You must call exactly one tool and must not answer directly.".to_string()
+        }
+        Some(Value::Object(obj)) => obj
+            .get("function")
+            .and_then(|v| v.get("name"))
+            .and_then(|v| v.as_str())
+            .map(|name| format!("If a tool is needed, call the tool named {}.", name))
+            .unwrap_or_else(|| "If a tool is needed, call exactly one matching tool.".to_string()),
+        _ => "If a tool is needed, call exactly one matching tool. Otherwise answer normally.".to_string(),
+    };
+
+    Some(format!(
+        "Tool protocol override. {choice_hint}\nWhen calling a tool, respond with ONLY compact JSON and no markdown:\n{{\"name\":\"<tool-name>\",\"parameters\":{{...}}}}\nAvailable tools:\n{}",
+        tool_lines.join("\n")
+    ))
+}
+
+fn detect_tool_call_json(content: &str) -> Option<Value> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let candidate = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .map(|s| s.trim())
+        .and_then(|s| s.strip_suffix("```").map(|v| v.trim()))
+        .unwrap_or(trimmed);
+
+    let parsed: Value = serde_json::from_str(candidate).ok()?;
+    let name = parsed.get("name").and_then(|v| v.as_str())?;
+    let parameters = parsed
+        .get("parameters")
+        .cloned()
+        .or_else(|| parsed.get("arguments").cloned())
+        .unwrap_or_else(|| json!({}));
+
+    let arguments = match parameters {
+        Value::String(s) => s,
+        other => serde_json::to_string(&other).ok()?,
+    };
+
+    Some(json!({
+        "id": format!("call_{}", uuid::Uuid::new_v4().simple()),
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": arguments,
+        }
+    }))
+}
+
+struct ExtractedToolCalls {
+    content: Option<String>,
+    tool_calls: Vec<Value>,
+}
+
+fn extract_tool_calls_from_text(content: &str) -> ExtractedToolCalls {
+    let mut tool_calls = Vec::new();
+    let mut residual = String::new();
+    let bytes = content.as_bytes();
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if content[i..].starts_with("<tool_call>") {
+            i += "<tool_call>".len();
+            continue;
+        }
+        if let Some((end, tool_call)) = parse_tag_tool_call(content, i) {
+            tool_calls.push(tool_call);
+            i = end;
+            continue;
+        }
+        if bytes[i] == b'{' {
+            if let Some((end, parsed)) = parse_balanced_json_object(content, i) {
+                if let Some(tool_call) = detect_tool_call_json(parsed) {
+                    tool_calls.push(tool_call);
+                } else {
+                    residual.push_str(parsed);
+                }
+                i = end;
+                continue;
             }
         }
+        residual.push(bytes[i] as char);
+        i += 1;
     }
 
-    if finished && chunks.is_empty() {
-        // Empty response, still send a done marker
+    let content = normalize_tool_residual_text(&residual);
+    ExtractedToolCalls { content, tool_calls }
+}
+
+fn parse_tag_tool_call(content: &str, start: usize) -> Option<(usize, Value)> {
+    let rest = &content[start..];
+    let function_prefix = "<function=";
+    if !rest.starts_with(function_prefix) {
+        return None;
     }
 
-    (chunks, finished)
+    let name_start = start + function_prefix.len();
+    let name_end_rel = content[name_start..].find('>')?;
+    let name_end = name_start + name_end_rel;
+    let name = &content[name_start..name_end];
+    let body_start = name_end + 1;
+    let close_tag = "</function>";
+    let body_end_rel = content[body_start..].find(close_tag)?;
+    let body_end = body_start + body_end_rel;
+    let body = &content[body_start..body_end];
+    let end = body_end + close_tag.len();
+
+    let mut params = serde_json::Map::new();
+    let mut cursor = 0usize;
+    while let Some(open_rel) = body[cursor..].find('<') {
+        let open = cursor + open_rel;
+        if body[open..].starts_with("</") {
+            cursor = open + 2;
+            continue;
+        }
+        let tag_name_start = open + 1;
+        let tag_name_end_rel = body[tag_name_start..].find('>')?;
+        let tag_name_end = tag_name_start + tag_name_end_rel;
+        let tag_name = &body[tag_name_start..tag_name_end];
+        let value_start = tag_name_end + 1;
+        let close = format!("</{}>", tag_name);
+        let value_end_rel = body[value_start..].find(&close)?;
+        let value_end = value_start + value_end_rel;
+        let value = body[value_start..value_end].trim();
+        params.insert(tag_name.to_string(), Value::String(value.to_string()));
+        cursor = value_end + close.len();
+    }
+
+    Some((
+        end,
+        json!({
+            "id": format!("call_{}", uuid::Uuid::new_v4().simple()),
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": Value::String(serde_json::to_string(&Value::Object(params)).ok()?),
+            }
+        }),
+    ))
+}
+
+fn parse_balanced_json_object(content: &str, start: usize) -> Option<(usize, &str)> {
+    let bytes = content.as_bytes();
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for idx in start..bytes.len() {
+        let ch = bytes[idx];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == b'\\' {
+                escaped = true;
+            } else if ch == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some((idx + 1, &content[start..idx + 1]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn normalize_tool_residual_text(text: &str) -> Option<String> {
+    let normalized = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
 }
 
 // ─── 配置加载/保存 ───
@@ -579,6 +894,11 @@ async fn proxy_to_upstream(
         .and_then(|m| m.as_str())
         .unwrap_or("lite");
     let messages = req_body.get("messages").cloned().unwrap_or(json!([]));
+    let tools = req_body
+        .get("tools")
+        .and_then(|v| v.as_array())
+        .cloned();
+    let tool_choice = req_body.get("tool_choice");
     let stream = req_body
         .get("stream")
         .and_then(|s| s.as_bool())
@@ -588,7 +908,7 @@ async fn proxy_to_upstream(
     let session = build_cosy_session(account)?;
 
     // Convert to Qoder format
-    let qoder_body = build_qoder_request_body(&messages, model);
+    let qoder_body = build_qoder_request_body(&messages, model, tools.as_ref(), tool_choice);
     let encoded_body = qoder_encode(&serde_json::to_vec(&qoder_body).unwrap_or_default());
 
     // Build Bearer
@@ -644,7 +964,7 @@ async fn proxy_to_upstream(
     let created = chrono::Utc::now().timestamp();
 
     if stream {
-        let (chunks, _) = parse_qoder_sse_to_openai(&sse_data, &request_id, model);
+        let parsed = parse_qoder_sse_to_openai(&sse_data, &request_id, model);
         let mut response_body = String::new();
         // Role chunk
         let role_chunk = json!({
@@ -658,7 +978,7 @@ async fn proxy_to_upstream(
             "data: {}\n\n",
             serde_json::to_string(&role_chunk).unwrap_or_default()
         ));
-        for chunk in &chunks {
+        for chunk in &parsed.chunks {
             response_body.push_str(chunk);
         }
         // Done chunk
@@ -667,7 +987,7 @@ async fn proxy_to_upstream(
             "object": "chat.completion.chunk",
             "created": created,
             "model": model,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+            "choices": [{"index": 0, "delta": {}, "finish_reason": parsed.finish_reason}]
         });
         response_body.push_str(&format!(
             "data: {}\n\n",
@@ -683,23 +1003,20 @@ async fn proxy_to_upstream(
         })
     } else {
         // Non-stream: collect all content
-        let (chunks, _) = parse_qoder_sse_to_openai(&sse_data, &request_id, model);
-        let mut full_content = String::new();
-        for chunk_str in &chunks {
-            if let Some(data_part) = chunk_str.strip_prefix("data: ") {
-                if let Ok(v) = serde_json::from_str::<Value>(data_part.trim()) {
-                    if let Some(c) = v
-                        .get("choices")
-                        .and_then(|ch| ch.get(0))
-                        .and_then(|ch| ch.get("delta"))
-                        .and_then(|d| d.get("content"))
-                        .and_then(|c| c.as_str())
-                    {
-                        full_content.push_str(c);
-                    }
-                }
-            }
-        }
+        let parsed = parse_qoder_sse_to_openai(&sse_data, &request_id, model);
+
+        let message = if !parsed.tool_calls.is_empty() {
+            json!({
+                "role": "assistant",
+                "content": parsed.content.clone().map(Value::String).unwrap_or(Value::Null),
+                "tool_calls": parsed.tool_calls.clone()
+            })
+        } else {
+            json!({
+                "role": "assistant",
+                "content": parsed.content.unwrap_or_default()
+            })
+        };
 
         let response = json!({
             "id": request_id,
@@ -708,8 +1025,8 @@ async fn proxy_to_upstream(
             "model": model,
             "choices": [{
                 "index": 0,
-                "message": {"role": "assistant", "content": full_content},
-                "finish_reason": "stop"
+                "message": message,
+                "finish_reason": parsed.finish_reason
             }],
             "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         });
@@ -996,6 +1313,7 @@ async fn write_error(stream: &mut TcpStream, status: u16, message: &str) {
     );
     stream.write_all(resp.as_bytes()).await.ok();
     stream.write_all(&body).await.ok();
+    let _ = stream.shutdown().await;
 }
 
 async fn write_json_response(stream: &mut TcpStream, status: u16, value: &Value) {
@@ -1008,6 +1326,7 @@ async fn write_json_response(stream: &mut TcpStream, status: u16, value: &Value)
     );
     stream.write_all(resp.as_bytes()).await.ok();
     stream.write_all(&body).await.ok();
+    let _ = stream.shutdown().await;
 }
 
 async fn write_upstream_response(stream: &mut TcpStream, result: &ProxyResult) {
@@ -1038,6 +1357,7 @@ async fn write_upstream_response(stream: &mut TcpStream, result: &ProxyResult) {
     }
     stream.write_all(header_str.as_bytes()).await.ok();
     stream.write_all(&result.body).await.ok();
+    let _ = stream.shutdown().await;
 }
 
 fn status_text(code: u16) -> &'static str {
@@ -1336,5 +1656,75 @@ pub async fn restore_local_access_gateway() {
             let mut rt = gateway_runtime().lock().await;
             rt.last_error = Some(e);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_plain_json_tool_call() {
+        let tool_call =
+            detect_tool_call_json("{\"name\":\"echo_tool\",\"parameters\":{\"value\":\"hi\"}}")
+                .expect("tool call");
+        assert_eq!(tool_call["type"], "function");
+        assert_eq!(tool_call["function"]["name"], "echo_tool");
+        assert_eq!(tool_call["function"]["arguments"], "{\"value\":\"hi\"}");
+    }
+
+    #[test]
+    fn parses_qoder_sse_into_tool_calls() {
+        let sse = concat!(
+            "data:{\"body\":\"{\\\"choices\\\":[{\\\"delta\\\":{\\\"content\\\":\\\"{\\\\\\\"name\\\\\\\":\\\\\\\"echo_tool\\\\\\\",\\\\\\\"parameters\\\\\\\":{\\\\\\\"value\\\\\\\":\\\\\\\"TOOL_STREAM_CHECK\\\\\\\"}}\\\"}}]}\"}\n",
+            "event:finish\n"
+        );
+        let parsed = parse_qoder_sse_to_openai(sse, "chatcmpl_test", "performance");
+        assert_eq!(parsed.finish_reason, "tool_calls");
+        assert!(parsed.content.is_none());
+        assert_eq!(parsed.tool_calls.len(), 1);
+        assert!(parsed.chunks[0].contains("\"tool_calls\""));
+        assert!(parsed.chunks[0].contains("\"echo_tool\""));
+    }
+
+    #[test]
+    fn extracts_multiple_tool_calls_with_residual_text() {
+        let text = concat!(
+            "{\"name\":\"Agent\",\"parameters\":{\"description\":\"a\",\"prompt\":\"p\",\"subagent_type\":\"general-purpose\"}}\n\n",
+            "{\"name\":\"Agent\",\"parameters\":{\"description\":\"b\",\"prompt\":\"q\",\"subagent_type\":\"general-purpose\"}}",
+            "Both agents are running. Let me also check for any active phase directories.\n",
+            "{\"name\":\"Glob\",\"parameters\":{\"pattern\":\".planning/**/*.md\",\"path\":\"/tmp/project\"}}"
+        );
+        let extracted = extract_tool_calls_from_text(text);
+        assert_eq!(extracted.tool_calls.len(), 3);
+        assert_eq!(extracted.tool_calls[0]["function"]["name"], "Agent");
+        assert_eq!(extracted.tool_calls[2]["function"]["name"], "Glob");
+        assert_eq!(
+            extracted.content.as_deref(),
+            Some("Both agents are running. Let me also check for any active phase directories.")
+        );
+    }
+
+    #[test]
+    fn extracts_tag_style_tool_calls() {
+        let text = concat!(
+            "<tool_call>\n",
+            "<function=Read><file_path>/tmp/a.md</file_path></function>\n",
+            "<tool_call>\n",
+            "<function=Glob><pattern>.planning/**/*.md</pattern><path>/tmp/project</path></function>\n",
+            "</tool_call>"
+        );
+        let extracted = extract_tool_calls_from_text(text);
+        assert_eq!(extracted.tool_calls.len(), 2);
+        assert_eq!(extracted.tool_calls[0]["function"]["name"], "Read");
+        assert_eq!(
+            extracted.tool_calls[0]["function"]["arguments"],
+            "{\"file_path\":\"/tmp/a.md\"}"
+        );
+        assert_eq!(extracted.tool_calls[1]["function"]["name"], "Glob");
+        assert_eq!(
+            extracted.tool_calls[1]["function"]["arguments"],
+            "{\"path\":\"/tmp/project\",\"pattern\":\".planning/**/*.md\"}"
+        );
     }
 }
