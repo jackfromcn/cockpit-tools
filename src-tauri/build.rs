@@ -39,6 +39,37 @@ fn should_skip_sidecar_build(output: &Path) -> bool {
     std::env::var("COCKPIT_SKIP_CLIPROXY_BUILD").ok().as_deref() == Some("1") && output.exists()
 }
 
+fn write_sidecar_placeholder(output: &Path, rust_target: &str) {
+    let parent = output
+        .parent()
+        .expect("sidecar output should always have a parent directory");
+    std::fs::create_dir_all(parent).expect("failed to create sidecar placeholder directory");
+
+    let script = if rust_target.contains("windows") {
+        "@echo off\r\necho cockpit-cliproxy is unavailable in this local dev build because Go is not installed.\r\nexit /b 1\r\n"
+            .to_string()
+    } else {
+        "#!/bin/sh\n\
+echo \"cockpit-cliproxy is unavailable in this local dev build because Go is not installed.\" >&2\n\
+exit 1\n"
+            .to_string()
+    };
+
+    std::fs::write(output, script).expect("failed to write cliproxy placeholder");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut perms = std::fs::metadata(output)
+            .expect("placeholder metadata should exist")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(output, perms)
+            .expect("failed to mark cliproxy placeholder executable");
+    }
+}
+
 fn should_force_skip_sidecar_build() -> bool {
     std::env::var("COCKPIT_SKIP_CLIPROXY_BUILD").ok().as_deref() == Some("1")
 }
@@ -158,6 +189,8 @@ fn build_cockpit_cliproxy_sidecar() {
     println!("cargo:rustc-env=COCKPIT_RUST_TARGET={target}");
     let sidecar_dir = manifest_dir.join("../sidecars/cockpit-cliproxy");
     let output_dir = sidecar_dir.join("bin");
+    let extension = if target.contains("windows") { ".exe" } else { "" };
+    let target_output = output_dir.join(format!("cockpit-cliproxy-{target}{extension}"));
 
     println!("cargo:rerun-if-env-changed=COCKPIT_SKIP_CLIPROXY_BUILD");
     println!("cargo:rerun-if-env-changed=COCKPIT_TOOLS_PROFILE");
@@ -166,6 +199,7 @@ fn build_cockpit_cliproxy_sidecar() {
     std::fs::create_dir_all(&output_dir).expect("failed to create cockpit-cliproxy bin dir");
 
     if should_force_skip_sidecar_build() {
+        write_sidecar_placeholder(&target_output, &target);
         println!(
             "cargo:warning=Skipping cockpit-cliproxy sidecar build because COCKPIT_SKIP_CLIPROXY_BUILD=1"
         );
@@ -174,6 +208,7 @@ fn build_cockpit_cliproxy_sidecar() {
 
     if !can_run_go() {
         if is_dev_profile() {
+            write_sidecar_placeholder(&target_output, &target);
             println!(
                 "cargo:warning=Go toolchain not found; skipping cockpit-cliproxy sidecar build for local dev"
             );
