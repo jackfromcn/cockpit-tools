@@ -1418,25 +1418,48 @@ fn get_internal_model_id_with_fallback(
     available_models: &[String],
 ) -> Result<String, String> {
     let mapped_model = get_internal_model_id(external_model)?;
-    if available_models.is_empty() || available_models.contains(&mapped_model) {
+
+    // 优先用传入的 available_models，为空时用 DEFAULT_KIRO_MODELS 作为 fallback
+    let model_list: Vec<String> = if available_models.is_empty() {
+        DEFAULT_KIRO_MODELS.iter().map(|s| s.to_string()).collect()
+    } else {
+        available_models.to_vec()
+    };
+
+    // 精确匹配
+    if model_list.contains(&mapped_model) {
         return Ok(mapped_model);
     }
 
-    let fallback = if mapped_model.contains("opus-4.7") || mapped_model.contains("opus-4.6") {
-        "claude-opus-4.5"
-    } else if mapped_model.contains("sonnet-4.7") || mapped_model.contains("sonnet-4.6") {
-        "claude-sonnet-4.5"
-    } else if mapped_model.contains("haiku-4.7") || mapped_model.contains("haiku-4.6") {
-        "claude-haiku-4.5"
+    // 同家族模糊匹配
+    let family = if mapped_model.contains("opus") {
+        "opus"
+    } else if mapped_model.contains("sonnet") {
+        "sonnet"
+    } else if mapped_model.contains("haiku") {
+        "haiku"
     } else {
         return Ok(mapped_model);
     };
 
-    logger::log_warn(&format!(
-        "[KiroLocalAccess] 模型 {} 不在账号模型列表中，按 KiroAccountManager 逻辑降级到 {}",
-        mapped_model, fallback
-    ));
-    Ok(fallback.to_string())
+    // 从列表末尾找（通常越新越靠后）
+    let fallback = model_list
+        .iter()
+        .rev()
+        .find(|m| m.contains(family) && !m.contains("thinking"))
+        .cloned();
+
+    if let Some(fallback_model) = fallback {
+        if fallback_model != mapped_model {
+            logger::log_warn(&format!(
+                "[KiroLocalAccess] 模型 {} 不在列表中，降级到 {}",
+                mapped_model, fallback_model
+            ));
+        }
+        Ok(fallback_model)
+    } else {
+        Ok(mapped_model)
+    }
 }
 
 fn value_to_plain_text(value: &Value) -> String {
@@ -2783,23 +2806,155 @@ fn merge_adjacent_gateway_messages(messages: &[GatewayMessage]) -> Vec<GatewayMe
     merged
 }
 
-fn normalize_json_schema(value: Value) -> Value {
+fn normalized_schema_type(value: Option<&Value>, has_properties: bool, has_items: bool) -> String {
+    match value {
+        Some(Value::String(raw)) if !raw.trim().is_empty() => raw.trim().to_string(),
+        Some(Value::Array(items)) => {
+            let normalized = items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .find(|kind| !kind.is_empty() && *kind != "null");
+            if let Some(kind) = normalized {
+                kind.to_string()
+            } else if has_properties {
+                "object".to_string()
+            } else if has_items {
+                "array".to_string()
+            } else {
+                "object".to_string()
+            }
+        }
+        _ if has_properties => "object".to_string(),
+        _ if has_items => "array".to_string(),
+        _ => "object".to_string(),
+    }
+}
+
+fn sanitize_json_schema(value: Value, is_root: bool) -> Value {
     let mut schema = match value {
         Value::Object(map) => map,
         _ => Map::new(),
     };
 
-    if !schema.contains_key("type") {
-        schema.insert("type".to_string(), Value::String("object".to_string()));
+    let properties = match schema.remove("properties") {
+        Some(Value::Object(map)) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| (key, sanitize_json_schema(value, false)))
+                .collect(),
+        ),
+        _ => Value::Object(Map::new()),
+    };
+    let items = schema
+        .remove("items")
+        .map(|value| sanitize_json_schema(value, false));
+    let required = match schema.remove("required") {
+        Some(Value::Array(items)) => Value::Array(
+            items
+                .into_iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .map(Value::String)
+                .collect(),
+        ),
+        _ => Value::Array(Vec::new()),
+    };
+
+    let schema_type = normalized_schema_type(
+        schema.get("type"),
+        matches!(&properties, Value::Object(map) if !map.is_empty()),
+        items.is_some(),
+    );
+
+    let mut normalized = Map::new();
+    normalized.insert("type".to_string(), Value::String(schema_type.clone()));
+    if let Some(description) = schema.get("description").cloned() {
+        normalized.insert("description".to_string(), description);
     }
-    if !matches!(schema.get("properties"), Some(Value::Object(_))) {
-        schema.insert("properties".to_string(), Value::Object(Map::new()));
+    if let Some(enum_values) = schema.get("enum").cloned() {
+        normalized.insert("enum".to_string(), enum_values);
     }
-    if !matches!(schema.get("required"), Some(Value::Array(_))) {
-        schema.insert("required".to_string(), Value::Array(Vec::new()));
+    if let Some(format) = schema.get("format").cloned() {
+        normalized.insert("format".to_string(), format);
+    }
+    if let Some(default) = schema.get("default").cloned() {
+        normalized.insert("default".to_string(), default);
+    }
+    if let Some(examples) = schema.get("examples").cloned() {
+        normalized.insert("examples".to_string(), examples);
+    }
+    if let Some(title) = schema.get("title").cloned() {
+        normalized.insert("title".to_string(), title);
     }
 
-    Value::Object(schema)
+    for key in [
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+    ] {
+        if let Some(value) = schema.get(key).cloned() {
+            normalized.insert(key.to_string(), value);
+        }
+    }
+
+    for key in ["minLength", "maxLength", "pattern"] {
+        if let Some(value) = schema.get(key).cloned() {
+            normalized.insert(key.to_string(), value);
+        }
+    }
+
+    for key in ["minItems", "maxItems", "uniqueItems"] {
+        if let Some(value) = schema.get(key).cloned() {
+            normalized.insert(key.to_string(), value);
+        }
+    }
+
+    if matches!(schema_type.as_str(), "object") || is_root {
+        normalized.insert("properties".to_string(), properties);
+        normalized.insert("required".to_string(), required);
+    }
+
+    if schema_type == "array" {
+        normalized.insert(
+            "items".to_string(),
+            items.unwrap_or_else(|| json!({ "type": "object", "properties": {}, "required": [] })),
+        );
+    }
+
+    if let Some(Value::Array(items)) = schema.remove("oneOf") {
+        let variants: Vec<Value> = items
+            .into_iter()
+            .map(|item| sanitize_json_schema(item, false))
+            .collect();
+        if !variants.is_empty() {
+            normalized.insert("oneOf".to_string(), Value::Array(variants));
+        }
+    }
+    if let Some(Value::Array(items)) = schema.remove("anyOf") {
+        let variants: Vec<Value> = items
+            .into_iter()
+            .map(|item| sanitize_json_schema(item, false))
+            .collect();
+        if !variants.is_empty() {
+            normalized.insert("anyOf".to_string(), Value::Array(variants));
+        }
+    }
+    if let Some(Value::Array(items)) = schema.remove("allOf") {
+        let variants: Vec<Value> = items
+            .into_iter()
+            .map(|item| sanitize_json_schema(item, false))
+            .collect();
+        if !variants.is_empty() {
+            normalized.insert("allOf".to_string(), Value::Array(variants));
+        }
+    }
+
+    Value::Object(normalized)
+}
+
+fn normalize_json_schema(value: Value) -> Value {
+    sanitize_json_schema(value, true)
 }
 
 fn tool_description(tool: &GatewayTool) -> String {
@@ -2957,9 +3112,8 @@ fn build_history_assistant_message(message: &GatewayMessage) -> HistoryAssistant
     HistoryAssistantMessage {
         content: extract_text_content(Some(&message.content)),
         tool_uses: extract_tool_uses(message),
-        reasoning_content: assistant_metadata_value(message, "reasoningContent")
-            .or_else(|| extract_reasoning_content(Some(&message.content)))
-            .and_then(|value| meaningful_optional_value(Some(value))),
+        // P0 fix: Kiro 后端拒绝 history 中的 reasoningContent，必须置 None
+        reasoning_content: None,
         references: assistant_metadata_value(message, "references")
             .and_then(|value| meaningful_optional_value(Some(value))),
         supplementary_web_links: assistant_metadata_value(message, "supplementaryWebLinks")
@@ -3210,12 +3364,17 @@ fn build_kiro_user_context(
     tools: Option<Vec<KiroTool>>,
     tool_results: Vec<KiroToolResult>,
     tool_choice: Option<Value>,
+    additional_context: Option<Value>,
 ) -> Option<UserInputMessageContext> {
-    if tools.is_none() && tool_results.is_empty() && tool_choice.is_none() {
+    if tools.is_none()
+        && tool_results.is_empty()
+        && tool_choice.is_none()
+        && additional_context.is_none()
+    {
         return None;
     }
     Some(UserInputMessageContext {
-        additional_context: None,
+        additional_context,
         app_studio_context: None,
         console_state: None,
         diagnostic: None,
@@ -3241,11 +3400,39 @@ async fn build_kiro_payload(
 ) -> Result<Value, String> {
     let model_id = get_internal_model_id_with_fallback(&request.model, available_models)?;
     let normalized_tool_choice = normalize_tool_choice(&request.tool_choice, &request.tools)?;
+    // P2 fix: conversationId 会话稳定化
+    // 优先使用 previous_response_id；否则基于首条 user message 内容生成稳定 hash
     let conversation_id = request
         .previous_response_id
         .clone()
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        .unwrap_or_else(|| {
+            let first_user_content = request
+                .messages
+                .iter()
+                .find(|m| m.role == "user")
+                .map(|m| extract_text_content(Some(&m.content)))
+                .unwrap_or_default();
+            if first_user_content.is_empty() {
+                uuid::Uuid::new_v4().to_string()
+            } else {
+                // 使用内容前 256 字符的简单 hash 生成确定性 UUID 格式 ID
+                let seed = &first_user_content[..first_user_content.len().min(256)];
+                let mut hash: u64 = 0xcbf29ce484222325; // FNV-1a
+                for byte in seed.as_bytes() {
+                    hash ^= *byte as u64;
+                    hash = hash.wrapping_mul(0x100000001b3);
+                }
+                format!("{:016x}-{:04x}-4{:03x}-8{:03x}-{:012x}",
+                    hash,
+                    (hash >> 16) as u16,
+                    (hash >> 32) as u16 & 0x0fff,
+                    (hash >> 48) as u16 & 0x0fff,
+                    hash.wrapping_mul(0x517cc1b727220a95)
+                )
+            }
+        });
     let agent_continuation_id = conversation_id.clone();
+    let _ = agent_continuation_id; // 不再使用，Kiro 后端不接受此字段
     let (processed_tools, tool_docs) = process_tools_with_long_descriptions(&request.tools);
     let tool_docs_for_current = tool_docs.clone();
     let mut system_prompt = String::new();
@@ -3270,10 +3457,13 @@ async fn build_kiro_payload(
         return Err("没有可发送给 Kiro 的消息".to_string());
     }
 
+    // system prompt 直接拼接到 currentMessage content 中（Kiro 官方 IDE 做法）
     let merged_messages = merge_adjacent_gateway_messages(&non_system_messages);
-    let first_user_index = merged_messages
+    // P1 fix: 收集当前请求中定义的 tool 名称集合
+    let current_tool_names: HashSet<&str> = processed_tools
         .iter()
-        .position(|message| matches!(message.role.as_str(), "user" | "tool"));
+        .map(|t| t.name.as_str())
+        .collect();
     let history = if merged_messages.len() > 1 {
         let mut items = Vec::new();
         let history_len = merged_messages.len() - 1;
@@ -3287,23 +3477,37 @@ async fn build_kiro_payload(
                     if history_len > 10 && index == history_len - 10 {
                         assistant_message.cache_point = Some(json!({ "type": "default" }));
                     }
+                    // P1 fix: 如果 tool_uses 中的工具不在当前 tool 定义中，转为纯文本
+                    if let Some(ref tool_uses) = assistant_message.tool_uses {
+                        let has_orphan = tool_uses
+                            .iter()
+                            .any(|tu| !current_tool_names.contains(tu.name.as_str()));
+                        if has_orphan {
+                            let tool_text = tool_uses
+                                .iter()
+                                .map(|tu| {
+                                    format!(
+                                        "[Tool Call: {}({})]",
+                                        tu.name,
+                                        serde_json::to_string(&tu.input).unwrap_or_default()
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            assistant_message.content =
+                                join_with_newline(&assistant_message.content, &tool_text);
+                            assistant_message.tool_uses = None;
+                        }
+                    }
                     items.push(HistoryItem::Assistant {
                         assistant_response_message: assistant_message,
                     });
                 }
                 "user" | "tool" => {
                     let content = if message.role == "tool" {
-                        if Some(index) == first_user_index && !system_prompt.trim().is_empty() {
-                            system_prompt.clone()
-                        } else {
-                            String::new()
-                        }
+                        String::new()
                     } else {
-                        let mut content = extract_text_content(Some(&message.content));
-                        if Some(index) == first_user_index && !system_prompt.trim().is_empty() {
-                            content = join_with_double_newline(&system_prompt, &content);
-                        }
-                        content
+                        extract_text_content(Some(&message.content))
                     };
                     let images = if message.role == "tool" {
                         None
@@ -3315,15 +3519,46 @@ async fn build_kiro_payload(
                     } else {
                         extract_kiro_tool_results(message)
                     };
+                    // P1 fix: 如果 tool_results 对应的工具不在当前定义中，转为纯文本
+                    let (final_content, final_tool_results) =
+                        if !tool_results.is_empty() && current_tool_names.is_empty() {
+                            let result_text = tool_results
+                                .iter()
+                                .map(|tr| {
+                                    let text = tr
+                                        .content
+                                        .iter()
+                                        .filter_map(|c| match c {
+                                            KiroToolResultContent::Text { text } => {
+                                                Some(text.clone())
+                                            }
+                                            KiroToolResultContent::Json { json } => {
+                                                Some(json.to_string())
+                                            }
+                                            KiroToolResultContent::Other { data } => {
+                                                Some(data.to_string())
+                                            }
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join("\n");
+                                    format!("[Tool Result: {}]", text)
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            (join_with_newline(&content, &result_text), Vec::new())
+                        } else {
+                            (content, tool_results)
+                        };
                     items.push(HistoryItem::User {
                         user_input_message: HistoryUserMessage {
-                            content,
+                            content: final_content,
                             model_id: model_id.clone(),
                             origin: "AI_EDITOR".to_string(),
                             images,
                             user_input_message_context: build_kiro_user_context(
                                 None,
-                                tool_results,
+                                final_tool_results,
+                                None,
                                 None,
                             ),
                         },
@@ -3345,7 +3580,8 @@ async fn build_kiro_payload(
         .last()
         .ok_or_else(|| "没有当前消息".to_string())?;
     let mut current_content = extract_text_content(Some(&current_message.content));
-    if history.is_none() && !system_prompt.trim().is_empty() {
+    // system prompt 拼接到 currentMessage content 前面
+    if !system_prompt.trim().is_empty() {
         current_content = join_with_double_newline(&system_prompt, &current_content);
     }
     if let Some(tool_docs) = tool_docs_for_current {
@@ -3368,8 +3604,8 @@ async fn build_kiro_payload(
         conversation_state: ConversationState {
             chat_trigger_type: "MANUAL".to_string(),
             conversation_id,
-            agent_continuation_id: Some(agent_continuation_id),
-            agent_task_type: Some("vibe".to_string()),
+            agent_continuation_id: None,
+            agent_task_type: None,
             current_message: CurrentMessage {
                 user_input_message: UserInputMessage {
                     content: current_content,
@@ -3383,6 +3619,7 @@ async fn build_kiro_payload(
                         gateway_tools_to_kiro(&processed_tools),
                         current_tool_results,
                         normalized_tool_choice,
+                        None,
                     ),
                     user_intent: None,
                 },
@@ -3416,20 +3653,22 @@ fn prune_nulls(value: &mut Value) {
 }
 
 fn trim_payload_history_if_needed(payload: &mut Value) {
-    let original_size = serde_json::to_vec(payload)
-        .ok()
-        .map(|bytes| bytes.len())
-        .unwrap_or(0);
-    if original_size <= MAX_KIRO_PAYLOAD_SIZE {
+    // P2 fix: 基于 token 估算的 history trimming
+    // 先用 token 估算判断是否需要裁剪，再用字节大小作为兜底
+    const TOKEN_BUDGET: usize = 180_000; // 200K 模型留 20K buffer
+    const CHARS_PER_TOKEN: usize = 3; // 混合中英文平均 ~3 chars/token
+
+    let payload_str = serde_json::to_string(payload).unwrap_or_default();
+    let estimated_tokens = payload_str.chars().count() / CHARS_PER_TOKEN;
+
+    if estimated_tokens <= TOKEN_BUDGET && payload_str.len() <= MAX_KIRO_PAYLOAD_SIZE {
         return;
     }
 
     loop {
-        let current_size = serde_json::to_vec(payload)
-            .ok()
-            .map(|bytes| bytes.len())
-            .unwrap_or(0);
-        if current_size <= MAX_KIRO_PAYLOAD_SIZE {
+        let current_str = serde_json::to_string(payload).unwrap_or_default();
+        let current_tokens = current_str.chars().count() / CHARS_PER_TOKEN;
+        if current_tokens <= TOKEN_BUDGET && current_str.len() <= MAX_KIRO_PAYLOAD_SIZE {
             break;
         }
 
@@ -4364,7 +4603,8 @@ fn build_direct_anthropic_response(
     stream: bool,
     response_id: Option<String>,
 ) -> ProxyResult {
-    let message_id = response_id.unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4().simple()));
+    let message_id =
+        response_id.unwrap_or_else(|| format!("msg_{}", uuid::Uuid::new_v4().simple()));
     let stop_reason = if aggregated.tool_calls.is_empty() {
         "end_turn"
     } else {
@@ -4781,7 +5021,10 @@ fn extract_web_search_sources(server_tool_calls: &[ServerToolCall]) -> Vec<WebSe
     let mut seen = HashSet::new();
     let mut sources = Vec::new();
 
-    for call in server_tool_calls.iter().filter(|call| call.name == WEB_SEARCH_TOOL_NAME) {
+    for call in server_tool_calls
+        .iter()
+        .filter(|call| call.name == WEB_SEARCH_TOOL_NAME)
+    {
         let Some(results) = call.result_content.as_array() else {
             continue;
         };
@@ -5304,13 +5547,23 @@ fn domain_matches_filters(item: &Value, tool: Option<&GatewayTool>) -> bool {
         return true;
     };
 
-    if let Some(allowed) = tool.allowed_domains.as_ref().filter(|items| !items.is_empty()) {
-        if !allowed.iter().any(|entry| domain_matches_rule(&domain, entry)) {
+    if let Some(allowed) = tool
+        .allowed_domains
+        .as_ref()
+        .filter(|items| !items.is_empty())
+    {
+        if !allowed
+            .iter()
+            .any(|entry| domain_matches_rule(&domain, entry))
+        {
             return false;
         }
     }
     if let Some(blocked) = tool.blocked_domains.as_ref() {
-        if blocked.iter().any(|entry| domain_matches_rule(&domain, entry)) {
+        if blocked
+            .iter()
+            .any(|entry| domain_matches_rule(&domain, entry))
+        {
             return false;
         }
     }
@@ -5392,7 +5645,10 @@ async fn call_mcp_tool(
         .map_err(|e| format!("读取 MCP 上游响应失败: {e}"))?;
     if !(200..300).contains(&status) {
         let err = map_direct_upstream_error(status, &body);
-        return Err(format!("MCP 上游请求失败(status={}): {}", err.status, err.message));
+        return Err(format!(
+            "MCP 上游请求失败(status={}): {}",
+            err.status, err.message
+        ));
     }
 
     let value: Value = serde_json::from_str(&body)
@@ -5453,14 +5709,19 @@ async fn execute_request_with_server_tools(
         .find(|tool| is_web_search_tool_type(&tool.tool_type))
         .cloned();
     let max_uses = server_web_search_iteration_limit(
-        web_search_tool.as_ref().and_then(|tool| tool.web_search_max_uses),
+        web_search_tool
+            .as_ref()
+            .and_then(|tool| tool.web_search_max_uses),
     );
     let mut server_tool_calls = Vec::new();
 
     for _ in 0..max_uses {
-        let mut payload =
-            build_kiro_payload(&working_request, upstream.profile_arn.clone(), available_models)
-                .await?;
+        let mut payload = build_kiro_payload(
+            &working_request,
+            upstream.profile_arn.clone(),
+            available_models,
+        )
+        .await?;
         trim_payload_history_if_needed(&mut payload);
         if let Ok(serialized) = serde_json::to_string_pretty(&payload) {
             logger::log_info(&format!(
@@ -5537,10 +5798,16 @@ async fn proxy_via_kiro_direct(
     let http = build_kiro_http_client(true)?;
     let mut upstream = prepare_kiro_upstream_credentials(account).await?;
     let available_models = match list_available_models_direct(&http, &upstream).await {
-        Ok(models) => models,
+        Ok(models) => {
+            logger::log_info(&format!(
+                "[KiroLocalAccess] 账号可用模型: account={}, models={:?}",
+                upstream.account_email, models
+            ));
+            models
+        }
         Err(err) => {
             logger::log_warn(&format!(
-                "[KiroLocalAccess] 获取账号模型列表失败: account={}, status={}, error={}，继续按请求模型直连",
+                "[KiroLocalAccess] 获取账号模型列表失败: account={}, status={}, error={}，使用默认模型列表",
                 upstream.account_email, err.status, err.message
             ));
             Vec::new()
@@ -5561,9 +5828,12 @@ async fn proxy_via_kiro_direct(
         )
         .await?
     } else {
-        let mut payload =
-            build_kiro_payload(&effective_request, upstream.profile_arn.clone(), &available_models)
-                .await?;
+        let mut payload = build_kiro_payload(
+            &effective_request,
+            upstream.profile_arn.clone(),
+            &available_models,
+        )
+        .await?;
         trim_payload_history_if_needed(&mut payload);
         if let Ok(serialized) = serde_json::to_string_pretty(&payload) {
             logger::log_info(&format!(
@@ -6987,11 +7257,9 @@ mod tests {
         let value: Value = serde_json::from_slice(&response.body).expect("valid json");
 
         assert_eq!(value["output"][0]["type"], "web_search_call");
-        assert!(
-            value["output_text"]
-                .as_str()
-                .is_some_and(|text| text.contains("Sources:\n[1] Rust Async"))
-        );
+        assert!(value["output_text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Sources:\n[1] Rust Async")));
     }
 
     #[tokio::test]
@@ -7137,6 +7405,77 @@ mod tests {
                 .pointer("/toolSpecification/inputSchema/json/required/0")
                 .and_then(Value::as_str),
             Some("query")
+        );
+    }
+
+    #[test]
+    fn normalize_json_schema_prunes_unsupported_nested_keywords() {
+        let normalized = normalize_json_schema(json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+                "agent": {
+                    "additionalProperties": false,
+                    "properties": {
+                        "mode": {
+                            "enum": ["default", "plan"],
+                            "type": "string"
+                        },
+                        "metadata": {
+                            "additionalProperties": false,
+                            "properties": {
+                                "name": { "type": "string" }
+                            },
+                            "propertyNames": {
+                                "pattern": "^[a-z]+$"
+                            },
+                            "required": ["name"],
+                            "type": "object"
+                        }
+                    },
+                    "required": ["mode"],
+                    "type": "object"
+                },
+                "choices": {
+                    "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                            "label": { "type": ["string", "null"] }
+                        },
+                        "type": "object"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": ["agent"],
+            "type": "object"
+        }));
+
+        assert!(normalized.get("$schema").is_none());
+        assert!(normalized.get("additionalProperties").is_none());
+        assert!(normalized
+            .pointer("/properties/agent/additionalProperties")
+            .is_none());
+        assert!(normalized
+            .pointer("/properties/agent/properties/metadata/propertyNames")
+            .is_none());
+        assert_eq!(
+            normalized
+                .pointer("/properties/agent/type")
+                .and_then(Value::as_str),
+            Some("object")
+        );
+        assert_eq!(
+            normalized
+                .pointer("/properties/choices/type")
+                .and_then(Value::as_str),
+            Some("array")
+        );
+        assert_eq!(
+            normalized
+                .pointer("/properties/choices/items/properties/label/type")
+                .and_then(Value::as_str),
+            Some("string")
         );
     }
 }

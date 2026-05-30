@@ -275,11 +275,15 @@ fn build_qoder_request_body(
             arr.iter()
                 .rev()
                 .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-                .and_then(|m| m.get("content").and_then(|c| c.as_str()))
+                .and_then(|m| {
+                    let content = m.get("content")?;
+                    match content {
+                        Value::String(s) => Some(s.as_str()),
+                        _ => None,
+                    }
+                })
         })
         .unwrap_or("");
-
-    let tool_instruction = build_tool_instruction(tools, tool_choice);
 
     // Build messages in Qoder format
     let mut qoder_messages = Vec::new();
@@ -287,7 +291,10 @@ fn build_qoder_request_body(
     if let Some(arr) = messages.as_array() {
         for msg in arr {
             let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
-            let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
+            let content = match msg.get("content") {
+                Some(Value::String(s)) => s.as_str(),
+                _ => "",
+            };
             if role == "system" {
                 has_system = true;
             }
@@ -300,39 +307,36 @@ fn build_qoder_request_body(
             if role == "user" {
                 qm["contents"] = json!([{"type": "text", "text": content}]);
             }
+            // tool_calls in assistant messages
+            if role == "assistant" {
+                if let Some(tool_calls) = msg.get("tool_calls") {
+                    qm["tool_calls"] = tool_calls.clone();
+                }
+            }
+            // tool result messages
+            if role == "tool" {
+                qm["tool_call_id"] = msg.get("tool_call_id").cloned().unwrap_or(Value::Null);
+            }
             qoder_messages.push(qm);
         }
     }
 
-    // Add minimal system message if none provided
     if !has_system {
         qoder_messages.insert(0, json!({
             "role": "system",
-            "content": "You are a helpful assistant. Respond concisely.",
-            "response_meta": {"id": "", "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}},
-            "reasoning_content_signature": ""
-        }));
-    }
-    if let Some(instruction) = tool_instruction {
-        qoder_messages.insert(0, json!({
-            "role": "system",
-            "content": instruction,
+            "content": "You are a helpful assistant.",
             "response_meta": {"id": "", "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}},
             "reasoning_content_signature": ""
         }));
     }
 
-    let biz_name = if prompt.len() > 30 {
-        &prompt[..prompt
-            .char_indices()
-            .nth(30)
-            .map(|(i, _)| i)
-            .unwrap_or(prompt.len())]
-    } else {
-        prompt
-    };
+    let biz_name = &prompt[..prompt
+        .char_indices()
+        .nth(30)
+        .map(|(i, _)| i)
+        .unwrap_or(prompt.len())];
 
-    json!({
+    let mut body = json!({
         "request_id": nid,
         "chat_record_id": nid,
         "request_set_id": uuid::Uuid::new_v4().to_string(),
@@ -377,7 +381,19 @@ fn build_qoder_request_body(
             }
         },
         "messages": qoder_messages,
-    })
+    });
+
+    // 直接透传 tools 字段（Qoder 上游原生支持 OpenAI 格式）
+    if let Some(tools) = tools {
+        if !tools.is_empty() {
+            body["tools"] = Value::Array(tools.clone());
+        }
+    }
+    if let Some(tc) = tool_choice {
+        body["tool_choice"] = tc.clone();
+    }
+
+    body
 }
 
 // ─── Qoder SSE → OpenAI 响应格式转换 ───
@@ -386,6 +402,9 @@ fn parse_qoder_sse_to_openai(sse_data: &str, request_id: &str, model: &str) -> P
     let mut finished = false;
     let created = chrono::Utc::now().timestamp();
     let mut text = String::new();
+    // 按 index 合并 streaming tool_calls
+    let mut tool_call_map: std::collections::HashMap<usize, (String, String, String)> =
+        std::collections::HashMap::new(); // index -> (id, name, arguments)
 
     for line in sse_data.lines() {
         if !line.starts_with("data:") {
@@ -411,74 +430,121 @@ fn parse_qoder_sse_to_openai(sse_data: &str, request_id: &str, model: &str) -> P
             for choice in choices {
                 let empty_obj = json!({});
                 let delta = choice.get("delta").unwrap_or(&empty_obj);
-                let content = delta.get("content").and_then(|c| c.as_str()).unwrap_or("");
-                if content.is_empty() {
-                    continue;
+                // 文本内容
+                if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                    if !content.is_empty() {
+                        text.push_str(content);
+                    }
                 }
-                text.push_str(content);
+                // streaming tool_calls 分片
+                if let Some(tcs) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+                    for tc in tcs {
+                        let index = tc
+                            .get("index")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as usize;
+                        let entry = tool_call_map.entry(index).or_insert_with(|| {
+                            let id = tc
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string)
+                                .unwrap_or_else(|| {
+                                    format!("call_{}", uuid::Uuid::new_v4().simple())
+                                });
+                            let name = tc
+                                .pointer("/function/name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            (id, name, String::new())
+                        });
+                        // 追加 arguments 分片
+                        if let Some(args_delta) =
+                            tc.pointer("/function/arguments").and_then(|v| v.as_str())
+                        {
+                            entry.2.push_str(args_delta);
+                        }
+                        // 更新 name（可能在后续分片中出现）
+                        if let Some(name) =
+                            tc.pointer("/function/name").and_then(|v| v.as_str())
+                        {
+                            if !name.is_empty() {
+                                entry.1 = name.to_string();
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
-    let extracted = extract_tool_calls_from_text(&text);
-    if !extracted.tool_calls.is_empty() {
+    // 组装完整 tool_calls
+    let mut tool_calls: Vec<Value> = tool_call_map
+        .into_iter()
+        .map(|(_, (id, name, arguments))| {
+            json!({
+                "id": id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": arguments
+                }
+            })
+        })
+        .collect();
+    // 按 id 排序保证顺序稳定
+    tool_calls.sort_by(|a, b| {
+        a.get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .cmp(b.get("id").and_then(|v| v.as_str()).unwrap_or(""))
+    });
+
+    if !tool_calls.is_empty() {
         let mut chunks = Vec::new();
-        if let Some(content) = extracted.content.as_ref().filter(|s| !s.is_empty()) {
+        if !text.is_empty() {
             let text_chunk = json!({
                 "id": request_id,
                 "object": "chat.completion.chunk",
                 "created": created,
                 "model": model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {"content": content},
-                    "finish_reason": null
-                }]
+                "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": null}]
             });
             chunks.push(format!(
                 "data: {}\n\n",
                 serde_json::to_string(&text_chunk).unwrap_or_default()
             ));
         }
-        let tool_chunks = extracted
-            .tool_calls
-            .iter()
-            .enumerate()
-            .map(|(index, tool_call)| {
-                let chunk = json!({
-                    "id": request_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {
-                            "tool_calls": [{
-                                "index": index,
-                                "id": tool_call.get("id").cloned().unwrap_or_else(|| json!(format!("call_{}", uuid::Uuid::new_v4().simple()))),
-                                "type": "function",
-                                "function": {
-                                    "name": tool_call.get("function").and_then(|f| f.get("name")).cloned().unwrap_or_else(|| json!("")),
-                                    "arguments": tool_call.get("function").and_then(|f| f.get("arguments")).cloned().unwrap_or_else(|| json!("{}"))
-                                }
-                            }]
-                        },
-                        "finish_reason": null
+        for (index, tool_call) in tool_calls.iter().enumerate() {
+            let chunk = json!({
+                "id": request_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{"index": 0, "delta": {
+                    "tool_calls": [{
+                        "index": index,
+                        "id": tool_call.get("id").cloned().unwrap_or_else(|| json!("")),
+                        "type": "function",
+                        "function": {
+                            "name": tool_call.pointer("/function/name").cloned().unwrap_or_else(|| json!("")),
+                            "arguments": tool_call.pointer("/function/arguments").cloned().unwrap_or_else(|| json!("{}"))
+                        }
                     }]
-                });
-                format!(
-                    "data: {}\n\n",
-                    serde_json::to_string(&chunk).unwrap_or_default()
-                )
-            })
-            .collect::<Vec<_>>();
-        chunks.extend(tool_chunks);
+                }, "finish_reason": null}]
+            });
+            chunks.push(format!(
+                "data: {}\n\n",
+                serde_json::to_string(&chunk).unwrap_or_default()
+            ));
+        }
         return ParsedQoderResponse {
             chunks,
             finished,
             finish_reason: "tool_calls",
-            content: extracted.content,
-            tool_calls: extracted.tool_calls,
+            content: if text.is_empty() { None } else { Some(text) },
+            tool_calls,
         };
     }
 
@@ -490,11 +556,7 @@ fn parse_qoder_sse_to_openai(sse_data: &str, request_id: &str, model: &str) -> P
             "object": "chat.completion.chunk",
             "created": created,
             "model": model,
-            "choices": [{
-                "index": 0,
-                "delta": {"content": text},
-                "finish_reason": null
-            }]
+            "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": null}]
         });
         vec![format!(
             "data: {}\n\n",
@@ -511,7 +573,10 @@ fn parse_qoder_sse_to_openai(sse_data: &str, request_id: &str, model: &str) -> P
     }
 }
 
-fn build_tool_instruction(tools: Option<&Vec<Value>>, tool_choice: Option<&Value>) -> Option<String> {
+fn build_tool_instruction(
+    tools: Option<&Vec<Value>>,
+    tool_choice: Option<&Value>,
+) -> Option<String> {
     let tools = tools?;
     if tools.is_empty() {
         return None;
@@ -526,7 +591,10 @@ fn build_tool_instruction(tools: Option<&Vec<Value>>, tool_choice: Option<&Value
                 .get("description")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let parameters = function.get("parameters").cloned().unwrap_or_else(|| json!({}));
+            let parameters = function
+                .get("parameters")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
             Some(format!(
                 "- {}: {} | parameters={}",
                 name,
@@ -549,7 +617,8 @@ fn build_tool_instruction(tools: Option<&Vec<Value>>, tool_choice: Option<&Value
             .and_then(|v| v.as_str())
             .map(|name| format!("If a tool is needed, call the tool named {}.", name))
             .unwrap_or_else(|| "If a tool is needed, call exactly one matching tool.".to_string()),
-        _ => "If a tool is needed, call exactly one matching tool. Otherwise answer normally.".to_string(),
+        _ => "If a tool is needed, call exactly one matching tool. Otherwise answer normally."
+            .to_string(),
     };
 
     Some(format!(
@@ -631,7 +700,10 @@ fn extract_tool_calls_from_text(content: &str) -> ExtractedToolCalls {
     }
 
     let content = normalize_tool_residual_text(&residual);
-    ExtractedToolCalls { content, tool_calls }
+    ExtractedToolCalls {
+        content,
+        tool_calls,
+    }
 }
 
 fn parse_tag_tool_call(content: &str, start: usize) -> Option<(usize, Value)> {
@@ -894,10 +966,7 @@ async fn proxy_to_upstream(
         .and_then(|m| m.as_str())
         .unwrap_or("lite");
     let messages = req_body.get("messages").cloned().unwrap_or(json!([]));
-    let tools = req_body
-        .get("tools")
-        .and_then(|v| v.as_array())
-        .cloned();
+    let tools = req_body.get("tools").and_then(|v| v.as_array()).cloned();
     let tool_choice = req_body.get("tool_choice");
     let stream = req_body
         .get("stream")

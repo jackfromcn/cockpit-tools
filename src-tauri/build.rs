@@ -189,7 +189,11 @@ fn build_cockpit_cliproxy_sidecar() {
     println!("cargo:rustc-env=COCKPIT_RUST_TARGET={target}");
     let sidecar_dir = manifest_dir.join("../sidecars/cockpit-cliproxy");
     let output_dir = sidecar_dir.join("bin");
-    let extension = if target.contains("windows") { ".exe" } else { "" };
+    let extension = if target.contains("windows") {
+        ".exe"
+    } else {
+        ""
+    };
     let target_output = output_dir.join(format!("cockpit-cliproxy-{target}{extension}"));
 
     println!("cargo:rerun-if-env-changed=COCKPIT_SKIP_CLIPROXY_BUILD");
@@ -214,7 +218,9 @@ fn build_cockpit_cliproxy_sidecar() {
             );
             return;
         }
-        panic!("go command not found; install Go or set COCKPIT_SKIP_CLIPROXY_BUILD=1 for local dev");
+        panic!(
+            "go command not found; install Go or set COCKPIT_SKIP_CLIPROXY_BUILD=1 for local dev"
+        );
     }
 
     if cfg!(target_os = "macos") && target == "universal-apple-darwin" {

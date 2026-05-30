@@ -1,8 +1,14 @@
 const { spawnSync } = require('node:child_process');
+const { homedir } = require('node:os');
+const { join } = require('node:path');
+
+const defaultSharedDataDir = join(homedir(), '.antigravity_cockpit');
 
 const env = {
   ...process.env,
   COCKPIT_TOOLS_PROFILE: process.env.COCKPIT_TOOLS_PROFILE || 'dev',
+  COCKPIT_TOOLS_DATA_DIR:
+    process.env.COCKPIT_TOOLS_DATA_DIR || defaultSharedDataDir,
   COCKPIT_TOOLS_API_PORT: process.env.COCKPIT_TOOLS_API_PORT || '1456',
   VITE_COCKPIT_TOOLS_PROFILE: process.env.VITE_COCKPIT_TOOLS_PROFILE || 'dev',
 };
