@@ -3415,8 +3415,15 @@ async fn build_kiro_payload(
             if first_user_content.is_empty() {
                 uuid::Uuid::new_v4().to_string()
             } else {
-                // 使用内容前 256 字符的简单 hash 生成确定性 UUID 格式 ID
-                let seed = &first_user_content[..first_user_content.len().min(256)];
+                // 使用内容前 256 字节的简单 hash 生成确定性 UUID 格式 ID
+                // 必须按字符边界截取，避免中文等多字节字符导致 panic
+                let byte_limit = first_user_content
+                    .char_indices()
+                    .take_while(|(i, _)| *i < 256)
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(0);
+                let seed = &first_user_content[..byte_limit];
                 let mut hash: u64 = 0xcbf29ce484222325; // FNV-1a
                 for byte in seed.as_bytes() {
                     hash ^= *byte as u64;
