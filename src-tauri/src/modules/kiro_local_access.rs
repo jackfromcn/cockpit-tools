@@ -8,21 +8,18 @@ use crate::modules::kiro_gateway::models::{
     AggregatedKiroResponse, ApiProtocol, CompletionRequest, ConversationState, CurrentMessage,
     DirectProxyError, GatewayMessage, GatewayProxyRequest, GatewayTool, GatewayToolCall,
     HistoryAssistantMessage, HistoryItem, HistoryUserMessage, ImageBlock, ImageSource,
-    KiroCliAuthMode, KiroCliDbSnapshot, KiroEvent, KiroInputSchema, KiroPayload, KiroTool,
+    KiroEvent, KiroInputSchema, KiroPayload, KiroTool,
     KiroToolResult, KiroToolResultContent, KiroToolSpec, KiroToolUse, KiroUpstreamCredentials,
     ProxyResult, ResponsesSessionEntry, ServerToolCall, UserInputMessage, UserInputMessageContext,
 };
 use crate::modules::{kiro_account, logger};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use chrono::{SecondsFormat, TimeZone};
 use rand::{distributions::Alphanumeric, Rng};
 use regex::Regex;
-use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener as StdTcpListener};
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -49,15 +46,6 @@ const MAX_IMAGE_REDIRECTS: usize = 3;
 const IMAGE_FETCH_TIMEOUT_SECONDS: u64 = 15;
 const DEFAULT_KIRO_REGION: &str = "us-east-1";
 const DEFAULT_AGENT_MODE: &str = "q-developer-converse";
-const KNOWN_AUTH_KEYS: [&str; 3] = [
-    "kirocli:social:token",
-    "kirocli:external-idp:token",
-    "kirocli:odic:token",
-];
-const PROFILE_STATE_KEY: &str = "api.codewhisperer.profile";
-const SOCIAL_AUTH_KEY: &str = "kirocli:social:token";
-const EXTERNAL_IDP_AUTH_KEY: &str = "kirocli:external-idp:token";
-const OIDC_AUTH_KEY: &str = "kirocli:odic:token";
 const DEFAULT_KIRO_MODELS: &[&str] = &[
     "claude-opus-4-7",
     "claude-opus-4-7-thinking",
@@ -108,9 +96,6 @@ const SUPPORTED_KIRO_REGIONS: &[&str] = &[
 
 static GATEWAY_RUNTIME: OnceLock<TokioMutex<GatewayRuntime>> = OnceLock::new();
 static ROUND_ROBIN_CURSOR: AtomicUsize = AtomicUsize::new(0);
-static REQUEST_LOCK: OnceLock<TokioMutex<()>> = OnceLock::new();
-static ANSI_ESCAPE_REGEX: OnceLock<Regex> = OnceLock::new();
-static OSC_ESCAPE_REGEX: OnceLock<Regex> = OnceLock::new();
 
 #[derive(Default)]
 struct GatewayRuntime {
@@ -123,6 +108,73 @@ struct GatewayRuntime {
     shutdown_sender: Option<watch::Sender<bool>>,
     task: Option<tokio::task::JoinHandle<()>>,
     responses_sessions: HashMap<String, ResponsesSessionEntry>,
+    /// 账号健康状态（跨请求持久化）
+    account_health: HashMap<String, AccountHealth>,
+}
+
+/// 账号健康状态追踪（移植自 kiro-account-manager LoadBalancer）
+#[derive(Debug, Clone, Default)]
+struct AccountHealth {
+    /// 最近失败次数（滑动窗口）
+    recent_failures: usize,
+    /// 最近成功次数（滑动窗口）
+    recent_successes: usize,
+    /// 是否健康（连续失败 3 次且无成功则标记为不健康）
+    is_healthy: bool,
+    /// 限流解除时间戳（毫秒），None 表示未被限流
+    blocked_until_ms: Option<i64>,
+}
+
+impl AccountHealth {
+    fn new() -> Self {
+        Self {
+            recent_failures: 0,
+            recent_successes: 0,
+            is_healthy: true,
+            blocked_until_ms: None,
+        }
+    }
+
+    fn is_available(&self) -> bool {
+        if !self.is_healthy {
+            return false;
+        }
+        if let Some(until_ms) = self.blocked_until_ms {
+            if now_ms() < until_ms {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn record_success(&mut self) {
+        self.recent_successes += 1;
+        self.is_healthy = true;
+        self.blocked_until_ms = None;
+        // 滑动窗口：保持最近 100 次请求的统计
+        if self.recent_failures + self.recent_successes > 100 {
+            self.recent_failures = self.recent_failures * 9 / 10;
+            self.recent_successes = self.recent_successes * 9 / 10;
+        }
+    }
+
+    fn record_failure(&mut self) {
+        self.recent_failures += 1;
+        // 连续失败 3 次且无成功记录，标记为不健康
+        if self.recent_failures >= 3 && self.recent_successes == 0 {
+            self.is_healthy = false;
+        }
+        // 滑动窗口
+        if self.recent_failures + self.recent_successes > 100 {
+            self.recent_failures = self.recent_failures * 9 / 10;
+            self.recent_successes = self.recent_successes * 9 / 10;
+        }
+    }
+
+    fn mark_rate_limited(&mut self) {
+        // 收到 429 后屏蔽 60 秒
+        self.blocked_until_ms = Some(now_ms() + 60_000);
+    }
 }
 
 struct ProxyExecutionOutcome {
@@ -146,22 +198,6 @@ struct ParsedRequest {
 
 fn gateway_runtime() -> &'static TokioMutex<GatewayRuntime> {
     GATEWAY_RUNTIME.get_or_init(|| TokioMutex::new(GatewayRuntime::default()))
-}
-
-fn request_lock() -> &'static TokioMutex<()> {
-    REQUEST_LOCK.get_or_init(|| TokioMutex::new(()))
-}
-
-fn ansi_escape_regex() -> &'static Regex {
-    ANSI_ESCAPE_REGEX.get_or_init(|| {
-        Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]").expect("ansi escape regex should compile")
-    })
-}
-
-fn osc_escape_regex() -> &'static Regex {
-    OSC_ESCAPE_REGEX.get_or_init(|| {
-        Regex::new(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)").expect("osc escape regex should compile")
-    })
 }
 
 fn now_ms() -> i64 {
@@ -329,9 +365,8 @@ fn dedupe_account_ids(account_ids: Vec<String>) -> Vec<String> {
     result
 }
 
-fn select_account_ids(collection: &KiroLocalAccessCollection, skip: &[String]) -> Vec<String> {
-    let candidates: Vec<&String> = collection
-        .account_ids
+fn select_account_ids(account_ids: &[String], skip: &[String]) -> Vec<String> {
+    let candidates: Vec<&String> = account_ids
         .iter()
         .filter(|account_id| !skip.contains(account_id))
         .collect();
@@ -346,6 +381,69 @@ fn select_account_ids(collection: &KiroLocalAccessCollection, skip: &[String]) -
         ordered.push(candidates[(start + index) % candidates.len()].clone());
     }
     ordered
+}
+
+/// 过滤出当前可用的账号 ID（排除不健康和被限流的）
+fn filter_available_account_ids(
+    ids: &[String],
+    health: &HashMap<String, AccountHealth>,
+) -> Vec<String> {
+    ids.iter()
+        .filter(|id| {
+            health
+                .get(id.as_str())
+                .map(|h| h.is_available())
+                .unwrap_or(true) // 新账号默认可用
+        })
+        .cloned()
+        .collect()
+}
+
+/// 自愈：重置所有账号的健康状态
+async fn reset_all_account_health(ids: &[String]) {
+    let mut rt = gateway_runtime().lock().await;
+    logger::log_warn("[KiroLocalAccess] 所有账号均不可用，执行自愈机制重置健康状态");
+    for id in ids {
+        let h = rt
+            .account_health
+            .entry(id.clone())
+            .or_insert_with(AccountHealth::new);
+        h.is_healthy = true;
+        h.recent_failures = 0;
+        h.blocked_until_ms = None;
+    }
+}
+
+/// 记录账号请求成功
+async fn update_account_health_on_success(account_id: &str) {
+    let mut rt = gateway_runtime().lock().await;
+    rt.account_health
+        .entry(account_id.to_string())
+        .or_insert_with(AccountHealth::new)
+        .record_success();
+}
+
+/// 记录账号请求失败，rate_limited=true 表示收到 429 需要屏蔽 60s
+async fn update_account_health_on_failure(account_id: &str, rate_limited: bool) {
+    let mut rt = gateway_runtime().lock().await;
+    let h = rt
+        .account_health
+        .entry(account_id.to_string())
+        .or_insert_with(AccountHealth::new);
+    if rate_limited {
+        h.mark_rate_limited();
+        logger::log_warn(&format!(
+            "[KiroLocalAccess] 账号 {} 收到 429，屏蔽 60s",
+            account_id
+        ));
+    }
+    h.record_failure();
+    if !h.is_healthy {
+        logger::log_warn(&format!(
+            "[KiroLocalAccess] 账号 {} 连续失败 3 次，标记为不健康",
+            account_id
+        ));
+    }
 }
 
 async fn read_http_request(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
@@ -442,96 +540,6 @@ fn gateway_model_ids() -> Vec<String> {
         .iter()
         .map(|item| item.to_string())
         .collect()
-}
-
-fn dedupe_model_ids(model_ids: Vec<String>) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut ordered = Vec::new();
-    for model_id in model_ids {
-        if seen.insert(model_id.clone()) {
-            ordered.push(model_id);
-        }
-    }
-    if seen.insert("auto".to_string()) {
-        ordered.insert(0, "auto".to_string());
-    }
-    ordered
-}
-
-fn parse_kiro_cli_model_ids(output: &[u8]) -> Vec<String> {
-    let mut model_ids = Vec::new();
-    if let Ok(value) = serde_json::from_slice::<Value>(output) {
-        if let Some(items) = value.get("models").and_then(|value| value.as_array()) {
-            for item in items {
-                let model_id = item
-                    .get("model_id")
-                    .or_else(|| item.get("id"))
-                    .and_then(|value| value.as_str())
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty());
-                if let Some(model_id) = model_id {
-                    model_ids.push(model_id.to_string());
-                }
-            }
-        }
-    }
-    dedupe_model_ids(model_ids)
-}
-
-async fn invoke_kiro_cli_list_models() -> Result<Vec<String>, String> {
-    tokio::task::spawn_blocking(move || {
-        let output = Command::new(resolve_kiro_cli_path())
-            .arg("chat")
-            .arg("--list-models")
-            .arg("--format")
-            .arg("json")
-            .output()
-            .map_err(|e| format!("启动 kiro-cli 失败: {}", e))?;
-        if !output.status.success() {
-            let stderr = strip_terminal_artifacts(&String::from_utf8_lossy(&output.stderr));
-            return Err(format!(
-                "kiro-cli 列出模型失败(code={}): {}",
-                output.status.code().unwrap_or(-1),
-                if stderr.is_empty() {
-                    "无输出".to_string()
-                } else {
-                    stderr
-                }
-            ));
-        }
-        Ok(parse_kiro_cli_model_ids(&output.stdout))
-    })
-    .await
-    .map_err(|e| format!("等待 kiro-cli 结束失败: {}", e))?
-}
-
-async fn load_model_ids_for_account(account: &KiroAccount) -> Result<Vec<String>, String> {
-    let _guard = request_lock().lock().await;
-    let account_clone = account.clone();
-    let auth_mode =
-        tokio::task::spawn_blocking(move || prepare_kiro_cli_auth_for_request(&account_clone))
-            .await
-            .map_err(|e| format!("准备 Kiro CLI 凭据任务失败: {}", e))??;
-
-    let result = invoke_kiro_cli_list_models().await;
-
-    if let KiroCliAuthMode::Injected(snapshot) = auth_mode {
-        let restore_result = tokio::task::spawn_blocking(move || restore_kiro_cli_auth(snapshot))
-            .await
-            .map_err(|e| format!("恢复 Kiro CLI 凭据任务失败: {}", e))?;
-
-        if let Err(restore_err) = restore_result {
-            logger::log_error(&format!(
-                "[KiroLocalAccess] 恢复 kiro-cli 登录态失败: {}",
-                restore_err
-            ));
-            if result.is_ok() {
-                return Err(format!("恢复 kiro-cli 登录态失败: {}", restore_err));
-            }
-        }
-    }
-
-    result
 }
 
 async fn resolve_gateway_model_ids(collection: &KiroLocalAccessCollection) -> Vec<String> {
@@ -2357,378 +2365,6 @@ fn normalize_responses_gateway_request(body: &[u8]) -> Result<GatewayProxyReques
     })
 }
 
-fn resolve_auth_storage_key(account: &KiroAccount) -> &'static str {
-    let auth_method = normalize_ascii_lower(
-        pick_string(
-            account.kiro_auth_token_raw.as_ref(),
-            &[&["authMethod"], &["auth_method"]],
-        )
-        .as_deref(),
-    );
-    if auth_method.as_deref() == Some("idc") {
-        return OIDC_AUTH_KEY;
-    }
-
-    let provider = normalize_ascii_lower(
-        pick_string(
-            account.kiro_auth_token_raw.as_ref(),
-            &[&["provider"], &["loginProvider"], &["login_option"]],
-        )
-        .as_deref()
-        .or(account.login_provider.as_deref()),
-    );
-
-    match provider.as_deref() {
-        Some("external_idp") => EXTERNAL_IDP_AUTH_KEY,
-        Some("enterprise") | Some("builderid") | Some("internal") | Some("awsidc") => OIDC_AUTH_KEY,
-        _ => SOCIAL_AUTH_KEY,
-    }
-}
-
-fn provider_value_for_record(account: &KiroAccount, auth_key: &str) -> String {
-    if let Some(provider) = normalize_ascii_lower(
-        pick_string(
-            account.kiro_auth_token_raw.as_ref(),
-            &[&["provider"], &["loginProvider"], &["login_option"]],
-        )
-        .as_deref()
-        .or(account.login_provider.as_deref()),
-    ) {
-        return provider;
-    }
-
-    match auth_key {
-        EXTERNAL_IDP_AUTH_KEY => "external_idp".to_string(),
-        OIDC_AUTH_KEY => "builderid".to_string(),
-        _ => "social".to_string(),
-    }
-}
-
-fn default_profile_name(auth_key: &str) -> &'static str {
-    match auth_key {
-        EXTERNAL_IDP_AUTH_KEY => "ExternalIdP_Default_Profile",
-        OIDC_AUTH_KEY => "BuilderId_Default_Profile",
-        _ => "Social_Default_Profile",
-    }
-}
-
-fn build_auth_record_value(account: &KiroAccount, auth_key: &str) -> Result<String, String> {
-    let access_token = account.access_token.trim();
-    if access_token.is_empty() {
-        return Err(format!("账号 {} 缺少 access_token", account.email));
-    }
-
-    let mut obj = account
-        .kiro_auth_token_raw
-        .as_ref()
-        .and_then(|value| value.as_object())
-        .cloned()
-        .unwrap_or_else(Map::new);
-
-    obj.insert(
-        "access_token".to_string(),
-        Value::String(access_token.to_string()),
-    );
-    obj.insert(
-        "accessToken".to_string(),
-        Value::String(access_token.to_string()),
-    );
-
-    if let Some(refresh_token) = account
-        .refresh_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        obj.insert(
-            "refresh_token".to_string(),
-            Value::String(refresh_token.to_string()),
-        );
-        obj.insert(
-            "refreshToken".to_string(),
-            Value::String(refresh_token.to_string()),
-        );
-    }
-
-    let provider = provider_value_for_record(account, auth_key);
-    obj.insert("provider".to_string(), Value::String(provider.clone()));
-    obj.entry("loginProvider".to_string())
-        .or_insert_with(|| Value::String(provider));
-
-    if let Some(profile_arn) = extract_profile_arn(account) {
-        obj.insert(
-            "profile_arn".to_string(),
-            Value::String(profile_arn.clone()),
-        );
-        obj.insert("profileArn".to_string(), Value::String(profile_arn));
-    }
-
-    if let Some(expires_at) = account.expires_at {
-        if let Some(date_time) = chrono::Utc.timestamp_opt(expires_at, 0).single() {
-            obj.insert(
-                "expires_at".to_string(),
-                Value::String(date_time.to_rfc3339_opts(SecondsFormat::Millis, true)),
-            );
-        }
-    }
-
-    if let Some(value) = account
-        .idc_region
-        .as_ref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        obj.insert("idc_region".to_string(), Value::String(value.clone()));
-        obj.insert("region".to_string(), Value::String(value.clone()));
-    }
-    if let Some(value) = account
-        .issuer_url
-        .as_ref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        obj.insert("issuer_url".to_string(), Value::String(value.clone()));
-    }
-    if let Some(value) = account
-        .client_id
-        .as_ref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        obj.insert("client_id".to_string(), Value::String(value.clone()));
-    }
-    if let Some(value) = account
-        .scopes
-        .as_ref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        obj.insert("scope".to_string(), Value::String(value.clone()));
-        obj.insert("scopes".to_string(), Value::String(value.clone()));
-    }
-    if let Some(value) = account
-        .login_provider
-        .as_ref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        obj.entry("loginProvider".to_string())
-            .or_insert_with(|| Value::String(value.clone()));
-    }
-
-    serde_json::to_string(&Value::Object(obj)).map_err(|e| format!("序列化 Kiro token 失败: {}", e))
-}
-
-fn build_profile_record_value(account: &KiroAccount, auth_key: &str) -> Result<String, String> {
-    let mut obj = account
-        .kiro_profile_raw
-        .as_ref()
-        .and_then(|value| value.as_object())
-        .cloned()
-        .unwrap_or_else(Map::new);
-
-    let profile_arn = extract_profile_arn(account)
-        .ok_or_else(|| format!("账号 {} 缺少 profileArn", account.email))?;
-    obj.insert("arn".to_string(), Value::String(profile_arn));
-
-    let profile_name = obj
-        .get("profile_name")
-        .and_then(|value| value.as_str())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            obj.get("profileName")
-                .and_then(|value| value.as_str())
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        })
-        .unwrap_or_else(|| default_profile_name(auth_key).to_string());
-
-    obj.insert(
-        "profile_name".to_string(),
-        Value::String(profile_name.clone()),
-    );
-    obj.entry("profileName".to_string())
-        .or_insert_with(|| Value::String(profile_name));
-
-    serde_json::to_string(&Value::Object(obj))
-        .map_err(|e| format!("序列化 Kiro profile 失败: {}", e))
-}
-
-fn kiro_cli_db_path() -> Result<PathBuf, String> {
-    let base_dir = dirs::data_dir().ok_or_else(|| "无法定位 Kiro CLI 数据目录".to_string())?;
-    Ok(base_dir.join("kiro-cli").join("data.sqlite3"))
-}
-
-fn load_optional_text(conn: &Connection, sql: &str, key: &str) -> Result<Option<String>, String> {
-    conn.query_row(sql, params![key], |row| row.get::<_, String>(0))
-        .optional()
-        .map_err(|e| format!("读取 Kiro CLI 数据库失败: {}", e))
-}
-
-fn read_kiro_cli_auth_snapshot() -> Result<KiroCliDbSnapshot, String> {
-    let db_path = kiro_cli_db_path()?;
-    let conn =
-        Connection::open(&db_path).map_err(|e| format!("打开 Kiro CLI 数据库失败: {}", e))?;
-
-    let mut snapshot = KiroCliDbSnapshot::default();
-    for key in KNOWN_AUTH_KEYS {
-        let value = load_optional_text(&conn, "SELECT value FROM auth_kv WHERE key = ?1", key)?;
-        snapshot.auth_values.insert(key.to_string(), value);
-    }
-    snapshot.profile_value = load_optional_text(
-        &conn,
-        "SELECT CAST(value AS TEXT) FROM state WHERE key = ?1",
-        PROFILE_STATE_KEY,
-    )?;
-    Ok(snapshot)
-}
-
-fn extract_profile_arn_from_text(value: &str) -> Option<String> {
-    let parsed = serde_json::from_str::<Value>(value).ok()?;
-    pick_string(
-        Some(&parsed),
-        &[
-            &["arn"],
-            &["profileArn"],
-            &["profile_arn"],
-            &["profile", "arn"],
-        ],
-    )
-}
-
-fn current_kiro_cli_profile_matches(account: &KiroAccount) -> bool {
-    let Some(account_profile_arn) = extract_profile_arn(account) else {
-        return false;
-    };
-    let Ok(snapshot) = read_kiro_cli_auth_snapshot() else {
-        return false;
-    };
-    snapshot
-        .profile_value
-        .as_deref()
-        .and_then(extract_profile_arn_from_text)
-        .map(|current_profile_arn| current_profile_arn == account_profile_arn)
-        .unwrap_or(false)
-}
-
-fn prepare_kiro_cli_auth(account: &KiroAccount) -> Result<KiroCliDbSnapshot, String> {
-    let db_path = kiro_cli_db_path()?;
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建 Kiro CLI 数据目录失败: {}", e))?;
-    }
-
-    let mut conn =
-        Connection::open(&db_path).map_err(|e| format!("打开 Kiro CLI 数据库失败: {}", e))?;
-    let tx = conn
-        .transaction()
-        .map_err(|e| format!("开启 Kiro CLI 事务失败: {}", e))?;
-
-    tx.execute(
-        "CREATE TABLE IF NOT EXISTS auth_kv (key TEXT PRIMARY KEY, value TEXT)",
-        [],
-    )
-    .map_err(|e| format!("初始化 auth_kv 表失败: {}", e))?;
-    tx.execute(
-        "CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value BLOB)",
-        [],
-    )
-    .map_err(|e| format!("初始化 state 表失败: {}", e))?;
-
-    let mut snapshot = KiroCliDbSnapshot::default();
-    for key in KNOWN_AUTH_KEYS {
-        let value = load_optional_text(&tx, "SELECT value FROM auth_kv WHERE key = ?1", key)?;
-        snapshot.auth_values.insert(key.to_string(), value);
-    }
-    snapshot.profile_value = load_optional_text(
-        &tx,
-        "SELECT CAST(value AS TEXT) FROM state WHERE key = ?1",
-        PROFILE_STATE_KEY,
-    )?;
-
-    let auth_key = resolve_auth_storage_key(account);
-    let auth_value = build_auth_record_value(account, auth_key)?;
-    let profile_value = build_profile_record_value(account, auth_key)?;
-
-    for key in KNOWN_AUTH_KEYS {
-        tx.execute("DELETE FROM auth_kv WHERE key = ?1", params![key])
-            .map_err(|e| format!("清理旧 Kiro token 失败: {}", e))?;
-    }
-
-    tx.execute(
-        "INSERT OR REPLACE INTO auth_kv (key, value) VALUES (?1, ?2)",
-        params![auth_key, auth_value],
-    )
-    .map_err(|e| format!("写入 Kiro token 失败: {}", e))?;
-    tx.execute(
-        "INSERT OR REPLACE INTO state (key, value) VALUES (?1, ?2)",
-        params![PROFILE_STATE_KEY, profile_value.into_bytes()],
-    )
-    .map_err(|e| format!("写入 Kiro profile 失败: {}", e))?;
-
-    tx.commit()
-        .map_err(|e| format!("提交 Kiro CLI 事务失败: {}", e))?;
-    Ok(snapshot)
-}
-
-fn prepare_kiro_cli_auth_for_request(account: &KiroAccount) -> Result<KiroCliAuthMode, String> {
-    if current_kiro_cli_profile_matches(account) {
-        return Ok(KiroCliAuthMode::ReuseCurrent);
-    }
-    prepare_kiro_cli_auth(account).map(KiroCliAuthMode::Injected)
-}
-
-fn restore_kiro_cli_auth(snapshot: KiroCliDbSnapshot) -> Result<(), String> {
-    let db_path = kiro_cli_db_path()?;
-    let mut conn =
-        Connection::open(&db_path).map_err(|e| format!("重新打开 Kiro CLI 数据库失败: {}", e))?;
-    let tx = conn
-        .transaction()
-        .map_err(|e| format!("开启恢复事务失败: {}", e))?;
-
-    tx.execute(
-        "CREATE TABLE IF NOT EXISTS auth_kv (key TEXT PRIMARY KEY, value TEXT)",
-        [],
-    )
-    .map_err(|e| format!("初始化 auth_kv 表失败: {}", e))?;
-    tx.execute(
-        "CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value BLOB)",
-        [],
-    )
-    .map_err(|e| format!("初始化 state 表失败: {}", e))?;
-
-    for key in KNOWN_AUTH_KEYS {
-        match snapshot.auth_values.get(key).cloned().flatten() {
-            Some(value) => {
-                tx.execute(
-                    "INSERT OR REPLACE INTO auth_kv (key, value) VALUES (?1, ?2)",
-                    params![key, value],
-                )
-                .map_err(|e| format!("恢复 auth_kv 失败: {}", e))?;
-            }
-            None => {
-                tx.execute("DELETE FROM auth_kv WHERE key = ?1", params![key])
-                    .map_err(|e| format!("清理注入 auth_kv 失败: {}", e))?;
-            }
-        }
-    }
-
-    match snapshot.profile_value {
-        Some(value) => {
-            tx.execute(
-                "INSERT OR REPLACE INTO state (key, value) VALUES (?1, ?2)",
-                params![PROFILE_STATE_KEY, value.into_bytes()],
-            )
-            .map_err(|e| format!("恢复 profile 失败: {}", e))?;
-        }
-        None => {
-            tx.execute(
-                "DELETE FROM state WHERE key = ?1",
-                params![PROFILE_STATE_KEY],
-            )
-            .map_err(|e| format!("清理注入 profile 失败: {}", e))?;
-        }
-    }
-
-    tx.commit().map_err(|e| format!("提交恢复事务失败: {}", e))
-}
-
 fn join_with_double_newline(left: &str, right: &str) -> String {
     match (left.trim().is_empty(), right.trim().is_empty()) {
         (true, true) => String::new(),
@@ -3631,11 +3267,39 @@ async fn build_kiro_payload(
         };
     }
     let current_images = images_option(extract_images(Some(&current_message.content)).await);
-    let current_tool_results = if current_message.role == "tool" {
+    // P0 fix: Kiro 后端不接受 currentMessage 中的 toolResults（会返回 400）
+    // 将 tool results 转为纯文本追加到 content 中
+    let raw_tool_results = if current_message.role == "tool" {
         extract_kiro_tool_results_from_tool_message(current_message)
     } else {
         extract_kiro_tool_results(current_message)
     };
+    if !raw_tool_results.is_empty() {
+        let result_text = raw_tool_results
+            .iter()
+            .map(|tr| {
+                let text = tr
+                    .content
+                    .iter()
+                    .filter_map(|c| match c {
+                        KiroToolResultContent::Text { text } => Some(text.clone()),
+                        KiroToolResultContent::Json { json } => Some(json.to_string()),
+                        KiroToolResultContent::Other { data } => Some(data.to_string()),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("[Tool Result: {}]", text)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !result_text.is_empty() {
+            current_content = if current_content.trim().is_empty() {
+                result_text
+            } else {
+                format!("{}\n{}", current_content, result_text)
+            };
+        }
+    }
     let payload = KiroPayload {
         conversation_state: ConversationState {
             chat_trigger_type: "MANUAL".to_string(),
@@ -3653,7 +3317,7 @@ async fn build_kiro_payload(
                     images: current_images,
                     user_input_message_context: build_kiro_user_context(
                         gateway_tools_to_kiro(&processed_tools),
-                        current_tool_results,
+                        Vec::new(), // toolResults 已转为纯文本，不传给上游
                         normalized_tool_choice,
                         None,
                     ),
@@ -3948,7 +3612,7 @@ async fn send_generate_request_direct(
             return Err(map_direct_upstream_error(status, &body));
         }
 
-        let should_retry = attempt < MAX_RETRIES && (status == 403 || status >= 500);
+        let should_retry = attempt < MAX_RETRIES && status >= 500;
         if should_retry {
             let backoff_ms = 1000 * 2u64.pow(attempt - 1);
             logger::log_warn(&format!(
@@ -4363,133 +4027,6 @@ fn ensure_citation_target_supported(target: &Value) -> Option<()> {
 fn dedupe_gateway_tool_calls(tool_calls: &mut Vec<GatewayToolCall>) {
     let mut seen = HashSet::new();
     tool_calls.retain(|call| seen.insert(call.id.clone()));
-}
-
-fn resolve_kiro_cli_path() -> String {
-    if let Ok(path) = std::env::var("KIRO_CLI_PATH") {
-        let trimmed = path.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
-        }
-    }
-
-    if let Some(home_dir) = dirs::home_dir() {
-        let preferred = home_dir.join(".local/bin/kiro-cli");
-        if preferred.is_file() {
-            return preferred.display().to_string();
-        }
-    }
-
-    "kiro-cli".to_string()
-}
-
-fn strip_terminal_artifacts(text: &str) -> String {
-    let without_osc = osc_escape_regex().replace_all(text, "");
-    let without_ansi = ansi_escape_regex().replace_all(&without_osc, "");
-    without_ansi
-        .chars()
-        .filter(|ch| !ch.is_control() || matches!(*ch, '\n' | '\r' | '\t'))
-        .collect::<String>()
-        .lines()
-        .map(str::trim_end)
-        .collect::<Vec<&str>>()
-        .join("\n")
-        .trim()
-        .to_string()
-}
-
-async fn invoke_kiro_cli(prompt: String, model: String) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        let mut command = Command::new(resolve_kiro_cli_path());
-        command
-            .arg("chat")
-            .arg("--no-interactive")
-            .arg("--wrap")
-            .arg("never")
-            .arg("--trust-tools=")
-            .env("NO_COLOR", "1")
-            .env("TERM", "dumb")
-            .env("CI", "1")
-            .env_remove("CLICOLOR")
-            .env_remove("CLICOLOR_FORCE");
-
-        if let Some(home_dir) = dirs::home_dir() {
-            command.current_dir(home_dir);
-        }
-        if !model.trim().is_empty() && model != "auto" {
-            command.arg("--model").arg(model.trim());
-        }
-
-        let output = command
-            .arg(prompt)
-            .output()
-            .map_err(|e| format!("启动 kiro-cli 失败: {}", e))?;
-
-        let stdout = strip_terminal_artifacts(&String::from_utf8_lossy(&output.stdout));
-        let stderr = strip_terminal_artifacts(&String::from_utf8_lossy(&output.stderr));
-
-        if output.status.success() {
-            if !stdout.is_empty() {
-                Ok(stdout)
-            } else if !stderr.is_empty() {
-                Ok(stderr)
-            } else {
-                Err("kiro-cli 返回空响应".to_string())
-            }
-        } else {
-            let mut parts = Vec::new();
-            if !stdout.is_empty() {
-                parts.push(format!("stdout: {}", stdout));
-            }
-            if !stderr.is_empty() {
-                parts.push(format!("stderr: {}", stderr));
-            }
-            let detail = if parts.is_empty() {
-                "无输出".to_string()
-            } else {
-                parts.join(" | ")
-            };
-            Err(format!(
-                "kiro-cli 调用失败(code={}): {}",
-                output.status.code().unwrap_or(-1),
-                detail
-            ))
-        }
-    })
-    .await
-    .map_err(|e| format!("等待 kiro-cli 结束失败: {}", e))?
-}
-
-async fn generate_via_kiro_cli(
-    request: &CompletionRequest,
-    account: &KiroAccount,
-) -> Result<String, String> {
-    let _guard = request_lock().lock().await;
-    let account_clone = account.clone();
-    let auth_mode =
-        tokio::task::spawn_blocking(move || prepare_kiro_cli_auth_for_request(&account_clone))
-            .await
-            .map_err(|e| format!("准备 Kiro CLI 凭据任务失败: {}", e))??;
-
-    let result = invoke_kiro_cli(request.prompt.clone(), request.model.clone()).await;
-
-    if let KiroCliAuthMode::Injected(snapshot) = auth_mode {
-        let restore_result = tokio::task::spawn_blocking(move || restore_kiro_cli_auth(snapshot))
-            .await
-            .map_err(|e| format!("恢复 Kiro CLI 凭据任务失败: {}", e))?;
-
-        if let Err(restore_err) = restore_result {
-            logger::log_error(&format!(
-                "[KiroLocalAccess] 恢复 kiro-cli 登录态失败: {}",
-                restore_err
-            ));
-            if result.is_ok() {
-                return Err(format!("恢复 kiro-cli 登录态失败: {}", restore_err));
-            }
-        }
-    }
-
-    result
 }
 
 fn anthropic_content_blocks(
@@ -6115,12 +5652,25 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
     }
 
     let start_time = Instant::now();
-    let max_tries = collection.account_ids.len();
+
+    // 过滤不健康/被限流的账号；若全部不可用则执行自愈
+    let effective_ids = {
+        let rt = gateway_runtime().lock().await;
+        filter_available_account_ids(&collection.account_ids, &rt.account_health)
+    };
+    let effective_ids = if effective_ids.is_empty() {
+        reset_all_account_health(&collection.account_ids).await;
+        collection.account_ids.clone()
+    } else {
+        effective_ids
+    };
+
+    let max_tries = effective_ids.len();
     let mut tried = Vec::new();
     let mut failure_messages = Vec::new();
 
     for _ in 0..max_tries {
-        let candidates = select_account_ids(&collection, &tried);
+        let candidates = select_account_ids(&effective_ids, &tried);
         let Some(account_id) = candidates.first() else {
             break;
         };
@@ -6132,11 +5682,13 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
         };
         if account.access_token.trim().is_empty() {
             failure_messages.push(format!("{}: 缺少 access_token", account.email));
+            update_account_health_on_failure(&account.id, false).await;
             continue;
         }
 
         match proxy_via_kiro_direct(&gateway_request, &account, protocol).await {
             Ok(result) => {
+                update_account_health_on_success(&account.id).await;
                 write_upstream_response(&mut stream, &result).await;
                 record_usage(true, start_time.elapsed().as_millis() as u64).await;
                 set_last_error(None).await;
@@ -6149,10 +5701,12 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
                 return Ok(());
             }
             Err(err) => {
+                let is_rate_limited = err.contains("(status=429)");
                 logger::log_warn(&format!(
                     "[KiroLocalAccess] 账号请求失败: account_id={}, email={}, error={}",
                     account.id, account.email, err
                 ));
+                update_account_health_on_failure(&account.id, is_rate_limited).await;
                 failure_messages.push(format!("{}: {}", account.email, err));
             }
         }

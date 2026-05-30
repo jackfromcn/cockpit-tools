@@ -1,6 +1,5 @@
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -145,23 +144,12 @@ pub(crate) struct ProxyResult {
     pub is_stream: bool,
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct KiroCliDbSnapshot {
-    pub auth_values: HashMap<String, Option<String>>,
-    pub profile_value: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct ResponsesSessionEntry {
     pub previous_response_id: Option<String>,
     pub request_messages: Vec<GatewayMessage>,
     pub assistant_message: GatewayMessage,
     pub updated_at: Instant,
-}
-
-pub(crate) enum KiroCliAuthMode {
-    ReuseCurrent,
-    Injected(KiroCliDbSnapshot),
 }
 
 #[derive(Debug, Clone, Serialize)]
