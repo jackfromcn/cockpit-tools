@@ -3109,11 +3109,39 @@ fn extract_tool_uses(message: &GatewayMessage) -> Option<Vec<KiroToolUse>> {
 }
 
 fn build_history_assistant_message(message: &GatewayMessage) -> HistoryAssistantMessage {
+    // P0 fix: Kiro 后端不接受 history 中的 toolUses 字段（会返回 400）
+    // 将 tool_uses 转为纯文本追加到 content 中
+    let base_content = extract_text_content(Some(&message.content));
+    let tool_uses = extract_tool_uses(message);
+    let content = if let Some(ref uses) = tool_uses {
+        if uses.is_empty() {
+            base_content
+        } else {
+            let tool_text = uses
+                .iter()
+                .map(|tu| {
+                    format!(
+                        "[Tool Call: {}({})]",
+                        tu.name,
+                        serde_json::to_string(&tu.input).unwrap_or_default()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if base_content.trim().is_empty() {
+                tool_text
+            } else {
+                format!("{}\n{}", base_content, tool_text)
+            }
+        }
+    } else {
+        base_content
+    };
+
     HistoryAssistantMessage {
-        content: extract_text_content(Some(&message.content)),
-        tool_uses: extract_tool_uses(message),
-        // P0 fix: Kiro 后端拒绝 history 中的 reasoningContent，必须置 None
-        reasoning_content: None,
+        content,
+        tool_uses: None, // 不发送 toolUses，Kiro 后端拒绝
+        reasoning_content: None, // P0 fix: Kiro 后端拒绝 history 中的 reasoningContent
         references: assistant_metadata_value(message, "references")
             .and_then(|value| meaningful_optional_value(Some(value))),
         supplementary_web_links: assistant_metadata_value(message, "supplementaryWebLinks")
@@ -3526,9 +3554,10 @@ async fn build_kiro_payload(
                     } else {
                         extract_kiro_tool_results(message)
                     };
-                    // P1 fix: 如果 tool_results 对应的工具不在当前定义中，转为纯文本
+                    // P0 fix: Kiro 后端不接受 history 中的 toolResults（会返回 400）
+                    // 永远将 tool_results 转为纯文本追加到 content 中
                     let (final_content, final_tool_results) =
-                        if !tool_results.is_empty() && current_tool_names.is_empty() {
+                        if !tool_results.is_empty() {
                             let result_text = tool_results
                                 .iter()
                                 .map(|tr| {
