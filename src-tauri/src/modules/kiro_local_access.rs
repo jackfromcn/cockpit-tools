@@ -1,6 +1,6 @@
 use crate::models::kiro::KiroAccount;
 use crate::models::kiro_local_access::{
-    KiroLocalAccessCollection, KiroLocalAccessState, KiroLocalAccessStats,
+    KiroAddressOption, KiroLocalAccessCollection, KiroLocalAccessState, KiroLocalAccessStats,
     KiroLocalAccessTestFailure, KiroLocalAccessTestResult,
 };
 use crate::modules::atomic_write::write_string_atomic;
@@ -32,6 +32,7 @@ use tokio::time::{timeout, Duration};
 const KIRO_LOCAL_ACCESS_FILE: &str = "kiro_local_access.json";
 const KIRO_LOCAL_ACCESS_STATS_FILE: &str = "kiro_local_access_stats.json";
 const LOCALHOST_BIND: &str = "127.0.0.1";
+const ALL_INTERFACES_BIND: &str = "0.0.0.0";
 const MAX_HTTP_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(15);
 const GATEWAY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -276,13 +277,45 @@ async fn ensure_runtime_loaded() {
     }
 }
 
+fn detect_lan_ip() -> Option<String> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    let addr = socket.local_addr().ok()?;
+    let ip = addr.ip().to_string();
+    if ip.starts_with("127.") {
+        None
+    } else {
+        Some(ip)
+    }
+}
+
 fn build_state_snapshot(rt: &GatewayRuntime) -> KiroLocalAccessState {
+    let base_url = rt
+        .actual_port
+        .map(|port| format!("http://{}:{}/v1", LOCALHOST_BIND, port));
+
+    let address_options = if let Some(port) = rt.actual_port {
+        let mut opts = vec![KiroAddressOption {
+            kind: "local".to_string(),
+            label: "本机".to_string(),
+            base_url: format!("http://{}:{}/v1", LOCALHOST_BIND, port),
+        }];
+        if let Some(lan_ip) = detect_lan_ip() {
+            opts.push(KiroAddressOption {
+                kind: "lan".to_string(),
+                label: "局域网".to_string(),
+                base_url: format!("http://{}:{}/v1", lan_ip, port),
+            });
+        }
+        opts
+    } else {
+        vec![]
+    };
+
     KiroLocalAccessState {
         collection: rt.collection.clone(),
         running: rt.running,
-        base_url: rt
-            .actual_port
-            .map(|port| format!("http://{}:{}/v1", LOCALHOST_BIND, port)),
+        base_url,
         model_ids: gateway_model_ids(),
         last_error: rt.last_error.clone(),
         member_count: rt
@@ -291,6 +324,7 @@ fn build_state_snapshot(rt: &GatewayRuntime) -> KiroLocalAccessState {
             .map(|collection| collection.account_ids.len())
             .unwrap_or(0),
         stats: rt.stats.clone(),
+        address_options,
     }
 }
 
@@ -5752,9 +5786,9 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
 }
 
 async fn start_gateway(port: u16) -> Result<(), String> {
-    let listener = TcpListener::bind((LOCALHOST_BIND, port))
+    let listener = TcpListener::bind((ALL_INTERFACES_BIND, port))
         .await
-        .map_err(|e| format!("绑定 {}:{} 失败: {}", LOCALHOST_BIND, port, e))?;
+        .map_err(|e| format!("绑定 {}:{} 失败: {}", ALL_INTERFACES_BIND, port, e))?;
     let actual_port = listener
         .local_addr()
         .map_err(|e| format!("读取监听端口失败: {}", e))?
@@ -5770,8 +5804,8 @@ async fn start_gateway(port: u16) -> Result<(), String> {
     }
 
     logger::log_info(&format!(
-        "[KiroLocalAccess] 本地接入服务已启动: bind={}:{} base=http://{}:{}/v1",
-        LOCALHOST_BIND, actual_port, LOCALHOST_BIND, actual_port
+        "[KiroLocalAccess] 本地接入服务已启动: bind={}:{} local=http://{}:{}/v1",
+        ALL_INTERFACES_BIND, actual_port, LOCALHOST_BIND, actual_port
     ));
 
     let task = tokio::spawn(async move {

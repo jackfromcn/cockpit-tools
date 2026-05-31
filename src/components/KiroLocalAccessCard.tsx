@@ -26,7 +26,10 @@ import type {
 import { buildKiroAccountPresentation } from '../presentation/platformAccountPresentation';
 import type { KiroAccount } from '../types/kiro';
 import { useEscClose } from '../hooks/useEscClose';
+import { SingleSelectDropdown } from './SingleSelectDropdown';
 import './CodexLocalAccessModal.css';
+
+const KIRO_ADDRESS_KIND_KEY = 'kiro_local_access_address_kind';
 
 interface Props {
   accounts: KiroAccount[];
@@ -77,6 +80,9 @@ export function KiroLocalAccessCard({
   const [notice, setNotice] = useState('');
   const [copiedField, setCopiedField] = useState<CopyableField | null>(null);
   const [keyVisible, setKeyVisible] = useState(false);
+  const [selectedAddressKind, setSelectedAddressKind] = useState<string>(
+    () => localStorage.getItem(KIRO_ADDRESS_KIND_KEY) ?? 'local',
+  );
   const [showPanel, setShowPanel] = useState(false);
   const [showTestDialog, setShowTestDialog] = useState(false);
   const [testDialogRunning, setTestDialogRunning] = useState(false);
@@ -127,6 +133,9 @@ export function KiroLocalAccessCard({
   const enabled = collection?.enabled ?? false;
   const running = state?.running ?? false;
   const baseUrl = state?.baseUrl ?? '';
+  const addressOptions = state?.addressOptions ?? [];
+  const displayBaseUrl =
+    addressOptions.find((o) => o.kind === selectedAddressKind)?.baseUrl ?? baseUrl ?? '';
   const apiKey = collection?.apiKey ?? '';
   const stats = state?.stats?.totals;
   const actionBusy = loading || testing;
@@ -390,17 +399,36 @@ export function KiroLocalAccessCard({
 
         <div className="codex-local-access-meta">
           <div className="codex-local-access-row">
-            <span className="codex-local-access-label">本机</span>
-            <code className="codex-local-access-code" title={baseUrl || '未启用'}>
-              {baseUrl || '未启用'}
+            {addressOptions.length > 1 ? (
+              <div
+                className="codex-local-access-label codex-local-access-address-select"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <SingleSelectDropdown
+                  value={selectedAddressKind}
+                  options={addressOptions.map((o) => ({ value: o.kind, label: o.label }))}
+                  onChange={(kind) => {
+                    setSelectedAddressKind(kind);
+                    localStorage.setItem(KIRO_ADDRESS_KIND_KEY, kind);
+                  }}
+                  menuWidth={92}
+                  menuMaxHeight={120}
+                  ariaLabel="地址类型"
+                />
+              </div>
+            ) : (
+              <span className="codex-local-access-label">本机</span>
+            )}
+            <code className="codex-local-access-code" title={displayBaseUrl || '未启用'}>
+              {displayBaseUrl || '未启用'}
             </code>
             <div className="codex-local-access-row-actions">
               <button
                 type="button"
                 className="folder-icon-btn"
-                onClick={() => void handleCopy('baseUrl', baseUrl)}
+                onClick={() => void handleCopy('baseUrl', displayBaseUrl)}
                 title={t('common.copy', '复制')}
-                disabled={!baseUrl}
+                disabled={!displayBaseUrl}
               >
                 {copiedField === 'baseUrl' ? <Check size={14} /> : <Copy size={14} />}
               </button>
@@ -692,19 +720,32 @@ export function KiroLocalAccessCard({
                           <div className="codex-local-access-config-head">
                             <span className="codex-local-access-config-label">Base URL</span>
                             <div className="codex-local-access-config-actions">
+                              {addressOptions.length > 1 && (
+                                <SingleSelectDropdown
+                                  value={selectedAddressKind}
+                                  options={addressOptions.map((o) => ({ value: o.kind, label: o.label }))}
+                                  onChange={(kind) => {
+                                    setSelectedAddressKind(kind);
+                                    localStorage.setItem(KIRO_ADDRESS_KIND_KEY, kind);
+                                  }}
+                                  menuWidth={92}
+                                  menuMaxHeight={120}
+                                  ariaLabel="地址类型"
+                                />
+                              )}
                               <button
                                 type="button"
                                 className="folder-icon-btn"
-                                onClick={() => void handleCopy('baseUrl', baseUrl)}
+                                onClick={() => void handleCopy('baseUrl', displayBaseUrl)}
                                 title={t('common.copy', '复制')}
-                                disabled={!baseUrl}
+                                disabled={!displayBaseUrl}
                               >
                                 {copiedField === 'baseUrl' ? <Check size={14} /> : <Copy size={14} />}
                               </button>
                             </div>
                           </div>
-                          <code className="codex-local-access-code" title={baseUrl || '未启用'}>
-                            {baseUrl || '未启用'}
+                          <code className="codex-local-access-code" title={displayBaseUrl || '未启用'}>
+                            {displayBaseUrl || '未启用'}
                           </code>
                         </div>
 

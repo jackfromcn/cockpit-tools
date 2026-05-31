@@ -24,6 +24,7 @@ export interface KiroLocalAccessState {
       totalLatencyMs: number;
     };
   };
+  addressOptions: { kind: string; label: string; baseUrl: string }[];
 }
 
 export interface KiroLocalAccessTestFailure {

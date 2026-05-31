@@ -50,6 +50,14 @@ pub struct KiroLocalAccessStats {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct KiroAddressOption {
+    pub kind: String,
+    pub label: String,
+    pub base_url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct KiroLocalAccessState {
     pub collection: Option<KiroLocalAccessCollection>,
     pub running: bool,
@@ -58,6 +66,7 @@ pub struct KiroLocalAccessState {
     pub last_error: Option<String>,
     pub member_count: usize,
     pub stats: KiroLocalAccessStats,
+    pub address_options: Vec<KiroAddressOption>,
 }
 
 #[derive(Debug, Clone, Serialize)]
