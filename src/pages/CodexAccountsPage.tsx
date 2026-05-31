@@ -6468,11 +6468,19 @@ export function CodexAccountsPage() {
                       onChange={(value) =>
                         void handleUpdateLocalAccessGatewayMode(
                           value as CodexLocalAccessGatewayMode,
-                        )
+                        ).catch((error) => {
+                          setMessage({
+                            text: t("messages.actionFailed", {
+                              action: t("codex.localAccess.switchGatewayMode", "切换网关模式"),
+                              error: String(error).replace(/^Error:\s*/, ""),
+                            }),
+                            tone: "error",
+                          });
+                        })
                       }
                       disabled={!localAccessCollection || localAccessBusy}
                       menuClassName="codex-local-access-title-mode-menu"
-                      menuWidth={116}
+                      menuWidth={150}
                       menuMaxHeight={120}
                       ariaLabel={t(
                         "codex.localAccess.gatewayModeLabel",
@@ -6515,11 +6523,19 @@ export function CodexAccountsPage() {
                       onChange={(value) =>
                         void handleUpdateLocalAccessGatewayMode(
                           value as CodexLocalAccessGatewayMode,
-                        )
+                        ).catch((error) => {
+                          setMessage({
+                            text: t("messages.actionFailed", {
+                              action: t("codex.localAccess.switchGatewayMode", "切换网关模式"),
+                              error: String(error).replace(/^Error:\s*/, ""),
+                            }),
+                            tone: "error",
+                          });
+                        })
                       }
                       disabled={!localAccessCollection || localAccessBusy}
                       menuClassName="codex-local-access-title-mode-menu"
-                      menuWidth={116}
+                      menuWidth={150}
                       menuMaxHeight={120}
                       ariaLabel={t(
                         "codex.localAccess.gatewayModeLabel",

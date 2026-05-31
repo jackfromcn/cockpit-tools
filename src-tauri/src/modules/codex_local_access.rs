@@ -9942,7 +9942,9 @@ pub async fn update_local_access_upstream_proxy_config(
 pub async fn update_local_access_gateway_mode(
     gateway_mode: CodexLocalAccessGatewayMode,
 ) -> Result<CodexLocalAccessState, String> {
-    ensure_runtime_loaded().await?;
+    // 不先启动网关：这里只需加载状态，真正的启动/切换由后面的 ensure_gateway_matches_runtime 负责
+    // 如果用 ensure_runtime_loaded，会先尝试用旧模式启动网关，导致切换代码未执行就失败
+    ensure_runtime_loaded_without_start().await?;
 
     let maybe_collection = {
         let runtime = gateway_runtime().lock().await;
