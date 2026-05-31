@@ -5646,6 +5646,34 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
         return Ok(());
     };
 
+    // 应用系统提示过滤（在账号选择前，先净化请求内容，减少无效 token）
+    let mut gateway_request = gateway_request;
+    let has_filters = collection.filter_claude_code
+        || collection.filter_strip_boundaries
+        || collection.filter_env_noise;
+    if has_filters {
+        for msg in &mut gateway_request.messages {
+            if msg.role == "system" {
+                if let serde_json::Value::String(ref text) = msg.content.clone() {
+                    let filtered = crate::modules::kiro_prompt_filter::apply_prompt_filters(
+                        collection.filter_claude_code,
+                        collection.filter_strip_boundaries,
+                        collection.filter_env_noise,
+                        text,
+                    );
+                    if filtered != *text {
+                        logger::log_info(&format!(
+                            "[KiroPromptFilter] 系统提示已过滤: 原始 {} 字符 → 过滤后 {} 字符",
+                            text.len(),
+                            filtered.len()
+                        ));
+                        msg.content = serde_json::Value::String(filtered);
+                    }
+                }
+            }
+        }
+    }
+
     if collection.account_ids.is_empty() {
         write_error(&mut stream, 503, "账号池为空，请先同步 Kiro 账号").await;
         return Ok(());
@@ -5842,6 +5870,9 @@ pub async fn set_local_access_enabled(enabled: bool) -> Result<KiroLocalAccessSt
             account_ids: Vec::new(),
             created_at: now,
             updated_at: now,
+            filter_claude_code: true,
+            filter_strip_boundaries: true,
+            filter_env_noise: true,
         };
         save_collection_to_disk(&collection)?;
         rt.collection = Some(collection);

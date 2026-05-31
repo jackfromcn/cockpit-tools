@@ -49,6 +49,7 @@ pub mod kiro_account;
 pub mod kiro_gateway;
 pub mod kiro_instance;
 pub mod kiro_local_access;
+pub mod kiro_prompt_filter;
 pub mod kiro_oauth;
 pub mod linux_updater;
 pub mod logger;

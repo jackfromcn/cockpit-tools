@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KiroLocalAccessCollection {
@@ -9,6 +13,15 @@ pub struct KiroLocalAccessCollection {
     pub account_ids: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// 检测 Claude Code 系统提示并替换为精简版（节省数百 token），默认开启
+    #[serde(default = "default_true")]
+    pub filter_claude_code: bool,
+    /// 去掉 --- SYSTEM PROMPT --- 边界标记，默认开启
+    #[serde(default = "default_true")]
+    pub filter_strip_boundaries: bool,
+    /// 去掉环境噪音行（git status、recent commits 等），默认开启
+    #[serde(default = "default_true")]
+    pub filter_env_noise: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
