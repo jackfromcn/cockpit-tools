@@ -1,28 +1,110 @@
 {
   "version": "1.0",
-  "topRightAd_backup": null,
-  "topRightAd": {
-    "id": "top-right-ad-2026-04-shop",
-    "priority": 100,
-    "text": "Codex Plus已接码成品号，Gemini给自己账号订阅一年Pro 需要的了解一下",
-    "text_backup": "9.9Codex plus号和12元代过试用Plus。欢迎选购",
-    "badge": "推广",
-    "ctaLabel": "选购",
-    "ctaUrl": "https://xiangzili.xyz",
-    "targetVersions": "*",
+  "forceRefreshVersions": [
+    "0.25.3"
+  ],
+  "topRightAd": null,
+  "apiRelayEnabled": true,
+  "topRightAdsEnabled": true,
+  "topRightAds": [
+    {
+      "id": "top-right-ad-2026-04-shop",
+      "enabled": true,
+      "relayRelated": false,
+      "priority": 100,
+      "text": "Codex Plus30天成品号，Gemini给自己账号订阅一年Pro 需要的了解一下",
+      "badge": "推广",
+      "ctaLabel": "选购",
+      "ctaUrl": "https://xiangzili.xyz/user/index/shop",
+      "displayMode": "dashboardAndPlatforms",
+      "displayPlatforms": [
+        "antigravity",
+        "antigravity_ide",
+        "codex"
+      ],
+      "targetVersions": "*",
+      "targetLanguages": [
+        "zh"
+      ],
+      "createdAt": "2026-04-07T12:00:00Z",
+      "expiresAt": null,
+      "locales": {
+        "zh-CN": {
+          "text": "Codex Plus30天成品号，Gemini给自己账号订阅一年Pro 需要的了解一下",
+          "badge": "推广",
+          "ctaLabel": "选购"
+        }
+      }
+    }
+  ],
+  "sponsorModule": {
+    "enabled": true,
+    "entryVisible": true,
+    "title": "专属中转站",
+    "subtitle": "为 Cockpit Tools 用户提供的合作 API 中转服务，可一键保存并启用到 Codex。",
+    "targetVersions": ">=0.25.2",
     "targetLanguages": [
       "*"
     ],
-    "createdAt": "2026-04-07T12:00:00Z",
+    "createdAt": "2026-06-05T00:00:00Z",
     "expiresAt": null,
     "locales": {
       "zh-CN": {
-      "text": "Codex Plus已接码成品号，Gemini给自己账号订阅一年Pro 需要的了解下",
-        "text_backup": "9.9Codex plus号和12元代过试用Plus。欢迎选购",
-        "badge": "推广",
-        "ctaLabel": "选购"
+        "title": "专属中转站",
+        "subtitle": "为 Cockpit Tools 用户提供的合作 API 中转服务，可一键保存并启用到 Codex。"
+      },
+      "en": {
+        "title": "Exclusive Relay",
+        "subtitle": "A partnered API relay service for Cockpit Tools users that can be saved and enabled in Codex."
+      },
+      "en-US": {
+        "title": "Exclusive Relay",
+        "subtitle": "A partnered API relay service for Cockpit Tools users that can be saved and enabled in Codex."
       }
-    }
+    },
+    "sponsors": [
+      {
+        "id": "apikey-fun",
+        "name": "APIKEY.FUN",
+        "priority": 100,
+        "logoUrl": "https://raw.githubusercontent.com/BigPizzaV3/CodexPlusPlus/main/docs/images/sponsor-apikey-fun.png",
+        "url": "https://apikey.fun/register?aff=cockpit",
+        "badge": "AI 中转",
+        "description": "APIKEY.FUN 面向开发者提供多模型 API 接入与中转服务，覆盖 Claude、OpenAI、Gemini 等常用模型，适合需要统一密钥、稳定调用和成本优化的工具链场景。",
+        "integration": {
+          "enabled": true,
+          "type": "sub2api",
+          "baseUrl": "https://api.apikey.fun/v1",
+          "wireApi": "responses",
+          "quickConfigure": true,
+          "dashboardCard": true,
+          "models": [],
+          "supportsVision": false,
+          "website": "https://apikey.fun/register?aff=cockpit",
+          "apiKeyUrl": "https://apikey.fun/register?aff=cockpit"
+        },
+        "targetVersions": ">=0.25.2",
+        "targetLanguages": [
+          "*"
+        ],
+        "createdAt": "2026-06-05T00:00:00Z",
+        "expiresAt": null,
+        "locales": {
+          "zh-CN": {
+            "badge": "AI 中转",
+            "description": "APIKEY.FUN 面向开发者提供多模型 API 接入与中转服务，覆盖 Claude、OpenAI、Gemini 等常用模型，适合需要统一密钥、稳定调用和成本优化的工具链场景。"
+          },
+          "en": {
+            "badge": "AI Relay",
+            "description": "APIKEY.FUN provides multi-model API access and relay services for developers, covering popular models such as Claude, OpenAI, and Gemini. It fits workflows that need unified keys, stable calls, and better cost control."
+          },
+          "en-US": {
+            "badge": "AI Relay",
+            "description": "APIKEY.FUN provides multi-model API access and relay services for developers, covering popular models such as Claude, OpenAI, and Gemini. It fits workflows that need unified keys, stable calls, and better cost control."
+          }
+        }
+      }
+    ]
   },
   "announcements": [
     {
@@ -78,7 +160,7 @@
       "priority": 300,
       "title": "👋 欢迎使用 Cockpit Tools",
       "summary": "账号管理、配额监控与多开能力已就绪。",
-      "content": "感谢你选择 Cockpit Tools。\n\n这个桌面端目前可以帮助你：\n• 统一管理 Antigravity、Codex、GitHub Copilot、Windsurf、Kiro 账号\n• 实时查看模型配额与重置时间\n• 快速切换当前账号并支持批量刷新\n• 管理设备指纹与多开实例\n• 使用唤醒任务与账号验证能力\n\n如果你有建议或问题，欢迎随时反馈。",
+      "content": "感谢你选择 Cockpit Tools。\n\n这个桌面端目前可以帮助你：\n• 统一管理 Antigravity、Codex、GitHub Copilot、Windsurf、Kiro 账号\n• 实时查看模型配额与重置时间\n• 快速切换当前账号并支持批量刷新\n• 管理设备指纹与应用多开\n• 使用唤醒任务与账号验证能力\n\n如果你有建议或问题，欢迎随时反馈。",
       "action": {
         "type": "url",
         "target": "https://github.com/jlcodes99/cockpit-tools/issues",
@@ -96,13 +178,13 @@
         "zh-CN": {
           "title": "👋 欢迎使用 Cockpit Tools",
           "summary": "账号管理、配额监控与多开能力已就绪。",
-          "content": "感谢你选择 Cockpit Tools。\n\n这个桌面端目前可以帮助你：\n• 统一管理 Antigravity、Codex、GitHub Copilot、Windsurf、Kiro 账号\n• 实时查看模型配额与重置时间\n• 快速切换当前账号并支持批量刷新\n• 管理设备指纹与多开实例\n• 使用唤醒任务与账号验证能力\n\n如果你有建议或问题，欢迎随时反馈。",
+          "content": "感谢你选择 Cockpit Tools。\n\n这个桌面端目前可以帮助你：\n• 统一管理 Antigravity、Codex、GitHub Copilot、Windsurf、Kiro 账号\n• 实时查看模型配额与重置时间\n• 快速切换当前账号并支持批量刷新\n• 管理设备指纹与应用多开\n• 使用唤醒任务与账号验证能力\n\n如果你有建议或问题，欢迎随时反馈。",
           "actionLabel": "反馈建议"
         },
         "zh-tw": {
           "title": "👋 歡迎使用 Cockpit Tools",
           "summary": "帳號管理、配額監控與多開能力已就緒。",
-          "content": "感謝你選擇 Cockpit Tools。\n\n這個桌面端目前可以幫助你：\n• 統一管理 Antigravity、Codex、GitHub Copilot、Windsurf、Kiro 帳號\n• 即時查看模型配額與重置時間\n• 快速切換當前帳號並支援批量刷新\n• 管理裝置指紋與多開實例\n• 使用喚醒任務與帳號驗證能力\n\n如果你有建議或問題，歡迎隨時回饋。",
+          "content": "感謝你選擇 Cockpit Tools。\n\n這個桌面端目前可以幫助你：\n• 統一管理 Antigravity、Codex、GitHub Copilot、Windsurf、Kiro 帳號\n• 即時查看模型配額與重置時間\n• 快速切換當前帳號並支援批量刷新\n• 管理裝置指紋與應用多開\n• 使用喚醒任務與帳號驗證能力\n\n如果你有建議或問題，歡迎隨時回饋。",
           "actionLabel": "回饋建議"
         },
         "en": {
@@ -339,143 +421,72 @@
       }
     },
     {
-      "id": "ann-2026-03-in-app-update-v0912",
-      "type": "feature",
-      "priority": 320,
-      "title": "✨ v0.9.12+ 已支持应用内更新",
-      "summary": "支持应用内检查、下载并安装更新；可在设置中开启后台自动更新。",
-      "content": "从 v0.9.12 开始，Cockpit Tools 已支持应用内更新。\n\n你现在可以：\n• 在应用内直接检查并下载新版本，无需再跳转浏览器手动下载安装包\n• 在“设置 > 通用”开启后台自动更新，检测到新版本后会静默下载，重启应用后自动生效\n• 更新完成后的首次启动会展示更新说明，方便快速了解改动\n\n若自动更新流程异常，仍可使用手动下载作为兜底方案。",
-      "action": {
-        "type": "url",
-        "target": "https://github.com/jlcodes99/cockpit-tools/releases/latest",
-        "label": "查看最新版本"
-      },
-      "targetVersions": "*",
+      "id": "ann-2026-07-windows-gpt56-model-visibility",
+      "type": "info",
+      "priority": 500,
+      "title": "Windows GPT-5.6 模型显示问题",
+      "summary": "Windows 使用 Codex API 服务或 API Key 时，未显示 GPT-5.6 模型的处理方式。",
+      "content": "部分 Windows 用户在使用 Codex API 服务或 API Key 切号后，可能只显示 GPT-5.4/GPT-5.5，未显示 GPT-5.6。通常是 Codex 启动路径仍指向旧版 Codex.exe。\n\n请进入 Codex 账号页面右上角的「设置」，向下找到「Codex 启动路径」，点击「扫描应用」，并选择路径末尾为 ChatGPT.exe 的新版客户端。\n\n完成后重新切换一次账号即可。请勿继续选择旧版 Codex.exe。",
+      "targetVersions": ">=1.1.4",
       "targetLanguages": [
-        "ar",
-        "cs",
-        "de",
-        "en-US",
-        "en",
-        "es",
-        "fr",
-        "it",
-        "ja",
-        "ko",
-        "pl",
-        "pt-br",
-        "ru",
-        "tr",
-        "vi",
         "zh-CN",
-        "zh-tw"
+        "en",
+        "en-US"
       ],
       "showOnce": true,
-      "popup": false,
-      "createdAt": "2026-03-03T15:30:00.000Z",
+      "popup": true,
+      "createdAt": "2026-07-10T00:00:00.000Z",
       "expiresAt": null,
       "locales": {
-        "ar": {
-          "title": "✨ التحديث داخل التطبيق متاح بدءًا من v0.9.12+",
-          "summary": "يمكنك فحص التحديثات وتنزيلها وتثبيتها داخل التطبيق، مع خيار التحديث التلقائي في الخلفية.",
-          "content": "بدءًا من v0.9.12، يدعم Cockpit Tools التحديث داخل التطبيق.\n\nيمكنك الآن:\n• فحص الإصدارات الجديدة وتنزيلها مباشرةً من داخل التطبيق، بدون الانتقال إلى المتصفح لتنزيل المثبّت يدويًا\n• تفعيل التحديث التلقائي في الخلفية من الإعدادات > عام؛ عند اكتشاف إصدار جديد سيتم تنزيله بصمت وتطبيقه بعد إعادة التشغيل\n• عرض ملاحظات التحديث عند أول تشغيل بعد التحديث، لمعرفة التغييرات بسرعة\n\nإذا تعذر مسار التحديث التلقائي، يظل التنزيل اليدوي متاحًا كخيار احتياطي.",
-          "actionLabel": "عرض أحدث إصدار"
-        },
-        "cs": {
-          "title": "✨ Aktualizace v aplikaci jsou dostupné od v0.9.12+",
-          "summary": "Aktualizace lze zkontrolovat, stáhnout a nainstalovat přímo v aplikaci, včetně volitelné automatické aktualizace na pozadí.",
-          "content": "Od verze v0.9.12 podporuje Cockpit Tools aktualizace přímo v aplikaci.\n\nNyní můžete:\n• kontrolovat a stahovat nové verze přímo v aplikaci bez přechodu do prohlížeče pro ruční stažení instalátoru\n• zapnout automatickou aktualizaci na pozadí v Nastavení > Obecné; při nalezení nové verze se stáhne tiše a použije po restartu\n• při prvním spuštění po aktualizaci zobrazit poznámky k vydání a rychle zjistit, co se změnilo\n\nPokud automatická aktualizace selže, ruční stažení zůstává jako záložní možnost.",
-          "actionLabel": "Zobrazit nejnovější verzi"
-        },
-        "de": {
-          "title": "✨ In-App-Updates sind ab v0.9.12+ verfügbar",
-          "summary": "Updates können direkt in der App geprüft, heruntergeladen und installiert werden, optional mit Hintergrund-Auto-Update.",
-          "content": "Seit v0.9.12 unterstützt Cockpit Tools Updates direkt in der App.\n\nSie können jetzt:\n• neue Versionen direkt in der App prüfen und herunterladen, ohne zum Browser für manuelle Installer-Downloads zu wechseln\n• in Einstellungen > Allgemein Hintergrund-Auto-Update aktivieren; bei einer neuen Version erfolgt der Download still im Hintergrund und wird nach dem Neustart angewendet\n• beim ersten Start nach dem Update die Versionshinweise anzeigen, um Änderungen schnell zu sehen\n\nFalls der Auto-Update-Ablauf fehlschlägt, bleibt der manuelle Download als Fallback verfügbar.",
-          "actionLabel": "Neueste Version ansehen"
-        },
         "zh-CN": {
-          "title": "✨ v0.9.12+ 已支持应用内更新",
-          "summary": "支持应用内检查、下载并安装更新；可在设置中开启后台自动更新。",
-          "content": "从 v0.9.12 开始，Cockpit Tools 已支持应用内更新。\n\n你现在可以：\n• 在应用内直接检查并下载新版本，无需再跳转浏览器手动下载安装包\n• 在“设置 > 通用”开启后台自动更新，检测到新版本后会静默下载，重启应用后自动生效\n• 更新完成后的首次启动会展示更新说明，方便快速了解改动\n\n若自动更新流程异常，仍可使用手动下载作为兜底方案。",
-          "actionLabel": "查看最新版本"
-        },
-        "zh-tw": {
-          "title": "✨ v0.9.12+ 已支援應用內更新",
-          "summary": "支援在應用內檢查、下載並安裝更新；可在設定中開啟背景自動更新。",
-          "content": "從 v0.9.12 開始，Cockpit Tools 已支援應用內更新。\n\n你現在可以：\n• 在應用內直接檢查並下載新版本，無需再跳轉瀏覽器手動下載安裝包\n• 在「設定 > 通用」開啟背景自動更新，偵測到新版本後會靜默下載，重啟應用後自動生效\n• 更新完成後首次啟動會顯示更新說明，方便快速了解變更\n\n若自動更新流程異常，仍可使用手動下載作為兜底方案。",
-          "actionLabel": "查看最新版本"
-        },
-        "en-US": {
-          "title": "✨ In-App Updates Are Live in v0.9.12+",
-          "summary": "Check, download, and install updates inside the app, with optional background auto-update.",
-          "content": "Starting from v0.9.12, Cockpit Tools supports in-app updates.\n\nYou can now:\n• Check and download new versions directly in the app, without jumping to a browser for manual installer downloads\n• Enable background auto-update in Settings > General; when a new version is detected, it downloads silently and is applied after restart\n• See update notes on the first launch after updating, so you can quickly review what changed\n\nIf the auto-update flow fails, manual download remains available as a fallback.",
-          "actionLabel": "View Latest Release"
+          "title": "Windows GPT-5.6 模型显示问题",
+          "summary": "Windows 使用 Codex API 服务或 API Key 时，未显示 GPT-5.6 模型的处理方式。",
+          "content": "部分 Windows 用户在使用 Codex API 服务或 API Key 切号后，可能只显示 GPT-5.4/GPT-5.5，未显示 GPT-5.6。通常是 Codex 启动路径仍指向旧版 Codex.exe。\n\n请进入 Codex 账号页面右上角的「设置」，向下找到「Codex 启动路径」，点击「扫描应用」，并选择路径末尾为 ChatGPT.exe 的新版客户端。\n\n完成后重新切换一次账号即可。请勿继续选择旧版 Codex.exe。"
         },
         "en": {
-          "title": "✨ In-App Updates Are Live in v0.9.12+",
-          "summary": "Check, download, and install updates inside the app, with optional background auto-update.",
-          "content": "Starting from v0.9.12, Cockpit Tools supports in-app updates.\n\nYou can now:\n• Check and download new versions directly in the app, without jumping to a browser for manual installer downloads\n• Enable background auto-update in Settings > General; when a new version is detected, it downloads silently and is applied after restart\n• See update notes on the first launch after updating, so you can quickly review what changed\n\nIf the auto-update flow fails, manual download remains available as a fallback.",
-          "actionLabel": "View Latest Release"
+          "title": "Windows GPT-5.6 Model Visibility Issue",
+          "summary": "How to restore GPT-5.6 model visibility when using the Codex API service or an API key on Windows.",
+          "content": "Some Windows users may see only GPT-5.4 and GPT-5.5 after switching accounts through the Codex API service or an API key. This usually means the Codex launch path still points to the legacy Codex.exe.\n\nOpen Settings from the upper-right corner of the Codex account page, scroll to Codex App Path, click Scan Apps, and select the current client whose path ends in ChatGPT.exe.\n\nSwitch the account again after saving the path. Do not select the legacy Codex.exe."
         },
-        "es": {
-          "title": "✨ Las actualizaciones dentro de la app ya están disponibles desde v0.9.12+",
-          "summary": "Ahora puedes comprobar, descargar e instalar actualizaciones dentro de la app, con actualización automática en segundo plano opcional.",
-          "content": "A partir de la versión v0.9.12, Cockpit Tools admite actualizaciones dentro de la aplicación.\n\nAhora puedes:\n• comprobar y descargar nuevas versiones directamente en la app, sin ir al navegador para descargar el instalador manualmente\n• activar la actualización automática en segundo plano en Configuración > General; cuando se detecte una nueva versión, se descargará en silencio y se aplicará tras reiniciar\n• ver las notas de actualización en el primer inicio después de actualizar para revisar rápidamente los cambios\n\nSi falla el flujo de actualización automática, la descarga manual seguirá disponible como alternativa.",
-          "actionLabel": "Ver la última versión"
+        "en-US": {
+          "title": "Windows GPT-5.6 Model Visibility Issue",
+          "summary": "How to restore GPT-5.6 model visibility when using the Codex API service or an API key on Windows.",
+          "content": "Some Windows users may see only GPT-5.4 and GPT-5.5 after switching accounts through the Codex API service or an API key. This usually means the Codex launch path still points to the legacy Codex.exe.\n\nOpen Settings from the upper-right corner of the Codex account page, scroll to Codex App Path, click Scan Apps, and select the current client whose path ends in ChatGPT.exe.\n\nSwitch the account again after saving the path. Do not select the legacy Codex.exe."
+        }
+      }
+    },
+    {
+      "id": "ann-2026-07-chatgpt-api-key-gpt56-oauth-binding",
+      "type": "info",
+      "priority": 510,
+      "title": "ChatGPT API Key GPT-5.6 模型显示补充说明",
+      "summary": "启动路径正确但 GPT-5.6 仍未显示时，可通过绑定 OAuth 账号解决。",
+      "content": "如果已经按照上一条公告正确设置 ChatGPT.exe 启动路径，但通过 Cockpit Tools 切号或重启 ChatGPT 后，GPT-5.6 仍未显示，可以为对应的 API Key 绑定一个 OAuth 账号。\n\n绑定方法：\n\n1. 进入 Cockpit Tools 的 Codex 账号页面\n2. 找到需要使用的 API Key 账号卡片或 Codex API 服务账号卡片\n3. 在账号卡片信息中找到「OAuth 绑定」\n4. 点击右侧的「绑定」\n5. 从账号列表中选择一个已添加的普通 Codex OAuth 账号\n6. 完成绑定后，重新通过 Cockpit Tools 切换一次该 API Key 账号\n\n绑定后的效果：\n\n• ChatGPT 的启动、重启、模型显示和客户端交互与普通账号一致\n• 实际对话请求仍通过该 API Key 对应的供应商发送\n• Codex API 服务账号同样适用，不会改为消耗 OAuth 账号的对话额度\n\n建议优先选择 Plus、Team 或更高套餐的 OAuth 账号进行绑定，以获得更完整、稳定的客户端功能和模型显示体验。",
+      "targetVersions": ">=1.1.4",
+      "targetLanguages": [
+        "zh-CN",
+        "en",
+        "en-US"
+      ],
+      "showOnce": true,
+      "popup": true,
+      "createdAt": "2026-07-10T00:00:00.000Z",
+      "expiresAt": null,
+      "locales": {
+        "zh-CN": {
+          "title": "ChatGPT API Key GPT-5.6 模型显示补充说明",
+          "summary": "启动路径正确但 GPT-5.6 仍未显示时，可通过绑定 OAuth 账号解决。",
+          "content": "如果已经按照上一条公告正确设置 ChatGPT.exe 启动路径，但通过 Cockpit Tools 切号或重启 ChatGPT 后，GPT-5.6 仍未显示，可以为对应的 API Key 绑定一个 OAuth 账号。\n\n绑定方法：\n\n1. 进入 Cockpit Tools 的 Codex 账号页面\n2. 找到需要使用的 API Key 账号卡片或 Codex API 服务账号卡片\n3. 在账号卡片信息中找到「OAuth 绑定」\n4. 点击右侧的「绑定」\n5. 从账号列表中选择一个已添加的普通 Codex OAuth 账号\n6. 完成绑定后，重新通过 Cockpit Tools 切换一次该 API Key 账号\n\n绑定后的效果：\n\n• ChatGPT 的启动、重启、模型显示和客户端交互与普通账号一致\n• 实际对话请求仍通过该 API Key 对应的供应商发送\n• Codex API 服务账号同样适用，不会改为消耗 OAuth 账号的对话额度\n\n建议优先选择 Plus、Team 或更高套餐的 OAuth 账号进行绑定，以获得更完整、稳定的客户端功能和模型显示体验。"
         },
-        "fr": {
-          "title": "✨ Les mises à jour intégrées sont disponibles depuis la v0.9.12+",
-          "summary": "Vérifiez, téléchargez et installez les mises à jour directement dans l’application, avec mise à jour automatique en arrière-plan en option.",
-          "content": "À partir de la version v0.9.12, Cockpit Tools prend en charge les mises à jour intégrées.\n\nVous pouvez désormais :\n• vérifier et télécharger les nouvelles versions directement dans l’application, sans passer par le navigateur pour télécharger l’installateur manuellement\n• activer la mise à jour automatique en arrière-plan dans Paramètres > Général ; lorsqu’une nouvelle version est détectée, elle est téléchargée silencieusement et appliquée après redémarrage\n• afficher les notes de mise à jour au premier lancement après mise à jour, pour voir rapidement les changements\n\nSi le flux de mise à jour automatique échoue, le téléchargement manuel reste disponible en solution de secours.",
-          "actionLabel": "Voir la dernière version"
+        "en": {
+          "title": "ChatGPT API Key GPT-5.6 Model Visibility: Additional Guidance",
+          "summary": "If GPT-5.6 is still missing after correcting the launch path, bind an OAuth account to the API key.",
+          "content": "If ChatGPT.exe is already configured as described in the previous announcement but GPT-5.6 is still missing after switching or restarting ChatGPT through Cockpit Tools, bind an OAuth account to the corresponding API key.\n\nHow to bind an account:\n\n1. Open the Codex account page in Cockpit Tools\n2. Find the API key account card or Codex API service account card you want to use\n3. Find OAuth Binding in the account card details\n4. Click Bind on the right\n5. Select a regular Codex OAuth account that has already been added\n6. After binding, switch to the API key account again through Cockpit Tools\n\nAfter binding:\n\n• ChatGPT startup, restart, model visibility, and client interactions work like a regular account\n• Actual conversation requests still use the provider associated with the API key\n• Codex API service accounts are also supported and do not consume the OAuth account's conversation quota\n\nWe recommend binding a Plus, Team, or higher-tier OAuth account for more complete and stable client features and model visibility."
         },
-        "it": {
-          "title": "✨ Aggiornamenti in-app disponibili da v0.9.12+",
-          "summary": "Ora puoi controllare, scaricare e installare gli aggiornamenti direttamente nell’app, con aggiornamento automatico in background opzionale.",
-          "content": "A partire dalla v0.9.12, Cockpit Tools supporta gli aggiornamenti in-app.\n\nOra puoi:\n• controllare e scaricare nuove versioni direttamente nell’app, senza passare dal browser per scaricare manualmente il programma di installazione\n• abilitare l’aggiornamento automatico in background in Impostazioni > Generale; quando viene rilevata una nuova versione, viene scaricata in silenzio e applicata dopo il riavvio\n• visualizzare le note di aggiornamento al primo avvio dopo l’update, per vedere subito cosa è cambiato\n\nSe il flusso di aggiornamento automatico fallisce, il download manuale resta disponibile come alternativa.",
-          "actionLabel": "Visualizza ultima versione"
-        },
-        "ja": {
-          "title": "✨ v0.9.12+ からアプリ内アップデートに対応",
-          "summary": "アプリ内で更新の確認・ダウンロード・適用が可能になり、バックグラウンド自動更新も利用できます。",
-          "content": "v0.9.12 以降、Cockpit Tools はアプリ内アップデートに対応しました。\n\n現在できること：\n• ブラウザでインストーラーを手動ダウンロードしなくても、アプリ内で新バージョンを直接確認・ダウンロード\n• 「設定 > 一般」でバックグラウンド自動更新を有効化すると、新バージョン検出時にサイレントでダウンロードされ、再起動後に反映\n• 更新後の初回起動時に更新内容を表示し、変更点をすぐ確認\n\n自動更新に失敗した場合でも、手動ダウンロードをフォールバックとして利用できます。",
-          "actionLabel": "最新バージョンを見る"
-        },
-        "ko": {
-          "title": "✨ v0.9.12+부터 앱 내 업데이트 지원",
-          "summary": "앱 안에서 업데이트 확인·다운로드·설치를 지원하며, 설정에서 백그라운드 자동 업데이트를 켤 수 있습니다.",
-          "content": "v0.9.12부터 Cockpit Tools는 앱 내 업데이트를 지원합니다.\n\n이제 다음이 가능합니다:\n• 브라우저에서 설치 파일을 수동으로 내려받지 않고 앱 안에서 새 버전을 바로 확인하고 다운로드\n• 설정 > 일반에서 백그라운드 자동 업데이트를 켜면, 새 버전 감지 시 조용히 다운로드되고 재시작 후 적용\n• 업데이트 후 첫 실행 시 변경 사항 안내를 표시하여 내용을 빠르게 확인\n\n자동 업데이트가 실패하면 수동 다운로드를 대체 경로로 계속 사용할 수 있습니다.",
-          "actionLabel": "최신 버전 보기"
-        },
-        "pl": {
-          "title": "✨ Aktualizacje w aplikacji są dostępne od v0.9.12+",
-          "summary": "Możesz sprawdzać, pobierać i instalować aktualizacje bezpośrednio w aplikacji, z opcjonalną automatyczną aktualizacją w tle.",
-          "content": "Od wersji v0.9.12 Cockpit Tools obsługuje aktualizacje w aplikacji.\n\nTeraz możesz:\n• sprawdzać i pobierać nowe wersje bezpośrednio w aplikacji, bez przechodzenia do przeglądarki i ręcznego pobierania instalatora\n• włączyć automatyczną aktualizację w tle w Ustawienia > Ogólne; po wykryciu nowej wersji zostanie pobrana po cichu i zastosowana po restarcie\n• zobaczyć notatki o aktualizacji przy pierwszym uruchomieniu po aktualizacji, aby szybko sprawdzić zmiany\n\nJeśli automatyczna aktualizacja się nie powiedzie, ręczne pobieranie pozostaje dostępne jako opcja zapasowa.",
-          "actionLabel": "Zobacz najnowszą wersję"
-        },
-        "pt-br": {
-          "title": "✨ Atualizações no app disponíveis a partir da v0.9.12+",
-          "summary": "Agora você pode verificar, baixar e instalar atualizações dentro do app, com atualização automática em segundo plano opcional.",
-          "content": "A partir da v0.9.12, o Cockpit Tools oferece suporte a atualizações dentro do aplicativo.\n\nAgora você pode:\n• verificar e baixar novas versões diretamente no app, sem precisar ir ao navegador para baixar o instalador manualmente\n• ativar a atualização automática em segundo plano em Configurações > Geral; quando uma nova versão for detectada, ela será baixada silenciosamente e aplicada após reiniciar\n• ver as notas da atualização na primeira abertura após atualizar, para conferir rapidamente o que mudou\n\nSe o fluxo de atualização automática falhar, o download manual continua disponível como alternativa.",
-          "actionLabel": "Ver versão mais recente"
-        },
-        "ru": {
-          "title": "✨ Обновления внутри приложения доступны с v0.9.12+",
-          "summary": "Проверяйте, скачивайте и устанавливайте обновления прямо в приложении, с опциональным автообновлением в фоне.",
-          "content": "Начиная с v0.9.12, Cockpit Tools поддерживает обновления внутри приложения.\n\nТеперь вы можете:\n• проверять и скачивать новые версии прямо в приложении, без перехода в браузер для ручной загрузки установщика\n• включить автообновление в фоне в Настройки > Общие; при обнаружении новой версии она тихо скачивается и применяется после перезапуска\n• просматривать заметки к обновлению при первом запуске после обновления, чтобы быстро увидеть изменения\n\nЕсли автообновление не сработает, ручная загрузка останется доступной как резервный вариант.",
-          "actionLabel": "Открыть последнюю версию"
-        },
-        "tr": {
-          "title": "✨ Uygulama içi güncellemeler v0.9.12+ ile aktif",
-          "summary": "Artık güncellemeleri uygulama içinde kontrol edip indirip kurabilirsiniz; isteğe bağlı arka plan otomatik güncelleme de desteklenir.",
-          "content": "v0.9.12 sürümünden itibaren Cockpit Tools uygulama içi güncellemeleri destekler.\n\nArtık şunları yapabilirsiniz:\n• tarayıcıya geçmeden ve kurulum dosyasını elle indirmeden, yeni sürümleri doğrudan uygulama içinde kontrol edip indirme\n• Ayarlar > Genel bölümünden arka plan otomatik güncellemeyi açma; yeni sürüm algılandığında sessizce indirilir ve yeniden başlatmadan sonra uygulanır\n• güncellemeden sonraki ilk açılışta sürüm notlarını görerek değişiklikleri hızlıca inceleme\n\nOtomatik güncelleme akışı başarısız olursa, manuel indirme yedek seçenek olarak kullanılmaya devam eder.",
-          "actionLabel": "Son sürümü görüntüle"
-        },
-        "vi": {
-          "title": "✨ Đã hỗ trợ cập nhật trong ứng dụng từ v0.9.12+",
-          "summary": "Bạn có thể kiểm tra, tải xuống và cài đặt bản cập nhật ngay trong ứng dụng, kèm tùy chọn tự động cập nhật nền.",
-          "content": "Từ phiên bản v0.9.12, Cockpit Tools đã hỗ trợ cập nhật ngay trong ứng dụng.\n\nBây giờ bạn có thể:\n• kiểm tra và tải phiên bản mới trực tiếp trong ứng dụng, không cần mở trình duyệt để tải bộ cài thủ công\n• bật tự động cập nhật nền tại Cài đặt > Chung; khi phát hiện phiên bản mới, ứng dụng sẽ tải ngầm và áp dụng sau khi khởi động lại\n• xem ghi chú cập nhật ở lần mở đầu tiên sau khi cập nhật để nắm nhanh thay đổi\n\nNếu luồng tự động cập nhật gặp lỗi, bạn vẫn có thể dùng tải thủ công làm phương án dự phòng.",
-          "actionLabel": "Xem bản mới nhất"
+        "en-US": {
+          "title": "ChatGPT API Key GPT-5.6 Model Visibility: Additional Guidance",
+          "summary": "If GPT-5.6 is still missing after correcting the launch path, bind an OAuth account to the API key.",
+          "content": "If ChatGPT.exe is already configured as described in the previous announcement but GPT-5.6 is still missing after switching or restarting ChatGPT through Cockpit Tools, bind an OAuth account to the corresponding API key.\n\nHow to bind an account:\n\n1. Open the Codex account page in Cockpit Tools\n2. Find the API key account card or Codex API service account card you want to use\n3. Find OAuth Binding in the account card details\n4. Click Bind on the right\n5. Select a regular Codex OAuth account that has already been added\n6. After binding, switch to the API key account again through Cockpit Tools\n\nAfter binding:\n\n• ChatGPT startup, restart, model visibility, and client interactions work like a regular account\n• Actual conversation requests still use the provider associated with the API key\n• Codex API service accounts are also supported and do not consume the OAuth account's conversation quota\n\nWe recommend binding a Plus, Team, or higher-tier OAuth account for more complete and stable client features and model visibility."
         }
       }
     }

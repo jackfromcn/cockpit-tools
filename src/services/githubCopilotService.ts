@@ -50,17 +50,17 @@ export async function refreshAllGitHubCopilotTokens(): Promise<number> {
   return await invoke('refresh_all_github_copilot_tokens');
 }
 
-/** Device Flow：开始登录 */
+/** VS Code GitHub Authentication OAuth：开始登录 */
 export async function startGitHubCopilotOAuthLogin(): Promise<GitHubCopilotOAuthLoginStartResponse> {
   return await invoke('github_copilot_oauth_login_start');
 }
 
-/** Device Flow：完成登录（会轮询，直到成功/失败/超时） */
+/** VS Code GitHub Authentication OAuth：完成登录（等待本地回调后保存账号） */
 export async function completeGitHubCopilotOAuthLogin(loginId: string): Promise<GitHubCopilotAccount> {
   return await invoke('github_copilot_oauth_login_complete', { loginId });
 }
 
-/** Device Flow：取消登录 */
+/** VS Code GitHub Authentication OAuth：取消登录 */
 export async function cancelGitHubCopilotOAuthLogin(loginId?: string): Promise<void> {
   return await invoke('github_copilot_oauth_login_cancel', { loginId: loginId ?? null });
 }

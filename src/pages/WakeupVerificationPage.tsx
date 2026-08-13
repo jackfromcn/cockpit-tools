@@ -1332,7 +1332,7 @@ export function WakeupVerificationPage({ onNavigate }: WakeupVerificationPagePro
       </div>
 
       {showConfigModal && (
-        <div className="modal-overlay" onClick={closeConfigModal}>
+        <div className="modal-overlay">
           <div className="modal wakeup-modal verification-config-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <button
@@ -1501,7 +1501,7 @@ export function WakeupVerificationPage({ onNavigate }: WakeupVerificationPagePro
       )}
 
       {showDetailModal && (
-        <div className="modal-overlay" onClick={closeDetailModal}>
+        <div className="modal-overlay">
           <div className="modal wakeup-modal verification-progress-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <button className="btn btn-secondary icon-only" onClick={closeDetailModal} title={t('common.back', '返回')} aria-label={t('common.back', '返回')}><ChevronLeft size={14} /></button>

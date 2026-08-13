@@ -194,7 +194,7 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal group-settings-modal" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <h2>

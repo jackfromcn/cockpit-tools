@@ -1,4 +1,58 @@
+#[cfg(any(target_os = "linux", test))]
+use serde::Deserialize;
 use serde::Serialize;
+#[cfg(any(target_os = "linux", test))]
+use std::collections::HashMap;
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, Deserialize)]
+struct LatestManifest {
+    version: String,
+    #[serde(default)]
+    notes: String,
+    #[serde(default)]
+    platforms: HashMap<String, LatestPlatform>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct LatestPlatform {
+    signature: String,
+    url: String,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl LatestManifest {
+    fn resolve_platform(&self, target: &str) -> Result<LatestPlatform, String> {
+        match (&self.url, &self.signature) {
+            (Some(url), Some(signature)) => Ok(LatestPlatform {
+                url: url.clone(),
+                signature: signature.clone(),
+            }),
+            (None, None) => self
+                .platforms
+                .get(target)
+                .cloned()
+                .ok_or_else(|| format!("No package found for updater target {}", target)),
+            _ => Err("Updater manifest contains incomplete dynamic platform data".to_string()),
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn expand_updater_endpoint(endpoint: &str, target: &str, current_version: &str) -> String {
+    endpoint
+        .replace("%7B%7Btarget%7D%7D", target)
+        .replace("%7b%7btarget%7d%7d", target)
+        .replace("{{target}}", target)
+        .replace("%7B%7Bcurrent_version%7D%7D", current_version)
+        .replace("%7b%7bcurrent_version%7d%7d", current_version)
+        .replace("{{current_version}}", current_version)
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -9,9 +63,50 @@ pub struct UpdateRuntimeInfo {
     pub updater_target: Option<String>,
 }
 
+#[cfg(target_os = "windows")]
+fn is_current_exe_dir_writable() -> bool {
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            let temp_file = parent.join(format!(
+                ".tauri-updater-write-test-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            if std::fs::write(&temp_file, b"").is_ok() {
+                return std::fs::remove_file(temp_file).is_ok();
+            }
+        }
+    }
+    false
+}
+
+/// Map Windows arch and install state to an updater target key.
+///
+/// The bundle metadata is authoritative when available. Older or unbundled executables can lack
+/// that metadata, so a writable executable directory is used as a fallback signal for a per-user
+/// NSIS installation. Protected directories keep the conservative MSI fallback.
+#[cfg(any(target_os = "windows", test))]
+fn windows_updater_target_for_bundle(
+    arch: &str,
+    bundle: Option<&str>,
+    current_exe_dir_writable: bool,
+) -> String {
+    let arch = match arch {
+        "x86_64" | "aarch64" => arch,
+        _ => "x86_64",
+    };
+    let suffix = match bundle {
+        Some("nsis") => "nsis",
+        Some("msi") => "msi",
+        _ if current_exe_dir_writable => "nsis",
+        _ => "msi",
+    };
+    format!("windows-{}-{}", arch, suffix)
+}
+
 #[cfg(target_os = "linux")]
 mod imp {
-    use super::UpdateRuntimeInfo;
+    use super::{expand_updater_endpoint, LatestManifest, UpdateRuntimeInfo};
     use crate::modules::{logger, update_checker};
     use base64::Engine;
     use futures_util::StreamExt;
@@ -62,20 +157,6 @@ mod imp {
         endpoints: Vec<String>,
     }
 
-    #[derive(Debug, Clone, Deserialize)]
-    struct LatestManifest {
-        version: String,
-        #[serde(default)]
-        notes: String,
-        platforms: std::collections::HashMap<String, LatestPlatform>,
-    }
-
-    #[derive(Debug, Clone, Deserialize)]
-    struct LatestPlatform {
-        signature: String,
-        url: String,
-    }
-
     pub fn get_update_runtime_info() -> UpdateRuntimeInfo {
         let install_kind = detect_linux_install_kind();
         UpdateRuntimeInfo {
@@ -85,7 +166,7 @@ mod imp {
                 install_kind,
                 LinuxInstallKind::Deb | LinuxInstallKind::Rpm
             ),
-            updater_target: None,
+            updater_target: current_platform_key(install_kind).ok(),
         }
     }
 
@@ -101,13 +182,10 @@ mod imp {
             ));
         }
 
+        let platform_key = current_platform_key(install_kind)?;
         let updater_config = load_updater_plugin_config(&app)?;
-        let endpoint = updater_config
-            .endpoints
-            .first()
-            .cloned()
-            .ok_or_else(|| "Updater endpoint is not configured".to_string())?;
-        let manifest = fetch_latest_manifest(&endpoint).await?;
+        let manifest =
+            fetch_latest_manifest_from_endpoints(&updater_config.endpoints, &platform_key).await?;
         let manifest_version = manifest.version.trim().to_string();
         if manifest_version.is_empty() {
             return Err("latest.json returned an empty version".to_string());
@@ -133,11 +211,7 @@ mod imp {
             ));
         }
 
-        let platform_key = current_platform_key(install_kind)?;
-        let platform = manifest
-            .platforms
-            .get(&platform_key)
-            .ok_or_else(|| format!("No package found for updater target {}", platform_key))?;
+        let platform = manifest.resolve_platform(&platform_key)?;
 
         let (release_notes, release_notes_zh) = split_release_notes(&manifest.notes);
         update_checker::save_pending_update_notes(
@@ -204,18 +278,41 @@ mod imp {
             .map_err(|error| format!("Failed to parse updater plugin config: {}", error))
     }
 
+    async fn fetch_latest_manifest_from_endpoints(
+        endpoints: &[String],
+        target: &str,
+    ) -> Result<LatestManifest, String> {
+        if endpoints.is_empty() {
+            return Err("Updater endpoint is not configured".to_string());
+        }
+
+        let mut errors = Vec::new();
+        for endpoint in endpoints {
+            let resolved = expand_updater_endpoint(endpoint, target, CURRENT_VERSION);
+            match fetch_latest_manifest(&resolved).await {
+                Ok(manifest) => return Ok(manifest),
+                Err(error) => errors.push(format!("{}: {}", resolved, error)),
+            }
+        }
+
+        Err(format!(
+            "Failed to fetch latest manifest from configured endpoints: {}",
+            errors.join(" | ")
+        ))
+    }
+
     async fn fetch_latest_manifest(endpoint: &str) -> Result<LatestManifest, String> {
         let response = reqwest::get(endpoint)
             .await
-            .map_err(|error| format!("Failed to fetch latest manifest: {}", error))?;
+            .map_err(|error| error.to_string())?;
         let status = response.status();
         if !status.is_success() {
-            return Err(format!("Failed to fetch latest manifest: HTTP {}", status));
+            return Err(format!("HTTP {}", status));
         }
         response
             .json::<LatestManifest>()
             .await
-            .map_err(|error| format!("Failed to parse latest manifest: {}", error))
+            .map_err(|error| format!("invalid manifest: {}", error))
     }
 
     async fn download_update_package(
@@ -578,27 +675,52 @@ mod imp {
     use tauri::AppHandle;
 
     #[cfg(target_os = "windows")]
-    fn windows_updater_target() -> Option<String> {
+    fn desktop_updater_target() -> Option<String> {
         use tauri::utils::config::BundleType;
         use tauri::utils::platform::bundle_type;
 
-        let arch = match std::env::consts::ARCH {
-            "x86_64" => "x86_64",
-            "aarch64" => "aarch64",
-            _ => "x86_64",
+        let arch = std::env::consts::ARCH;
+        let bundle = match bundle_type() {
+            Some(BundleType::Nsis) => Some("nsis"),
+            Some(BundleType::Msi) => Some("msi"),
+            _ => None,
         };
-        let base = format!("windows-{}", arch);
-        let installer_suffix = match bundle_type() {
-            Some(BundleType::Nsis) => "nsis",
-            Some(BundleType::Msi) => "msi",
-            _ => "nsis",
-        };
+        let current_exe_dir_writable = bundle
+            .is_none()
+            .then(super::is_current_exe_dir_writable)
+            .unwrap_or(false);
+        let target =
+            super::windows_updater_target_for_bundle(arch, bundle, current_exe_dir_writable);
 
-        Some(format!("{}-{}", base, installer_suffix))
+        tracing::info!(
+            "[Updater] Windows updater target resolved: arch={}, bundle={}, exe_dir_writable={}, target={}",
+            arch,
+            bundle.unwrap_or("unknown"),
+            if bundle.is_some() {
+                "not_checked"
+            } else if current_exe_dir_writable {
+                "true"
+            } else {
+                "false"
+            },
+            target
+        );
+
+        Some(target)
     }
 
-    #[cfg(not(target_os = "windows"))]
-    fn windows_updater_target() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    fn desktop_updater_target() -> Option<String> {
+        let arch = match std::env::consts::ARCH {
+            "aarch64" => "aarch64",
+            "x86_64" => "x86_64",
+            _ => return None,
+        };
+        Some(format!("darwin-{}-app", arch))
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    fn desktop_updater_target() -> Option<String> {
         None
     }
 
@@ -615,7 +737,7 @@ mod imp {
             platform: platform.to_string(),
             linux_install_kind: "unknown".to_string(),
             linux_managed_install_supported: false,
-            updater_target: windows_updater_target(),
+            updater_target: desktop_updater_target(),
         }
     }
 
@@ -628,3 +750,90 @@ mod imp {
 }
 
 pub use imp::{get_update_runtime_info, install_linux_update};
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        expand_updater_endpoint, windows_updater_target_for_bundle, LatestManifest, LatestPlatform,
+    };
+
+    #[test]
+    fn windows_updater_target_uses_bundle_then_directory_writability() {
+        let cases = [
+            ("x86_64", Some("nsis"), false, "windows-x86_64-nsis"),
+            ("x86_64", Some("nsis"), true, "windows-x86_64-nsis"),
+            ("x86_64", Some("msi"), false, "windows-x86_64-msi"),
+            ("x86_64", Some("msi"), true, "windows-x86_64-msi"),
+            ("x86_64", None, true, "windows-x86_64-nsis"),
+            ("x86_64", None, false, "windows-x86_64-msi"),
+            ("x86", None, true, "windows-x86_64-nsis"),
+        ];
+
+        for (arch, bundle, writable, expected) in cases {
+            assert_eq!(
+                windows_updater_target_for_bundle(arch, bundle, writable),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn expands_target_and_current_version_placeholders() {
+        let endpoint =
+            "https://example.test/latest-%7B%7Btarget%7D%7D.json?from={{current_version}}";
+        assert_eq!(
+            expand_updater_endpoint(endpoint, "linux-x86_64-deb", "1.2.3"),
+            "https://example.test/latest-linux-x86_64-deb.json?from=1.2.3"
+        );
+    }
+
+    #[test]
+    fn resolves_dynamic_target_manifest() {
+        let manifest: LatestManifest = serde_json::from_str(
+            r#"{
+                "version": "1.2.3",
+                "url": "https://example.test/app.deb",
+                "signature": "dynamic-signature"
+            }"#,
+        )
+        .expect("dynamic manifest should parse");
+
+        assert_eq!(manifest.version, "1.2.3");
+        assert!(manifest.notes.is_empty());
+        assert_eq!(
+            manifest
+                .resolve_platform("linux-x86_64-deb")
+                .expect("dynamic manifest should resolve"),
+            LatestPlatform {
+                url: "https://example.test/app.deb".to_string(),
+                signature: "dynamic-signature".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn resolves_legacy_static_target_manifest() {
+        let manifest: LatestManifest = serde_json::from_str(
+            r#"{
+                "version": "1.2.3",
+                "platforms": {
+                    "linux-x86_64-deb": {
+                        "url": "https://example.test/app.deb",
+                        "signature": "legacy-signature"
+                    }
+                }
+            }"#,
+        )
+        .expect("legacy manifest should parse");
+
+        assert_eq!(
+            manifest
+                .resolve_platform("linux-x86_64-deb")
+                .expect("legacy manifest should resolve"),
+            LatestPlatform {
+                url: "https://example.test/app.deb".to_string(),
+                signature: "legacy-signature".to_string(),
+            }
+        );
+    }
+}

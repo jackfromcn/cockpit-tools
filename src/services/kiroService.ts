@@ -52,8 +52,16 @@ export async function refreshAllKiroTokens(): Promise<number> {
 }
 
 /** Kiro OAuth：开始登录（浏览器授权 + 本地回调） */
-export async function startKiroOAuthLogin(): Promise<KiroOAuthLoginStartResponse> {
-  return await invoke('kiro_oauth_login_start');
+export type KiroOAuthLoginStartOptions = {
+  method: 'social' | 'builderId' | 'enterprise';
+  region?: string;
+  startUrl?: string;
+};
+
+export async function startKiroOAuthLogin(
+  options?: KiroOAuthLoginStartOptions,
+): Promise<KiroOAuthLoginStartResponse> {
+  return await invoke('kiro_oauth_login_start', { options: options ?? null });
 }
 
 /** Kiro OAuth：完成登录（等待本地回调，直到成功/失败/超时） */

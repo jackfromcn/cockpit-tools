@@ -14,12 +14,142 @@ function generateId(): string {
   return `cgrp_${Date.now()}_${++idCounter}`;
 }
 
+/** 与设置页配额自动刷新预设一致（不含 inherit） */
+export const CODEX_GROUP_QUOTA_REFRESH_PRESETS = ['-1', '2', '5', '10', '15'] as const;
+
+export const CODEX_GROUP_QUOTA_REFRESH_MIN = 1;
+export const CODEX_GROUP_QUOTA_REFRESH_MAX = 999;
+
+/**
+ * 分组额度自动刷新策略（最高优先级）
+ * - null: 继承平台 `codex_auto_refresh_minutes`
+ * - -1: 不刷新（自动/全量跳过）
+ * - 1..999: 自定义间隔（分钟）
+ */
+export type CodexGroupQuotaAutoRefreshMinutes = number | null;
+
 export interface CodexAccountGroup {
   id: string;
   name: string;
   sortOrder: number;
   accountIds: string[];
   createdAt: number;
+  /**
+   * 分组额度自动刷新。
+   * null = 继承平台；-1 = 不刷新；正整数 = 自定义分钟。
+   * 兼容旧字段 `quotaRefreshEnabled: false` → -1。
+   */
+  quotaAutoRefreshMinutes: CodexGroupQuotaAutoRefreshMinutes;
+}
+
+/** 规范化分钟：null 继承；-1 关闭；1..999 自定义 */
+export function normalizeCodexGroupQuotaAutoRefreshMinutes(
+  value: unknown,
+): CodexGroupQuotaAutoRefreshMinutes {
+  if (value === null || value === undefined || value === '' || value === 'inherit') {
+    return null;
+  }
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  const floored = Math.floor(parsed);
+  if (floored <= -1) {
+    return -1;
+  }
+  if (floored < CODEX_GROUP_QUOTA_REFRESH_MIN) {
+    return CODEX_GROUP_QUOTA_REFRESH_MIN;
+  }
+  if (floored > CODEX_GROUP_QUOTA_REFRESH_MAX) {
+    return CODEX_GROUP_QUOTA_REFRESH_MAX;
+  }
+  return floored;
+}
+
+/**
+ * 从原始分组对象解析策略（兼容旧 boolean 字段）。
+ * 优先级：quotaAutoRefreshMinutes > quotaRefreshEnabled(false→-1) > 继承
+ */
+export function resolveCodexGroupQuotaAutoRefreshMinutes(
+  raw: {
+    quotaAutoRefreshMinutes?: unknown;
+    quotaRefreshEnabled?: unknown;
+  } | null | undefined,
+): CodexGroupQuotaAutoRefreshMinutes {
+  if (!raw) return null;
+  if (
+    Object.prototype.hasOwnProperty.call(raw, 'quotaAutoRefreshMinutes') &&
+    raw.quotaAutoRefreshMinutes !== undefined
+  ) {
+    return normalizeCodexGroupQuotaAutoRefreshMinutes(raw.quotaAutoRefreshMinutes);
+  }
+  // 旧版开关：false = 不刷新；true/缺省 = 继承
+  if (raw.quotaRefreshEnabled === false) {
+    return -1;
+  }
+  return null;
+}
+
+/** 分组是否允许参与自动/全量类额度刷新（-1 为否；继承/自定义为是） */
+export function isCodexGroupQuotaRefreshEnabled(
+  group:
+    | Pick<CodexAccountGroup, 'quotaAutoRefreshMinutes'>
+    | { quotaRefreshEnabled?: unknown; quotaAutoRefreshMinutes?: unknown }
+    | null
+    | undefined,
+): boolean {
+  const minutes = resolveCodexGroupQuotaAutoRefreshMinutes(group ?? undefined);
+  return minutes !== -1;
+}
+
+/** 是否为「继承平台」 */
+export function isCodexGroupQuotaRefreshInherit(
+  group: Pick<CodexAccountGroup, 'quotaAutoRefreshMinutes'> | null | undefined,
+): boolean {
+  return resolveCodexGroupQuotaAutoRefreshMinutes(group) === null;
+}
+
+/**
+ * 解析账号在自动刷新中的有效间隔（分钟）。
+ * 分组策略最高优先级；无分组则使用平台间隔。
+ * 返回 <=0 表示不自动刷新。
+ */
+export function resolveCodexAccountAutoRefreshMinutes(
+  accountId: string,
+  groups: CodexAccountGroup[],
+  platformMinutes: number,
+): number {
+  const group = groups.find((item) => item.accountIds.includes(accountId));
+  const policy = resolveCodexGroupQuotaAutoRefreshMinutes(group);
+  if (policy === -1) {
+    return -1;
+  }
+  if (typeof policy === 'number' && policy > 0) {
+    return policy;
+  }
+  const platform = Number(platformMinutes);
+  if (!Number.isFinite(platform) || platform <= 0) {
+    return -1;
+  }
+  return Math.floor(platform);
+}
+
+function normalizeCodexGroup(
+  raw: Partial<CodexAccountGroup> & {
+    id?: string;
+    quotaRefreshEnabled?: unknown;
+  },
+): CodexAccountGroup {
+  return {
+    id: String(raw.id ?? ''),
+    name: String(raw.name ?? ''),
+    sortOrder: typeof raw.sortOrder === 'number' ? raw.sortOrder : 0,
+    accountIds: Array.isArray(raw.accountIds)
+      ? raw.accountIds.map(String).filter(Boolean)
+      : [],
+    createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
+    quotaAutoRefreshMinutes: resolveCodexGroupQuotaAutoRefreshMinutes(raw),
+  };
 }
 
 // ─── 内存缓存 ───────────────────────────────────────
@@ -27,7 +157,7 @@ let cachedGroups: CodexAccountGroup[] | null = null;
 
 function cloneGroups(groups: CodexAccountGroup[]): CodexAccountGroup[] {
   return groups.map((group) => ({
-    ...group,
+    ...normalizeCodexGroup(group),
     accountIds: [...group.accountIds],
   }));
 }
@@ -36,7 +166,8 @@ async function loadGroupsFromDisk(): Promise<CodexAccountGroup[]> {
   try {
     const raw: string = await invoke('load_codex_account_groups');
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? cloneGroups(parsed) : [];
+    if (!Array.isArray(parsed)) return [];
+    return cloneGroups(parsed.map((item) => normalizeCodexGroup(item ?? {})));
   } catch {
     return [];
   }
@@ -44,9 +175,21 @@ async function loadGroupsFromDisk(): Promise<CodexAccountGroup[]> {
 
 async function saveGroupsToDisk(groups: CodexAccountGroup[]): Promise<void> {
   try {
-    await invoke('save_codex_account_groups', { data: JSON.stringify(groups, null, 2) });
+    // 落盘只写新字段；不再写旧 boolean，避免语义分叉
+    const payload = groups.map((group) => ({
+      id: group.id,
+      name: group.name,
+      sortOrder: group.sortOrder,
+      accountIds: [...group.accountIds],
+      createdAt: group.createdAt,
+      quotaAutoRefreshMinutes: group.quotaAutoRefreshMinutes,
+    }));
+    await invoke('save_codex_account_groups', {
+      data: JSON.stringify(payload, null, 2),
+    });
   } catch (e) {
     console.error('[CodexAccountGroups] Failed to save to disk:', e);
+    throw e;
   }
 }
 
@@ -58,8 +201,8 @@ async function loadGroups(): Promise<CodexAccountGroup[]> {
 
 async function saveGroups(groups: CodexAccountGroup[]): Promise<void> {
   const nextGroups = cloneGroups(groups);
-  cachedGroups = nextGroups;
   await saveGroupsToDisk(nextGroups);
+  cachedGroups = nextGroups;
 }
 
 // ─── 公开 API ───────────────────────────────────────
@@ -78,6 +221,7 @@ export async function createCodexGroup(name: string, sortOrder?: number): Promis
     sortOrder: sortOrder ?? maxOrder + 1,
     accountIds: [],
     createdAt: Date.now(),
+    quotaAutoRefreshMinutes: null,
   };
   groups.push(group);
   await saveGroups(groups);
@@ -105,6 +249,91 @@ export async function updateCodexGroupSortOrder(groupId: string, sortOrder: numb
   group.sortOrder = sortOrder;
   await saveGroups(groups);
   return group;
+}
+
+/** 设置分组额度自动刷新策略（null=继承，-1=不刷新，>0=自定义分钟） */
+export async function setCodexGroupQuotaAutoRefreshMinutes(
+  groupId: string,
+  minutes: CodexGroupQuotaAutoRefreshMinutes,
+): Promise<CodexAccountGroup | null> {
+  const groups = await loadGroups();
+  const group = groups.find((g) => g.id === groupId);
+  if (!group) return null;
+  group.quotaAutoRefreshMinutes = normalizeCodexGroupQuotaAutoRefreshMinutes(minutes);
+  await saveGroups(groups);
+  // 触发自动刷新调度重建（与设置页变更一致）
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('config-updated'));
+  }
+  return group;
+}
+
+/**
+ * @deprecated 使用 setCodexGroupQuotaAutoRefreshMinutes
+ * 保留兼容：enabled=false → -1，true → 继承
+ */
+export async function setCodexGroupQuotaRefreshEnabled(
+  groupId: string,
+  enabled: boolean,
+): Promise<CodexAccountGroup | null> {
+  return setCodexGroupQuotaAutoRefreshMinutes(groupId, enabled ? null : -1);
+}
+
+/**
+ * 返回「所属分组关闭了额度刷新」的账号 ID 集合。
+ * 未分组账号不在集合中（允许刷新）。
+ */
+export async function getCodexQuotaRefreshDisabledAccountIds(): Promise<Set<string>> {
+  const groups = await loadGroups();
+  const disabled = new Set<string>();
+  for (const group of groups) {
+    if (isCodexGroupQuotaRefreshEnabled(group)) continue;
+    for (const accountId of group.accountIds) {
+      disabled.add(accountId);
+    }
+  }
+  return disabled;
+}
+
+/**
+ * 按自定义间隔聚合账号（仅 >0 的自定义分钟）。
+ * key = 分钟，value = 账号 ID 列表。
+ */
+export async function getCodexCustomQuotaRefreshAccountIdsByMinutes(): Promise<
+  Map<number, string[]>
+> {
+  const groups = await loadGroups();
+  const map = new Map<number, string[]>();
+  for (const group of groups) {
+    const minutes = resolveCodexGroupQuotaAutoRefreshMinutes(group);
+    if (typeof minutes !== 'number' || minutes <= 0) continue;
+    const list = map.get(minutes) ?? [];
+    for (const accountId of group.accountIds) {
+      if (accountId && !list.includes(accountId)) {
+        list.push(accountId);
+      }
+    }
+    map.set(minutes, list);
+  }
+  return map;
+}
+
+/** 继承平台策略的账号 ID（含未分组） */
+export async function getCodexInheritPlatformQuotaRefreshAccountIds(
+  allAccountIds: string[],
+): Promise<string[]> {
+  const groups = await loadGroups();
+  const grouped = new Map<string, CodexAccountGroup>();
+  for (const group of groups) {
+    for (const accountId of group.accountIds) {
+      grouped.set(accountId, group);
+    }
+  }
+  return allAccountIds.filter((accountId) => {
+    const group = grouped.get(accountId);
+    if (!group) return true;
+    return resolveCodexGroupQuotaAutoRefreshMinutes(group) === null;
+  });
 }
 
 export async function addAccountsToCodexGroup(groupId: string, accountIds: string[]): Promise<CodexAccountGroup | null> {

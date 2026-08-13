@@ -168,13 +168,7 @@ fn ensure_state_db_for_injection(profile_dir: &Path) -> Result<PathBuf, String> 
 pub fn inject_account_to_profile(profile_dir: &Path, account_id: &str) -> Result<(), String> {
     let account = modules::load_account(account_id)?;
     let db_path = ensure_state_db_for_injection(profile_dir)?;
-    modules::db::inject_token_to_path(
-        &db_path,
-        &account.token.access_token,
-        &account.token.refresh_token,
-        account.token.expiry_timestamp,
-    )
-    .map(|_| ())
+    modules::db::inject_account_token_to_path(&db_path, &account).map(|_| ())
 }
 
 pub fn create_instance(params: CreateInstanceParams) -> Result<InstanceProfile, String> {

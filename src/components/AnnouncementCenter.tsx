@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useMemo, useState } from 'react';
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Bell, ChevronLeft, X } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
@@ -15,6 +15,25 @@ interface AnnouncementCenterProps {
   trigger?: 'icon' | 'button';
 }
 
+interface AnnouncementSurfaceProps extends AnnouncementCenterProps {
+  showTrigger: boolean;
+  autoPopup: boolean;
+  autoRefresh: boolean;
+}
+
+const ANNOUNCEMENT_BACKGROUND_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+
+function hasBlockingOverlay(): boolean {
+  if (typeof document === 'undefined') {
+    return false;
+  }
+  return Boolean(
+    document.querySelector(
+      '.modal-overlay, .close-dialog-overlay, .qs-overlay, .settings-account-scope-dialog-overlay, [aria-modal="true"]',
+    ),
+  );
+}
+
 const TAB_TARGET_PAGE_MAP: Partial<Record<string, Page>> = {
   dashboard: 'dashboard',
   overview: 'overview',
@@ -23,7 +42,6 @@ const TAB_TARGET_PAGE_MAP: Partial<Record<string, Page>> = {
   windsurf: 'windsurf',
   kiro: 'kiro',
   wakeup: 'wakeup',
-  fingerprints: 'fingerprints',
   instances: 'instances',
   settings: 'settings',
 };
@@ -67,11 +85,14 @@ function formatTimeAgo(
   return text.replace('{count}', String(diffDays)).replace('{{count}}', String(diffDays));
 }
 
-export function AnnouncementCenter({
+function AnnouncementSurface({
   onNavigate,
   variant = 'floating',
   trigger = 'icon',
-}: AnnouncementCenterProps) {
+  showTrigger,
+  autoPopup,
+  autoRefresh,
+}: AnnouncementSurfaceProps) {
   const { t } = useTranslation();
   const announcementState = useAnnouncementStore((state) => state.state);
   const loading = useAnnouncementStore((state) => state.loading);
@@ -89,42 +110,111 @@ export function AnnouncementCenter({
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
   const [handledPopupId, setHandledPopupId] = useState<string | null>(null);
+  const [popupRetryRevision, setPopupRetryRevision] = useState(0);
+  const refreshInFlightRef = useRef(false);
+  const lastBackgroundRefreshAtRef = useRef(0);
+
+  const refreshAnnouncements = useCallback(
+    async (forceRefresh: boolean) => {
+      if (refreshInFlightRef.current) {
+        return;
+      }
+      refreshInFlightRef.current = true;
+      try {
+        await fetchState(forceRefresh);
+      } finally {
+        refreshInFlightRef.current = false;
+      }
+    },
+    [fetchState],
+  );
 
   useEffect(() => {
-    void fetchState(false);
-  }, [fetchState]);
+    if (!autoRefresh) {
+      return;
+    }
 
-  useEffect(() => {
+    lastBackgroundRefreshAtRef.current = Date.now();
+    void refreshAnnouncements(false);
+
+    const refreshIfDue = () => {
+      if (document.visibilityState !== 'visible') {
+        return;
+      }
+      const now = Date.now();
+      if (
+        now - lastBackgroundRefreshAtRef.current <
+        ANNOUNCEMENT_BACKGROUND_REFRESH_INTERVAL_MS
+      ) {
+        return;
+      }
+      lastBackgroundRefreshAtRef.current = now;
+      void refreshAnnouncements(true);
+    };
     const handleLanguageChanged = () => {
-      void fetchState(false);
+      void refreshAnnouncements(false);
     };
+
+    window.addEventListener('focus', refreshIfDue);
     window.addEventListener('general-language-updated', handleLanguageChanged);
+    document.addEventListener('visibilitychange', refreshIfDue);
+    const refreshTimer = window.setInterval(
+      refreshIfDue,
+      ANNOUNCEMENT_BACKGROUND_REFRESH_INTERVAL_MS,
+    );
+
     return () => {
+      window.removeEventListener('focus', refreshIfDue);
       window.removeEventListener('general-language-updated', handleLanguageChanged);
+      document.removeEventListener('visibilitychange', refreshIfDue);
+      window.clearInterval(refreshTimer);
     };
-  }, [fetchState]);
+  }, [autoRefresh, refreshAnnouncements]);
 
   useEffect(() => {
     setFailedImages(new Set());
   }, [detailAnnouncement?.id]);
 
   useEffect(() => {
+    if (!autoPopup) {
+      return;
+    }
     const popupAnnouncement = announcementState.popupAnnouncement;
     if (!popupAnnouncement) {
       return;
     }
-    if (detailAnnouncement?.id === popupAnnouncement.id) {
+    if (detailAnnouncement) {
       return;
     }
     if (handledPopupId === popupAnnouncement.id) {
       return;
     }
 
+    if (hasBlockingOverlay()) {
+      if (typeof MutationObserver === 'undefined' || !document.body) {
+        return;
+      }
+      const observer = new MutationObserver(() => {
+        if (!hasBlockingOverlay()) {
+          observer.disconnect();
+          setPopupRetryRevision((revision) => revision + 1);
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      return () => observer.disconnect();
+    }
+
     setListOpen(false);
     setDetailFromList(false);
     setDetailAnnouncement(popupAnnouncement);
     setHandledPopupId(popupAnnouncement.id);
-  }, [announcementState.popupAnnouncement, detailAnnouncement?.id, handledPopupId]);
+  }, [
+    announcementState.popupAnnouncement,
+    autoPopup,
+    detailAnnouncement,
+    handledPopupId,
+    popupRetryRevision,
+  ]);
 
   const unreadCount = announcementState.unreadIds.length;
 
@@ -227,27 +317,29 @@ export function AnnouncementCenter({
 
   return (
     <>
-      <div className={`announcement-center-anchor ${variant === 'inline' ? 'inline' : 'floating'}`}>
-        <button
-          className={trigger === 'button' ? 'announcement-trigger-btn' : 'announcement-bell-btn'}
-          onClick={() => setListOpen(true)}
-          title={t('announcement.title', '公告')}
-        >
-          <Bell size={16} />
-          {trigger === 'button' ? (
-            <span className="announcement-trigger-label">{t('announcement.title', '公告')}</span>
-          ) : null}
-          {unreadCount > 0 && (
-            <span className={`announcement-bell-badge ${unreadCount === 0 ? 'is-hidden' : ''}`}>
-              {unreadCount > 9 ? '9+' : unreadCount}
-            </span>
-          )}
-        </button>
-      </div>
+      {showTrigger ? (
+        <div className={`announcement-center-anchor ${variant === 'inline' ? 'inline' : 'floating'}`}>
+          <button
+            className={trigger === 'button' ? 'announcement-trigger-btn' : 'announcement-bell-btn'}
+            onClick={() => setListOpen(true)}
+            title={t('announcement.title', '公告')}
+          >
+            <Bell size={16} />
+            {trigger === 'button' ? (
+              <span className="announcement-trigger-label">{t('announcement.title', '公告')}</span>
+            ) : null}
+            {unreadCount > 0 && (
+              <span className={`announcement-bell-badge ${unreadCount === 0 ? 'is-hidden' : ''}`}>
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
+          </button>
+        </div>
+      ) : null}
 
       {listOpen &&
         renderInBody(
-          <div className="modal-overlay announcement-modal-overlay" onClick={() => setListOpen(false)}>
+          <div className="modal-overlay announcement-modal-overlay">
             <div className="modal announcement-list-modal" onClick={(event) => event.stopPropagation()}>
               <div className="modal-header">
                 <h2>{t('announcement.title', '公告')}</h2>
@@ -314,7 +406,7 @@ export function AnnouncementCenter({
 
       {detailAnnouncement &&
         renderInBody(
-          <div className="modal-overlay announcement-modal-overlay" onClick={() => void closeDetail(false)}>
+          <div className="modal-overlay announcement-modal-overlay">
             <div className="modal announcement-detail-modal" onClick={(event) => event.stopPropagation()}>
               <div className="modal-header">
                 <div className="announcement-detail-header-left">
@@ -396,15 +488,42 @@ export function AnnouncementCenter({
 
       {imagePreviewUrl &&
         renderInBody(
-          <div className="announcement-image-preview-overlay" onClick={() => setImagePreviewUrl(null)}>
+          <div className="announcement-image-preview-overlay">
             <div className="announcement-image-preview-wrapper">
+              <button
+                type="button"
+                className="announcement-image-preview-close"
+                onClick={() => setImagePreviewUrl(null)}
+                aria-label={t('common.close', '关闭')}
+              >
+                <X size={18} />
+              </button>
               <img src={imagePreviewUrl} alt="preview" className="announcement-image-preview" />
-              <div className="announcement-image-preview-hint">
-                {t('announcement.clickToClose', '点击关闭')}
-              </div>
             </div>
           </div>,
         )}
     </>
+  );
+}
+
+export function AnnouncementCenter(props: AnnouncementCenterProps) {
+  return (
+    <AnnouncementSurface
+      {...props}
+      showTrigger
+      autoPopup={false}
+      autoRefresh={false}
+    />
+  );
+}
+
+export function AnnouncementHost({ onNavigate }: Pick<AnnouncementCenterProps, 'onNavigate'>) {
+  return (
+    <AnnouncementSurface
+      onNavigate={onNavigate}
+      showTrigger={false}
+      autoPopup
+      autoRefresh
+    />
   );
 }

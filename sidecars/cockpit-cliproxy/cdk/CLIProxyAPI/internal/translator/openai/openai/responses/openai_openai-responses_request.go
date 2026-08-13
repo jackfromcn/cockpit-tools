@@ -1,11 +1,543 @@
 package responses
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
+
+const customToolChatParametersJSON = `{"type":"object","properties":{"input":{"type":"string"}},"required":["input"]}`
+const toolSearchChatName = "tool_search"
+const chatToolNameMaxLen = 64
+
+const (
+	toolOutputMediaMarker      = "[Tool output media moved to the following user message]"
+	toolOutputMediaAttribution = "[Tool output media for call %s]"
+)
+
+type chatToolOutputMediaPart struct {
+	Type     string                       `json:"type"`
+	Text     string                       `json:"text,omitempty"`
+	ImageURL *chatToolOutputMediaImageURL `json:"image_url,omitempty"`
+}
+
+type chatToolOutputMediaImageURL struct {
+	URL string `json:"url"`
+}
+
+var chatToolNameInvalidChars = regexp.MustCompile(`[^A-Za-z0-9_-]`)
+
+func responsesServiceTier(value string) string {
+	if strings.ToLower(strings.TrimSpace(value)) == "priority" {
+		return "priority"
+	}
+	return ""
+}
+
+func isResponsesToolCallItem(itemType string) bool {
+	return itemType == "function_call" || itemType == "custom_tool_call" || itemType == "tool_search_call"
+}
+
+func isResponsesToolOutputItem(itemType string) bool {
+	return itemType == "function_call_output" || itemType == "custom_tool_call_output" || itemType == "tool_search_output"
+}
+
+func customToolInputArguments(input string) string {
+	out := []byte(`{"input":""}`)
+	out, _ = sjson.SetBytes(out, "input", input)
+	return string(out)
+}
+
+func canonicalizeToolArguments(arguments string) string {
+	if strings.TrimSpace(arguments) == "" {
+		return "{}"
+	}
+	return arguments
+}
+
+func flattenNamespaceToolName(namespace, name string) string {
+	fullName := namespace + "__" + name
+	fullName = chatToolNameInvalidChars.ReplaceAllString(fullName, "_")
+	if len(fullName) <= chatToolNameMaxLen {
+		return fullName
+	}
+	sum := sha256.Sum256([]byte(fullName))
+	suffix := hexPrefix(sum[:], 10)
+	prefixLen := chatToolNameMaxLen - len(suffix) - 1
+	if prefixLen < 1 {
+		return suffix
+	}
+	return strings.TrimRight(fullName[:prefixLen], "_-") + "_" + suffix
+}
+
+func hexPrefix(bytes []byte, chars int) string {
+	const table = "0123456789abcdef"
+	out := make([]byte, len(bytes)*2)
+	for i, b := range bytes {
+		out[i*2] = table[b>>4]
+		out[i*2+1] = table[b&0x0f]
+	}
+	if chars > len(out) {
+		chars = len(out)
+	}
+	return string(out[:chars])
+}
+
+func toolSearchArguments(item gjson.Result) string {
+	arguments := item.Get("arguments")
+	if arguments.Exists() {
+		if arguments.Type == gjson.String {
+			return canonicalizeToolArguments(arguments.String())
+		}
+		return arguments.Raw
+	}
+	return "{}"
+}
+
+func appendChatTool(chatTools *[]interface{}, name, description, parametersRaw string) {
+	if strings.TrimSpace(name) == "" {
+		return
+	}
+	chatTool := []byte(`{"type":"function","function":{"name":"","description":"","parameters":{}}}`)
+	chatTool, _ = sjson.SetBytes(chatTool, "function.name", name)
+	if description != "" {
+		chatTool, _ = sjson.SetBytes(chatTool, "function.description", description)
+	}
+	if parametersRaw != "" && gjson.Valid(parametersRaw) {
+		chatTool, _ = sjson.SetRawBytes(chatTool, "function.parameters", []byte(parametersRaw))
+	}
+	*chatTools = append(*chatTools, gjson.ParseBytes(chatTool).Value())
+}
+
+func responsesInputImageToChatContentPart(contentItem gjson.Result) []byte {
+	imageURL := contentItem.Get("image_url")
+	contentPart := []byte(`{"type":"image_url","image_url":{"url":""}}`)
+	if imageURL.Exists() && imageURL.IsObject() {
+		contentPart, _ = sjson.SetRawBytes(contentPart, "image_url", []byte(imageURL.Raw))
+		return contentPart
+	}
+	contentPart, _ = sjson.SetBytes(contentPart, "image_url.url", imageURL.String())
+	return contentPart
+}
+
+func appendResponsesToolToChatTools(chatTools *[]interface{}, tool gjson.Result, namespace string) {
+	toolType := tool.Get("type").String()
+	switch toolType {
+	case "function":
+		name := tool.Get("name").String()
+		chatName := name
+		if namespace != "" {
+			chatName = flattenNamespaceToolName(namespace, name)
+		}
+		appendChatTool(chatTools, chatName, tool.Get("description").String(), tool.Get("parameters").Raw)
+	case "custom":
+		name := tool.Get("name").String()
+		chatName := name
+		if namespace != "" {
+			chatName = flattenNamespaceToolName(namespace, name)
+		}
+		appendChatTool(chatTools, chatName, tool.Get("description").String(), customToolChatParametersJSON)
+	case "tool_search":
+		appendChatTool(chatTools, toolSearchChatName, "Search and load Codex tools, plugins, connectors, and MCP namespaces for the current task.", `{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}}}`)
+	case "namespace":
+		childNamespace := tool.Get("name").String()
+		if childNamespace == "" {
+			childNamespace = namespace
+		}
+		children := tool.Get("tools")
+		if !children.IsArray() {
+			children = tool.Get("children")
+		}
+		if children.IsArray() {
+			children.ForEach(func(_, child gjson.Result) bool {
+				appendResponsesToolToChatTools(chatTools, child, childNamespace)
+				return true
+			})
+		}
+	}
+}
+
+func appendToolSearchOutputTools(chatTools *[]interface{}, value gjson.Result) {
+	if !value.Exists() {
+		return
+	}
+	switch {
+	case value.IsArray():
+		value.ForEach(func(_, item gjson.Result) bool {
+			appendToolSearchOutputTools(chatTools, item)
+			return true
+		})
+	case value.IsObject():
+		if value.Get("type").String() == "tool_search_output" {
+			tools := value.Get("tools")
+			if tools.IsArray() {
+				tools.ForEach(func(_, tool gjson.Result) bool {
+					appendResponsesToolToChatTools(chatTools, tool, "")
+					return true
+				})
+			}
+		}
+		value.ForEach(func(_, child gjson.Result) bool {
+			appendToolSearchOutputTools(chatTools, child)
+			return true
+		})
+	}
+}
+
+// appendAdditionalToolsFromInput collects tools declared in Codex Desktop
+// Responses Lite "additional_tools" input items.
+func appendAdditionalToolsFromInput(chatTools *[]interface{}, input gjson.Result) {
+	if !input.Exists() || !input.IsArray() {
+		return
+	}
+	input.ForEach(func(_, item gjson.Result) bool {
+		if item.Get("type").String() != "additional_tools" {
+			return true
+		}
+		tools := item.Get("tools")
+		if !tools.IsArray() {
+			return true
+		}
+		tools.ForEach(func(_, tool gjson.Result) bool {
+			appendResponsesToolToChatTools(chatTools, tool, "")
+			return true
+		})
+		return true
+	})
+}
+
+// responsesToolOutputText flattens a tool output value that may be a plain
+// string or an array of content parts into a single text payload.
+func responsesToolOutputText(output gjson.Result) string {
+	if output.Type == gjson.String {
+		return output.String()
+	}
+	if output.IsArray() {
+		var b strings.Builder
+		output.ForEach(func(_, part gjson.Result) bool {
+			if part.Type == gjson.String {
+				b.WriteString(part.String())
+				return true
+			}
+			if text := part.Get("text"); text.Exists() {
+				b.WriteString(text.String())
+			}
+			return true
+		})
+		return b.String()
+	}
+	if output.Exists() {
+		return output.Raw
+	}
+	return ""
+}
+
+// extractResponsesToolOutputMedia moves image parts out of tool messages. Chat
+// Completions only permits images in user messages, while Responses tool output
+// may contain image content parts directly.
+func extractResponsesToolOutputMedia(outputRaw []byte) (string, []chatToolOutputMediaPart, bool) {
+	outputRaw = bytes.TrimSpace(outputRaw)
+	if len(outputRaw) == 0 || bytes.Equal(outputRaw, []byte("null")) {
+		return "", nil, false
+	}
+
+	var outputString string
+	if err := json.Unmarshal(outputRaw, &outputString); err == nil {
+		if isResponsesToolOutputImageDataURL(outputString) {
+			return toolOutputMediaMarker, []chatToolOutputMediaPart{responsesToolOutputImagePart(outputString)}, true
+		}
+
+		nested, ok := decodeResponsesToolOutputJSON([]byte(outputString))
+		if !ok {
+			return "", nil, false
+		}
+		rewritten, media, changed := rewriteResponsesToolOutputMediaValue(nested)
+		if !changed {
+			return "", nil, false
+		}
+		encoded, err := json.Marshal(rewritten)
+		if err != nil {
+			return "", nil, false
+		}
+		return string(encoded), media, true
+	}
+
+	value, ok := decodeResponsesToolOutputJSON(outputRaw)
+	if !ok {
+		return "", nil, false
+	}
+	rewritten, media, changed := rewriteResponsesToolOutputMediaValue(value)
+	if !changed {
+		return "", nil, false
+	}
+	encoded, err := json.Marshal(rewritten)
+	if err != nil {
+		return "", nil, false
+	}
+	return string(encoded), media, true
+}
+
+func decodeResponsesToolOutputJSON(raw []byte) (any, bool) {
+	if !json.Valid(raw) {
+		return nil, false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, false
+	}
+	return value, true
+}
+
+func rewriteResponsesToolOutputMediaValue(value any) (any, []chatToolOutputMediaPart, bool) {
+	switch typed := value.(type) {
+	case []any:
+		var media []chatToolOutputMediaPart
+		changed := false
+		for index, item := range typed {
+			rewritten, itemMedia, itemChanged := rewriteResponsesToolOutputMediaValue(item)
+			if !itemChanged {
+				continue
+			}
+			typed[index] = rewritten
+			media = append(media, itemMedia...)
+			changed = true
+		}
+		return typed, media, changed
+	case map[string]any:
+		if imageURL, ok := recognizedResponsesToolOutputImageURL(typed); ok {
+			return map[string]any{
+				"type": "input_text",
+				"text": toolOutputMediaMarker,
+			}, []chatToolOutputMediaPart{responsesToolOutputImagePart(imageURL)}, true
+		}
+
+		content, ok := typed["content"]
+		if !ok {
+			return typed, nil, false
+		}
+		rewritten, media, changed := rewriteResponsesToolOutputMediaValue(content)
+		if !changed {
+			return typed, nil, false
+		}
+		typed["content"] = rewritten
+		return typed, media, true
+	default:
+		return value, nil, false
+	}
+}
+
+func recognizedResponsesToolOutputImageURL(value map[string]any) (string, bool) {
+	partType, _ := value["type"].(string)
+	if partType != "input_image" && partType != "image_url" {
+		return "", false
+	}
+
+	switch imageURL := value["image_url"].(type) {
+	case string:
+		return imageURL, strings.TrimSpace(imageURL) != ""
+	case map[string]any:
+		url, _ := imageURL["url"].(string)
+		return url, strings.TrimSpace(url) != ""
+	default:
+		return "", false
+	}
+}
+
+func isResponsesToolOutputImageDataURL(value string) bool {
+	const prefix = "data:image/"
+	const separator = ";base64,"
+	if !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	separatorIndex := strings.Index(value[len(prefix):], separator)
+	if separatorIndex <= 0 {
+		return false
+	}
+	payloadIndex := len(prefix) + separatorIndex + len(separator)
+	return payloadIndex < len(value)
+}
+
+func responsesToolOutputImagePart(imageURL string) chatToolOutputMediaPart {
+	return chatToolOutputMediaPart{
+		Type:     "image_url",
+		ImageURL: &chatToolOutputMediaImageURL{URL: imageURL},
+	}
+}
+
+// normalizeChatMessagesWithResponsesToolOutputMedia restores strict Chat
+// Completions tool adjacency, then places extracted media after the complete
+// reply batch in the assistant's tool-call order.
+func normalizeChatMessagesWithResponsesToolOutputMedia(rawJSON []byte, mediaByCallID map[string][]chatToolOutputMediaPart) []byte {
+	var root map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(rawJSON))
+	decoder.UseNumber()
+	if err := decoder.Decode(&root); err != nil {
+		return rawJSON
+	}
+	messages, ok := root["messages"].([]any)
+	if !ok {
+		return rawJSON
+	}
+
+	replies := make(map[string]map[string]any)
+	for _, rawMessage := range messages {
+		message, ok := rawMessage.(map[string]any)
+		if !ok || message["role"] != "tool" {
+			continue
+		}
+		callID, _ := message["tool_call_id"].(string)
+		if callID != "" {
+			replies[callID] = message
+		}
+	}
+
+	normalized := make([]any, 0, len(messages)+1)
+	for _, rawMessage := range messages {
+		message, ok := rawMessage.(map[string]any)
+		if !ok {
+			normalized = append(normalized, rawMessage)
+			continue
+		}
+		role, _ := message["role"].(string)
+		if role == "tool" {
+			callID, _ := message["tool_call_id"].(string)
+			if callID == "" {
+				normalized = append(normalized, message)
+			}
+			continue
+		}
+
+		toolCalls, _ := message["tool_calls"].([]any)
+		if len(toolCalls) == 0 {
+			normalized = append(normalized, message)
+			continue
+		}
+
+		keptCalls := make([]any, 0, len(toolCalls))
+		keptIDs := make([]string, 0, len(toolCalls))
+		for _, rawCall := range toolCalls {
+			call, ok := rawCall.(map[string]any)
+			if !ok {
+				continue
+			}
+			callID, _ := call["id"].(string)
+			if _, ok := replies[callID]; !ok || callID == "" {
+				continue
+			}
+			keptCalls = append(keptCalls, call)
+			keptIDs = append(keptIDs, callID)
+		}
+		if len(keptCalls) == 0 {
+			delete(message, "tool_calls")
+			if content, exists := message["content"]; exists && content != nil && content != "" {
+				normalized = append(normalized, message)
+			}
+			continue
+		}
+
+		message["tool_calls"] = keptCalls
+		normalized = append(normalized, message)
+		for _, callID := range keptIDs {
+			normalized = append(normalized, replies[callID])
+		}
+
+		mediaParts := make([]chatToolOutputMediaPart, 0)
+		for _, callID := range keptIDs {
+			media := mediaByCallID[callID]
+			if len(media) == 0 {
+				continue
+			}
+			mediaParts = append(mediaParts, chatToolOutputMediaPart{
+				Type: "text",
+				Text: fmt.Sprintf(toolOutputMediaAttribution, callID),
+			})
+			mediaParts = append(mediaParts, media...)
+		}
+		if len(mediaParts) > 0 {
+			normalized = append(normalized, map[string]any{
+				"role":    "user",
+				"content": mediaParts,
+			})
+		}
+	}
+
+	root["messages"] = normalized
+	next, err := json.Marshal(root)
+	if err != nil {
+		return rawJSON
+	}
+	return next
+}
+
+func collapseSystemMessagesToHead(rawJSON []byte) []byte {
+	var root map[string]any
+	if err := json.Unmarshal(rawJSON, &root); err != nil {
+		return rawJSON
+	}
+	rawMessages, ok := root["messages"].([]any)
+	if !ok || len(rawMessages) == 0 {
+		return rawJSON
+	}
+
+	systemParts := make([]string, 0)
+	nextMessages := make([]any, 0, len(rawMessages))
+	for _, rawMessage := range rawMessages {
+		message, ok := rawMessage.(map[string]any)
+		if !ok || message["role"] != "system" {
+			nextMessages = append(nextMessages, rawMessage)
+			continue
+		}
+		if text := chatMessageContentText(message["content"]); text != "" {
+			systemParts = append(systemParts, text)
+		}
+	}
+	if len(systemParts) == 0 {
+		return rawJSON
+	}
+
+	systemContent := strings.Join(systemParts, "\n\n")
+	systemMessage := map[string]any{
+		"role":    "system",
+		"content": systemContent,
+	}
+	root["messages"] = append([]any{systemMessage}, nextMessages...)
+
+	next, err := json.Marshal(root)
+	if err != nil {
+		return rawJSON
+	}
+	return next
+}
+
+func chatMessageContentText(content any) string {
+	switch value := content.(type) {
+	case string:
+		return value
+	case []any:
+		parts := make([]string, 0, len(value))
+		for _, rawPart := range value {
+			part, ok := rawPart.(map[string]any)
+			if !ok {
+				continue
+			}
+			text, ok := part["text"].(string)
+			if ok && text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n\n")
+	default:
+		return ""
+	}
+}
 
 // ConvertOpenAIResponsesRequestToOpenAIChatCompletions converts OpenAI responses format to OpenAI chat completions format.
 // It transforms the OpenAI responses API format (with instructions and input array) into the standard
@@ -28,6 +560,8 @@ import (
 //   - []byte: The transformed request data in OpenAI chat completions format
 func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inputRawJSON []byte, stream bool) []byte {
 	rawJSON := inputRawJSON
+	mediaByCallID := make(map[string][]chatToolOutputMediaPart)
+	sawToolOutputMedia := false
 	// Base OpenAI chat completions template with default values
 	out := []byte(`{"model":"","messages":[],"stream":false}`)
 
@@ -38,6 +572,9 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 
 	// Set stream configuration
 	out, _ = sjson.SetBytes(out, "stream", stream)
+	if stream {
+		out, _ = sjson.SetBytes(out, "stream_options.include_usage", true)
+	}
 
 	// Map generation parameters from responses format to chat completions format
 	if maxTokens := root.Get("max_output_tokens"); maxTokens.Exists() {
@@ -46,6 +583,10 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 
 	if parallelToolCalls := root.Get("parallel_tool_calls"); parallelToolCalls.Exists() {
 		out, _ = sjson.SetBytes(out, "parallel_tool_calls", parallelToolCalls.Bool())
+	}
+
+	if serviceTier := responsesServiceTier(root.Get("service_tier").String()); serviceTier != "" {
+		out, _ = sjson.SetBytes(out, "service_tier", serviceTier)
 	}
 
 	// Convert instructions to system message
@@ -60,7 +601,7 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 		inputItems := input.Array()
 		outputCallIDs := make(map[string]struct{})
 		for _, item := range inputItems {
-			if item.Get("type").String() != "function_call_output" {
+			if !isResponsesToolOutputItem(item.Get("type").String()) {
 				continue
 			}
 			callID := strings.TrimSpace(item.Get("call_id").String())
@@ -120,7 +661,7 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 			if itemType == "" && item.Get("role").String() != "" {
 				itemType = "message"
 			}
-			if itemType != "function_call" {
+			if !isResponsesToolCallItem(itemType) {
 				flushPendingToolCalls()
 			}
 
@@ -129,7 +670,7 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 				// Handle regular message conversion
 				role := item.Get("role").String()
 				if role == "developer" {
-					role = "user"
+					role = "system"
 				}
 				message := []byte(`{"role":"","content":[]}`)
 				message, _ = sjson.SetBytes(message, "role", role)
@@ -151,9 +692,7 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 							contentPart, _ = sjson.SetBytes(contentPart, "text", text)
 							message, _ = sjson.SetRawBytes(message, "content.-1", contentPart)
 						case "input_image":
-							imageURL := contentItem.Get("image_url").String()
-							contentPart := []byte(`{"type":"image_url","image_url":{"url":""}}`)
-							contentPart, _ = sjson.SetBytes(contentPart, "image_url.url", imageURL)
+							contentPart := responsesInputImageToChatContentPart(contentItem)
 							message, _ = sjson.SetRawBytes(message, "content.-1", contentPart)
 						}
 						return true
@@ -172,27 +711,45 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 
 				appendRegularMessage(message)
 
-			case "function_call":
+			case "function_call", "custom_tool_call", "tool_search_call":
 				// Buffer consecutive function calls and emit them as one assistant message.
 				toolCall := []byte(`{"id":"","type":"function","function":{"name":"","arguments":""}}`)
 
 				if callId := item.Get("call_id"); callId.Exists() {
 					toolCall, _ = sjson.SetBytes(toolCall, "id", callId.String())
+				} else if itemType == "tool_search_call" {
+					toolCall, _ = sjson.SetBytes(toolCall, "id", item.Get("id").String())
 				}
 
-				if name := item.Get("name"); name.Exists() {
-					toolCall, _ = sjson.SetBytes(toolCall, "function.name", name.String())
+				if itemType == "tool_search_call" {
+					toolCall, _ = sjson.SetBytes(toolCall, "function.name", toolSearchChatName)
+				} else if name := item.Get("name"); name.Exists() {
+					chatName := name.String()
+					if namespace := item.Get("namespace").String(); namespace != "" {
+						chatName = flattenNamespaceToolName(namespace, chatName)
+					}
+					toolCall, _ = sjson.SetBytes(toolCall, "function.name", chatName)
 				}
 
-				if arguments := item.Get("arguments"); arguments.Exists() {
-					toolCall, _ = sjson.SetBytes(toolCall, "function.arguments", arguments.String())
+				if itemType == "custom_tool_call" {
+					toolCall, _ = sjson.SetBytes(toolCall, "function.arguments", customToolInputArguments(item.Get("input").String()))
+				} else if itemType == "tool_search_call" {
+					toolCall, _ = sjson.SetBytes(toolCall, "function.arguments", toolSearchArguments(item))
+				} else if arguments := item.Get("arguments"); arguments.Exists() {
+					toolCall, _ = sjson.SetBytes(toolCall, "function.arguments", canonicalizeToolArguments(arguments.String()))
+				} else {
+					toolCall, _ = sjson.SetBytes(toolCall, "function.arguments", "{}")
 				}
 				pendingToolCalls = append(pendingToolCalls, gjson.ParseBytes(toolCall).Value())
-				if callID := strings.TrimSpace(item.Get("call_id").String()); callID != "" {
+				callID := strings.TrimSpace(item.Get("call_id").String())
+				if callID == "" && itemType == "tool_search_call" {
+					callID = strings.TrimSpace(item.Get("id").String())
+				}
+				if callID != "" {
 					pendingToolCallIDs = append(pendingToolCallIDs, callID)
 				}
 
-			case "function_call_output":
+			case "function_call_output", "custom_tool_call_output", "tool_search_output":
 				// Handle function call output conversion to tool message
 				toolMessage := []byte(`{"role":"tool","tool_call_id":"","content":""}`)
 				callID := ""
@@ -203,7 +760,20 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 				}
 
 				if output := item.Get("output"); output.Exists() {
-					toolMessage, _ = sjson.SetBytes(toolMessage, "content", output.String())
+					delete(mediaByCallID, callID)
+					outputText, media, rewritten := extractResponsesToolOutputMedia([]byte(output.Raw))
+					if rewritten {
+						sawToolOutputMedia = true
+						if callID != "" {
+							mediaByCallID[callID] = media
+						}
+					} else if output.Type == gjson.String {
+						outputText = output.String()
+					} else {
+						// Preserve object/array bytes when there is no recognized media.
+						outputText = output.Raw
+					}
+					toolMessage, _ = sjson.SetBytes(toolMessage, "content", outputText)
 				}
 
 				out, _ = sjson.SetRawBytes(out, "messages.-1", toolMessage)
@@ -213,6 +783,11 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 				if len(awaitingToolOutputs) == 0 && len(deferredMessages) > 0 {
 					flushDeferredMessages()
 				}
+
+			case "additional_tools":
+				// Codex Desktop Responses Lite may carry tool definitions in
+				// input items rather than top-level "tools". Handled below when
+				// collecting chat tools.
 			}
 
 		}
@@ -225,46 +800,20 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 		out, _ = sjson.SetRawBytes(out, "messages.-1", msg)
 	}
 
-	// Convert tools from responses format to chat completions format
+	// Convert tools from responses format to chat completions format.
+	// Responses Lite often sets top-level tools to null and ships definitions
+	// via input items of type "additional_tools".
+	var chatCompletionsTools []interface{}
 	if tools := root.Get("tools"); tools.Exists() && tools.IsArray() {
-		var chatCompletionsTools []interface{}
-
 		tools.ForEach(func(_, tool gjson.Result) bool {
-			// Built-in tools (e.g. {"type":"web_search"}) are already compatible with the Chat Completions schema.
-			// Only function tools need structural conversion because Chat Completions nests details under "function".
-			toolType := tool.Get("type").String()
-			if toolType != "" && toolType != "function" && tool.IsObject() {
-				// Almost all providers lack built-in tools, so we just ignore them.
-				// chatCompletionsTools = append(chatCompletionsTools, tool.Value())
-				return true
-			}
-
-			chatTool := []byte(`{"type":"function","function":{}}`)
-
-			// Convert tool structure from responses format to chat completions format
-			function := []byte(`{"name":"","description":"","parameters":{}}`)
-
-			if name := tool.Get("name"); name.Exists() {
-				function, _ = sjson.SetBytes(function, "name", name.String())
-			}
-
-			if description := tool.Get("description"); description.Exists() {
-				function, _ = sjson.SetBytes(function, "description", description.String())
-			}
-
-			if parameters := tool.Get("parameters"); parameters.Exists() {
-				function, _ = sjson.SetRawBytes(function, "parameters", []byte(parameters.Raw))
-			}
-
-			chatTool, _ = sjson.SetRawBytes(chatTool, "function", function)
-			chatCompletionsTools = append(chatCompletionsTools, gjson.ParseBytes(chatTool).Value())
-
+			appendResponsesToolToChatTools(&chatCompletionsTools, tool, "")
 			return true
 		})
-
-		if len(chatCompletionsTools) > 0 {
-			out, _ = sjson.SetBytes(out, "tools", chatCompletionsTools)
-		}
+	}
+	appendAdditionalToolsFromInput(&chatCompletionsTools, root.Get("input"))
+	appendToolSearchOutputTools(&chatCompletionsTools, root.Get("input"))
+	if len(chatCompletionsTools) > 0 {
+		out, _ = sjson.SetBytes(out, "tools", chatCompletionsTools)
 	}
 
 	if reasoningEffort := root.Get("reasoning.effort"); reasoningEffort.Exists() {
@@ -274,10 +823,14 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 		}
 	}
 
-	// Convert tool_choice if present
-	if toolChoice := root.Get("tool_choice"); toolChoice.Exists() {
+	// Chat Completions providers reject tool_choice when no tools are present.
+	if toolChoice := root.Get("tool_choice"); toolChoice.Exists() && len(chatCompletionsTools) > 0 {
 		out, _ = sjson.SetBytes(out, "tool_choice", toolChoice.String())
 	}
 
+	out = collapseSystemMessagesToHead(out)
+	if sawToolOutputMedia {
+		out = normalizeChatMessagesWithResponsesToolOutputMedia(out, mediaByCallID)
+	}
 	return out
 }

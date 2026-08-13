@@ -3,6 +3,7 @@ import { X, Download, Sparkles, RefreshCw, Check, XCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { useEscClose } from '../hooks/useEscClose';
+import { prependUpdaterReleaseHighlights } from '../utils/updaterReleaseNotes';
 import './UpdateNotification.css';
 
 export interface UpdateInfo {
@@ -120,9 +121,14 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({
   const releaseNotes = useMemo(() => {
     if (!updateInfo) return '';
     const isZh = i18n.language.startsWith('zh');
-    return isZh && updateInfo.release_notes_zh
+    const notes = isZh && updateInfo.release_notes_zh
       ? updateInfo.release_notes_zh
       : updateInfo.release_notes;
+    return prependUpdaterReleaseHighlights(
+      updateInfo.latest_version,
+      notes,
+      i18n.language,
+    );
   }, [updateInfo, i18n.language]);
 
   // 简单的 Markdown 渲染
@@ -196,7 +202,7 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({
       : t('common.loading');
 
     return (
-      <div className="modal-overlay update-overlay" onClick={handleClose}>
+      <div className="modal-overlay update-overlay">
         <div className="modal update-modal" onClick={(event) => event.stopPropagation()}>
           <div className="modal-header">
             <h2 className="update-modal-title">
@@ -235,7 +241,7 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({
   }
 
   return (
-    <div className="modal-overlay update-overlay" onClick={handleClose}>
+    <div className="modal-overlay update-overlay">
       <div className="modal update-modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-header">
           <h2 className="update-modal-title">

@@ -17,7 +17,6 @@ export interface GlobalModalOptions {
   description?: string;
   content?: ReactNode;
   width?: 'sm' | 'md' | 'lg';
-  closeOnOverlay?: boolean;
   showCloseButton?: boolean;
   actions?: GlobalModalAction[];
 }

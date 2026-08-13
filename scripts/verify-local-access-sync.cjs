@@ -128,8 +128,18 @@ const checks = [
       'pub async fn test_local_access()',
       'parsed.target.starts_with("/v1/chat/completions")',
       'format!("{}/chat/completions", base_url)',
-      'kiro-cli',
+      'struct AccountHealth',
+      'filter_available_account_ids',
+      'kiro_prompt_filter::apply_prompt_filters',
       'Authorization',
+    ],
+  },
+  {
+    file: 'src-tauri/src/modules/kiro_prompt_filter.rs',
+    patterns: [
+      'pub fn apply_prompt_filters(',
+      'CLAUDE_CODE_BACKEND_PROMPT',
+      'is_claude_code_system_prompt',
     ],
   },
   {

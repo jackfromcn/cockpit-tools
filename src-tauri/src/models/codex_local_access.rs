@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum CodexLocalAccessRoutingStrategy {
     Auto,
+    Random,
+    SingleAccount,
     QuotaHighFirst,
     QuotaLowFirst,
     PlanHighFirst,
@@ -23,6 +25,20 @@ impl Default for CodexLocalAccessRoutingStrategy {
 pub enum CodexLocalAccessScope {
     Localhost,
     Lan,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CodexLocalAccessClientBaseUrlHost {
+    #[serde(rename = "localhost")]
+    Localhost,
+    #[serde(rename = "127.0.0.1")]
+    Ipv4Loopback,
+}
+
+impl Default for CodexLocalAccessClientBaseUrlHost {
+    fn default() -> Self {
+        Self::Localhost
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -90,6 +106,10 @@ fn default_restrict_free_accounts() -> bool {
     true
 }
 
+fn default_model_pricing_version() -> u64 {
+    1
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexLocalAccessCustomRoutingRule {
@@ -98,10 +118,22 @@ pub struct CodexLocalAccessCustomRoutingRule {
     pub priority: i32,
     #[serde(default = "default_custom_routing_weight")]
     pub weight: u32,
+    #[serde(default)]
+    pub is_backup: bool,
+    #[serde(default)]
+    pub is_preferred: bool,
 }
 
 fn default_custom_routing_weight() -> u32 {
     1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexLocalAccessAccountModelRule {
+    pub account_id: String,
+    #[serde(default)]
+    pub excluded_models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -117,12 +149,32 @@ pub struct CodexLocalAccessModelAlias {
 #[serde(rename_all = "camelCase")]
 pub struct CodexLocalAccessModelPricing {
     pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_context_threshold_tokens: Option<u64>,
     #[serde(default)]
     pub input_usd_per_million: f64,
     #[serde(default)]
     pub output_usd_per_million: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_input_usd_per_million: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standard_long_input_usd_per_million: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standard_long_output_usd_per_million: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standard_long_cached_input_usd_per_million: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority_input_usd_per_million: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority_output_usd_per_million: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority_cached_input_usd_per_million: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority_long_input_usd_per_million: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority_long_output_usd_per_million: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority_long_cached_input_usd_per_million: Option<f64>,
 }
 
 fn default_session_affinity_ttl_ms() -> i64 {
@@ -131,6 +183,10 @@ fn default_session_affinity_ttl_ms() -> i64 {
 
 fn default_max_retry_interval_ms() -> u64 {
     3 * 1000
+}
+
+fn default_max_concurrent_image_requests() -> u16 {
+    1
 }
 
 fn default_legacy_request_read_timeout_ms() -> u64 {
@@ -318,16 +374,56 @@ pub struct CodexLocalAccessTimeoutPreset {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CodexLocalAccessProviderGatewayModelCapability {
+    #[serde(default)]
+    pub supports_vision: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexLocalAccessProviderGateway {
+    pub base_url: String,
+    pub api_key: String,
+    pub upstream_model: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub upstream_models: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_api: Option<String>,
+    #[serde(default)]
+    pub supports_vision: bool,
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub model_capabilities:
+        std::collections::HashMap<String, CodexLocalAccessProviderGatewayModelCapability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision_routing_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CodexLocalAccessApiKey {
     pub id: String,
     pub label: String,
     pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_gateway: Option<CodexLocalAccessProviderGateway>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherit_account_pool: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub account_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub priority_account_ids: Vec<String>,
+    #[serde(default, skip_serializing)]
+    pub preferred_account_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_prefix: Option<String>,
     #[serde(default)]
     pub allowed_models: Vec<String>,
     #[serde(default)]
     pub excluded_models: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_limit: Option<u64>,
+    #[serde(default)]
+    pub token_used: u64,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
@@ -342,6 +438,13 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexLocalAccessQuotaReserve {
+    pub hourly_percent: i32,
+    pub weekly_percent: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexLocalAccessCollection {
@@ -353,6 +456,8 @@ pub struct CodexLocalAccessCollection {
     #[serde(default = "default_access_scope_for_existing_config")]
     pub access_scope: CodexLocalAccessScope,
     #[serde(default)]
+    pub client_base_url_host: CodexLocalAccessClientBaseUrlHost,
+    #[serde(default)]
     pub image_generation_mode: CodexLocalAccessImageGenerationMode,
     #[serde(default)]
     pub gateway_mode: CodexLocalAccessGatewayMode,
@@ -363,15 +468,23 @@ pub struct CodexLocalAccessCollection {
     #[serde(default)]
     pub custom_routing_rules: Vec<CodexLocalAccessCustomRoutingRule>,
     #[serde(default)]
+    pub account_model_rules: Vec<CodexLocalAccessAccountModelRule>,
+    #[serde(default)]
     pub model_aliases: Vec<CodexLocalAccessModelAlias>,
+    #[serde(default = "default_model_pricing_version")]
+    pub model_pricing_version: u64,
     #[serde(default)]
     pub model_pricings: Vec<CodexLocalAccessModelPricing>,
     #[serde(default)]
     pub excluded_models: Vec<String>,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub session_affinity: bool,
     #[serde(default = "default_session_affinity_ttl_ms")]
     pub session_affinity_ttl_ms: i64,
+    #[serde(default)]
+    pub session_affinity_default_enabled_migrated: bool,
+    #[serde(default)]
+    pub responses_websockets_enabled: bool,
     #[serde(default)]
     pub max_retry_credentials: u16,
     #[serde(default = "default_max_retry_interval_ms")]
@@ -388,8 +501,14 @@ pub struct CodexLocalAccessCollection {
     pub restrict_free_accounts: bool,
     #[serde(default = "default_true")]
     pub debug_logs: bool,
+    #[serde(default)]
+    pub immediate_sse_response: bool,
+    #[serde(default = "default_max_concurrent_image_requests")]
+    pub max_concurrent_image_requests: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bound_oauth_account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound_oauth_quota_reserve: Option<CodexLocalAccessQuotaReserve>,
     pub account_ids: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
@@ -501,12 +620,20 @@ pub struct CodexLocalAccessUsageEvent {
     pub api_key_id: String,
     #[serde(default)]
     pub api_key_label: String,
+    /// 来自客户端静态 header `x-cockpit-instance-id`（多开 profile 目录名）。
+    #[serde(default)]
+    pub client_instance_id: String,
     #[serde(default)]
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway_mode: Option<CodexLocalAccessGatewayMode>,
     #[serde(default)]
     pub request_kind: CodexLocalAccessRequestKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    /// Request reasoning effort (e.g. low/medium/high/xhigh), when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
     #[serde(default)]
     pub success: bool,
     #[serde(default)]
@@ -527,14 +654,59 @@ pub struct CodexLocalAccessUsageEvent {
     pub cached_tokens: u64,
     #[serde(default)]
     pub reasoning_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_breakdown: Option<CodexTokenBreakdown>,
     #[serde(default)]
     pub estimated_cost_usd: f64,
+    #[serde(default = "default_model_pricing_version")]
+    pub model_pricing_version: u64,
     #[serde(default)]
     pub input_usd_per_million: f64,
     #[serde(default)]
     pub output_usd_per_million: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_input_usd_per_million: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct CodexTokenInputBreakdown {
+    #[serde(default)]
+    pub total_tokens: u64,
+    #[serde(default)]
+    pub uncached_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct CodexTokenOutputBreakdown {
+    #[serde(default)]
+    pub total_tokens: u64,
+    #[serde(default)]
+    pub non_reasoning_tokens: u64,
+    #[serde(default)]
+    pub reasoning_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct CodexTokenBreakdown {
+    #[serde(default)]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub quality: String,
+    #[serde(default)]
+    pub total_tokens: u64,
+    #[serde(default)]
+    pub input: CodexTokenInputBreakdown,
+    #[serde(default)]
+    pub output: CodexTokenOutputBreakdown,
+    #[serde(default)]
+    pub unclassified_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -595,6 +767,9 @@ pub struct CodexLocalAccessAccountHealth {
     pub last_failure_message: Option<String>,
     pub image_generation_status: CodexLocalAccessImageGenerationStatus,
     pub image_generation_checked_at: Option<i64>,
+    pub scheduler_available: Option<bool>,
+    pub scheduler_reason: Option<String>,
+    pub scheduler_next_retry_at: Option<i64>,
     pub cooldowns: Vec<CodexLocalAccessAccountCooldown>,
 }
 
@@ -616,6 +791,12 @@ pub struct CodexLocalAccessProfileAttachment {
 pub struct CodexLocalAccessState {
     pub collection: Option<CodexLocalAccessCollection>,
     pub running: bool,
+    pub preparing: bool,
+    pub preparation_total: usize,
+    pub preparation_completed: usize,
+    pub refreshing_accounts: bool,
+    pub account_refresh_total: usize,
+    pub account_refresh_completed: usize,
     pub default_profile: Option<CodexLocalAccessProfileAttachment>,
     pub api_port_url: Option<String>,
     pub base_url: Option<String>,
@@ -626,6 +807,36 @@ pub struct CodexLocalAccessState {
     pub member_count: usize,
     pub stats: CodexLocalAccessStats,
     pub account_health: Vec<CodexLocalAccessAccountHealth>,
+    pub quota_reserve_status: Option<CodexLocalAccessQuotaReserveStatus>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexLocalAccessAppendAccountSkipped {
+    pub account_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexLocalAccessAppendAccountsResult {
+    pub state: CodexLocalAccessState,
+    pub synced_account_ids: Vec<String>,
+    pub added_account_ids: Vec<String>,
+    pub skipped_accounts: Vec<CodexLocalAccessAppendAccountSkipped>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexLocalAccessQuotaReserveStatus {
+    pub account_id: String,
+    pub snapshot_updated_at: Option<i64>,
+    pub snapshot_fresh: bool,
+    pub blocked: bool,
+    pub warning: bool,
+    pub effective_window: Option<String>,
+    pub effective_remaining_percent: Option<i32>,
+    pub effective_reserve_percent: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -638,7 +849,6 @@ pub struct CodexLocalAccessTestFailure {
     pub status: Option<u16>,
     pub model_id: Option<String>,
     pub detail: Option<String>,
-    pub cli_output: Option<String>,
     pub gateway_output: Option<String>,
 }
 
@@ -646,6 +856,22 @@ pub struct CodexLocalAccessTestFailure {
 #[serde(rename_all = "camelCase")]
 pub struct CodexLocalAccessTestResult {
     pub model_id: Option<String>,
+    pub latency_ms: Option<u64>,
+    pub output: Option<String>,
+    pub failure: Option<CodexLocalAccessTestFailure>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexLocalAccessChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexLocalAccessChatResult {
+    pub model_id: String,
     pub latency_ms: Option<u64>,
     pub output: Option<String>,
     pub failure: Option<CodexLocalAccessTestFailure>,

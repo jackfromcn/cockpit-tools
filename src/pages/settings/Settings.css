@@ -20,6 +20,33 @@
   padding: 0;
 }
 
+.settings-general-fieldset {
+  display: contents;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.settings-general-fieldset:disabled {
+  cursor: wait;
+}
+
+.settings-load-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 8px 12px;
+  color: var(--error-color, #c24141);
+  border: 1px solid color-mix(in srgb, currentColor 32%, transparent);
+  border-radius: 6px;
+}
+
+.settings-load-error .btn {
+  margin-left: auto;
+}
+
 /* Tab Navigation - Left Aligned Pill */
 .settings-tabs-wrapper {
   display: flex;
@@ -113,6 +140,10 @@
   border-bottom: none;
 }
 
+.settings-row--no-border {
+  border-bottom: none;
+}
+
 .settings-row:hover {
   background: var(--bg-hover);
 }
@@ -155,6 +186,154 @@
 .row-control--grow {
   flex: 1;
   justify-content: flex-end;
+}
+
+.settings-claude-launch-control {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  min-width: 0;
+}
+
+.settings-claude-launch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.settings-claude-scan-roots {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.settings-claude-scan-roots label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-claude-scan-root-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-claude-scan-roots-input {
+  width: 100%;
+  min-height: 0;
+}
+
+.settings-claude-candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.settings-claude-candidate-item {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.settings-claude-candidate-item:hover,
+.settings-claude-candidate-item.selected {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 9%, var(--bg-tertiary));
+}
+
+.settings-claude-candidate-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-claude-candidate-badge {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.settings-claude-candidate-target {
+  margin-top: 5px;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.settings-claude-candidate-note {
+  margin-top: 5px;
+  color: var(--warning, #f59e0b);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.settings-app-path-error {
+  width: 100%;
+  margin: 0;
+  color: var(--danger, #ef4444);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-menu-bar-quota-modal {
+  max-width: 480px;
+}
+
+.settings-menu-bar-quota-modal-desc {
+  margin: 0 0 20px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.settings-menu-bar-quota-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.settings-menu-bar-quota-modal-field:last-child {
+  margin-bottom: 0;
+}
+
+.settings-menu-bar-quota-modal-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-menu-bar-quota-modal-field-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.settings-menu-bar-quota-modal-select {
+  width: 100%;
+  min-width: 0;
 }
 
 /* Controls */
@@ -376,7 +555,7 @@ input:checked + .slider:before {
 }
 
 .settings-release-history-modal {
-  max-width: min(920px, calc(100vw - 56px));
+  max-width: min(690px, calc(100vw - 56px));
   max-height: min(86vh, 860px);
 }
 
@@ -974,5 +1153,38 @@ input:checked + .slider:before {
 
   .settings-transfer-modal-actions .btn {
     flex: 1;
+  }
+}
+
+/* WebDAV 备份专属：让备份列表容器中的卡片背景色保持和外层卡片一致（白色） */
+.settings-webdav-list-wrap .settings-backup-empty,
+.settings-webdav-list-wrap .settings-backup-item {
+  background: var(--bg-secondary);
+}
+
+.settings-webdav-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s ease;
+  color: var(--text-secondary);
+}
+
+.settings-webdav-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.settings-webdav-list-wrap {
+  animation: settingsFadeIn 0.2s ease-out;
+}
+
+@keyframes settingsFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }

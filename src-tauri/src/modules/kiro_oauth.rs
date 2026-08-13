@@ -2,6 +2,7 @@ use base64::Engine;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -9,13 +10,20 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use url::Url;
 
-use crate::models::kiro::{KiroAccount, KiroOAuthCompletePayload, KiroOAuthStartResponse};
+use crate::models::kiro::{
+    KiroAccount, KiroOAuthCompletePayload, KiroOAuthLoginStartOptions, KiroOAuthStartResponse,
+};
 use crate::modules::{kiro_account, logger};
 
 const KIRO_AUTH_PORTAL_URL: &str = "https://app.kiro.dev/signin";
 const KIRO_TOKEN_ENDPOINT: &str = "https://prod.us-east-1.auth.desktop.kiro.dev/oauth/token";
 const KIRO_REFRESH_ENDPOINT: &str = "https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken";
 const KIRO_AWS_OIDC_TOKEN_ENDPOINT_FMT: &str = "https://oidc.{region}.amazonaws.com/token";
+const KIRO_AWS_OIDC_CLIENT_REGISTER_ENDPOINT_FMT: &str =
+    "https://oidc.{region}.amazonaws.com/client/register";
+const KIRO_AWS_OIDC_DEVICE_AUTH_ENDPOINT_FMT: &str =
+    "https://oidc.{region}.amazonaws.com/device_authorization";
+const KIRO_IDC_BUILDER_ID_START_URL: &str = "https://view.awsapps.com/start";
 const KIRO_RUNTIME_DEFAULT_ENDPOINT: &str = "https://q.us-east-1.amazonaws.com";
 const KIRO_ACCOUNT_STATUS_NORMAL: &str = "normal";
 const KIRO_ACCOUNT_STATUS_BANNED: &str = "banned";
@@ -40,6 +48,66 @@ struct OAuthCallbackData {
     audience: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingKiroIdcLogin {
+    provider: String,
+    region: String,
+    start_url: String,
+    client_id: String,
+    client_secret: String,
+    client_id_hash: String,
+    client_registration: Value,
+    device_code: String,
+    interval_seconds: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KiroIdcClientRegistrationResponse {
+    client_id: String,
+    client_secret: String,
+    #[serde(default)]
+    client_id_issued_at: Option<i64>,
+    #[serde(default)]
+    client_secret_expires_at: Option<i64>,
+    #[serde(default)]
+    authorization_endpoint: Option<String>,
+    #[serde(default)]
+    token_endpoint: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KiroIdcDeviceAuthorizationResponse {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    #[serde(default)]
+    verification_uri_complete: Option<String>,
+    expires_in: u64,
+    #[serde(default)]
+    interval: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KiroIdcTokenResponse {
+    access_token: String,
+    refresh_token: String,
+    #[serde(default)]
+    id_token: Option<String>,
+    #[serde(default)]
+    token_type: Option<String>,
+    expires_in: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct KiroIdcErrorResponse {
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct PendingOAuthState {
     login_id: String,
@@ -51,6 +119,10 @@ struct PendingOAuthState {
     state_token: String,
     code_verifier: String,
     callback_result: Option<Result<OAuthCallbackData, String>>,
+    #[serde(default)]
+    flow: String,
+    #[serde(default)]
+    idc: Option<PendingKiroIdcLogin>,
 }
 
 lazy_static::lazy_static! {
@@ -109,6 +181,9 @@ fn set_pending_login(state: Option<PendingOAuthState>) {
 }
 
 fn ensure_callback_server_for_state(state: &PendingOAuthState) {
+    if state.flow == "idc" {
+        return;
+    }
     if state.expires_at <= now_timestamp() {
         set_pending_login(None);
         return;
@@ -680,6 +755,40 @@ fn resolve_idc_client_secret(auth_token: &Value) -> Option<String> {
         ],
     )
     .and_then(|value| normalize_non_empty(Some(value.as_str())))
+}
+
+fn resolve_idc_client_credentials(
+    auth_token: &Value,
+    account: &KiroAccount,
+    client_registration: Option<&Value>,
+) -> Result<(String, String), String> {
+    let client_id = resolve_idc_client_id(auth_token, account)
+        .or_else(|| {
+            pick_string(client_registration, &[&["clientId"]])
+                .and_then(|value| normalize_non_empty(Some(value.as_str())))
+        })
+        .ok_or_else(|| "缺少 client_id，无法执行 AWS IAM Identity Center 刷新".to_string())?;
+    let client_secret = resolve_idc_client_secret(auth_token)
+        .or_else(|| {
+            pick_string(client_registration, &[&["clientSecret"]])
+                .and_then(|value| normalize_non_empty(Some(value.as_str())))
+        })
+        .ok_or_else(|| "缺少 client_secret，无法执行 AWS IAM Identity Center 刷新".to_string())?;
+    Ok((client_id, client_secret))
+}
+
+fn resolve_idc_client_credentials_from_local_cache(
+    auth_token: &Value,
+    account: &KiroAccount,
+) -> Result<(String, String), String> {
+    if resolve_idc_client_id(auth_token, account).is_some()
+        && resolve_idc_client_secret(auth_token).is_some()
+    {
+        return resolve_idc_client_credentials(auth_token, account, None);
+    }
+
+    let client_registration = kiro_account::read_local_idc_client_registration(auth_token)?;
+    resolve_idc_client_credentials(auth_token, account, client_registration.as_ref())
 }
 
 fn should_prefer_idc_refresh(auth_token: &Value, account: &KiroAccount) -> bool {
@@ -1550,10 +1659,8 @@ async fn refresh_token_via_idc_oidc(
 ) -> Result<Value, String> {
     let region = resolve_idc_region(auth_token, account)
         .ok_or_else(|| "缺少 idc_region，无法执行 AWS IAM Identity Center 刷新".to_string())?;
-    let client_id = resolve_idc_client_id(auth_token, account)
-        .ok_or_else(|| "缺少 client_id，无法执行 AWS IAM Identity Center 刷新".to_string())?;
-    let client_secret = resolve_idc_client_secret(auth_token)
-        .ok_or_else(|| "缺少 client_secret，无法执行 AWS IAM Identity Center 刷新".to_string())?;
+    let (client_id, client_secret) =
+        resolve_idc_client_credentials_from_local_cache(auth_token, account)?;
 
     let endpoint = KIRO_AWS_OIDC_TOKEN_ENDPOINT_FMT.replace("{region}", region.as_str());
     let response = reqwest::Client::new()
@@ -2179,11 +2286,201 @@ pub async fn refresh_payload_for_account(
     Err("账号缺少 refresh_token，无法刷新 Kiro 登录态".to_string())
 }
 
-pub async fn start_login() -> Result<KiroOAuthStartResponse, String> {
+fn normalize_idc_region(raw: Option<&str>) -> Result<String, String> {
+    let region = raw
+        .and_then(|value| normalize_non_empty(Some(value)))
+        .unwrap_or_else(|| "us-east-1".to_string());
+    if region.len() > 32
+        || !region
+            .chars()
+            .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == '-')
+        || !region.contains('-')
+    {
+        return Err("AWS Region 格式无效".to_string());
+    }
+    Ok(region)
+}
+
+fn normalize_idc_start_url(method: &str, raw: Option<&str>) -> Result<String, String> {
+    if method.eq_ignore_ascii_case("builderid") {
+        return Ok(KIRO_IDC_BUILDER_ID_START_URL.to_string());
+    }
+
+    let value = raw
+        .and_then(|input| normalize_non_empty(Some(input)))
+        .ok_or_else(|| "Enterprise 登录需要填写 IAM Identity Center Start URL".to_string())?;
+    let parsed =
+        Url::parse(&value).map_err(|_| "IAM Identity Center Start URL 无效".to_string())?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "IAM Identity Center Start URL 缺少域名".to_string())?;
+    if parsed.scheme() != "https" || !host.ends_with(".awsapps.com") {
+        return Err("IAM Identity Center Start URL 必须是 https://*.awsapps.com 地址".to_string());
+    }
+    Ok(value)
+}
+
+fn compute_idc_client_id_hash(start_url: &str) -> String {
+    let digest = Sha1::digest(start_url.as_bytes());
+    digest.iter().map(|value| format!("{value:02x}")).collect()
+}
+
+fn idc_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|error| format!("创建 AWS IAM Identity Center HTTP 客户端失败: {error}"))
+}
+
+async fn start_idc_login(
+    options: KiroOAuthLoginStartOptions,
+) -> Result<KiroOAuthStartResponse, String> {
+    let method = options
+        .method
+        .as_deref()
+        .unwrap_or("builderId")
+        .trim()
+        .to_ascii_lowercase();
+    let provider = match method.as_str() {
+        "builderid" | "builder_id" | "awsidc" => "BuilderId",
+        "enterprise" | "internal" | "external_idp" => "Enterprise",
+        _ => return Err("不支持的 Kiro IAM Identity Center 登录方式".to_string()),
+    };
+    let region = normalize_idc_region(options.region.as_deref())?;
+    let start_url = normalize_idc_start_url(&method, options.start_url.as_deref())?;
+    let client_id_hash = compute_idc_client_id_hash(&start_url);
+    let client = idc_http_client()?;
+
+    let register_endpoint = KIRO_AWS_OIDC_CLIENT_REGISTER_ENDPOINT_FMT.replace("{region}", &region);
+    let register_response = client
+        .post(register_endpoint)
+        .header("Content-Type", "application/json")
+        .json(&json!({
+            "clientName": "Cockpit Tools Kiro",
+            "clientType": "public",
+            "scopes": [
+                "codewhisperer:completions",
+                "codewhisperer:analysis",
+                "codewhisperer:conversations",
+                "codewhisperer:transformations",
+                "codewhisperer:taskassist"
+            ],
+            "grantTypes": ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
+            "issuerUrl": start_url.clone()
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("注册 AWS OIDC 客户端失败: {error}"))?;
+    let register_status = register_response.status();
+    let register_body = register_response
+        .text()
+        .await
+        .map_err(|error| format!("读取 AWS OIDC 客户端注册响应失败: {error}"))?;
+    if !register_status.is_success() {
+        return Err(format!(
+            "注册 AWS OIDC 客户端失败: status={}, body_len={}",
+            register_status,
+            register_body.len()
+        ));
+    }
+    let registration: KiroIdcClientRegistrationResponse = serde_json::from_str(&register_body)
+        .map_err(|error| format!("解析 AWS OIDC 客户端注册响应失败: {error}"))?;
+    let client_registration = serde_json::to_value(&registration)
+        .map_err(|error| format!("保存 AWS OIDC 客户端注册信息失败: {error}"))?;
+
+    let device_endpoint = KIRO_AWS_OIDC_DEVICE_AUTH_ENDPOINT_FMT.replace("{region}", &region);
+    let device_response = client
+        .post(device_endpoint)
+        .header("Content-Type", "application/json")
+        .json(&json!({
+            "clientId": registration.client_id.clone(),
+            "clientSecret": registration.client_secret.clone(),
+            "startUrl": start_url.clone()
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("发起 AWS IAM Identity Center 设备授权失败: {error}"))?;
+    let device_status = device_response.status();
+    let device_body = device_response
+        .text()
+        .await
+        .map_err(|error| format!("读取 AWS 设备授权响应失败: {error}"))?;
+    if !device_status.is_success() {
+        return Err(format!(
+            "发起 AWS IAM Identity Center 设备授权失败: status={}, body_len={}",
+            device_status,
+            device_body.len()
+        ));
+    }
+    let device: KiroIdcDeviceAuthorizationResponse = serde_json::from_str(&device_body)
+        .map_err(|error| format!("解析 AWS 设备授权响应失败: {error}"))?;
+    if device.device_code.trim().is_empty() || device.user_code.trim().is_empty() {
+        return Err("AWS 设备授权响应缺少 device_code 或 user_code".to_string());
+    }
+
+    let expires_in = device.expires_in.max(1);
+    let interval_seconds = device.interval.unwrap_or(5).max(1);
+    let login_id = generate_token();
+    let verification_uri_complete = device
+        .verification_uri_complete
+        .clone()
+        .unwrap_or_else(|| device.verification_uri.clone());
+    let pending = PendingOAuthState {
+        login_id: login_id.clone(),
+        expires_at: now_timestamp() + expires_in as i64,
+        verification_uri: device.verification_uri.clone(),
+        verification_uri_complete: verification_uri_complete.clone(),
+        callback_url: String::new(),
+        callback_port: 0,
+        state_token: String::new(),
+        code_verifier: String::new(),
+        callback_result: None,
+        flow: "idc".to_string(),
+        idc: Some(PendingKiroIdcLogin {
+            provider: provider.to_string(),
+            region,
+            start_url,
+            client_id: registration.client_id,
+            client_secret: registration.client_secret,
+            client_id_hash,
+            client_registration,
+            device_code: device.device_code,
+            interval_seconds,
+        }),
+    };
+    set_pending_login(Some(pending));
+
+    Ok(KiroOAuthStartResponse {
+        login_id,
+        user_code: device.user_code,
+        verification_uri: device.verification_uri,
+        verification_uri_complete: Some(verification_uri_complete),
+        expires_in,
+        interval_seconds,
+        callback_url: None,
+    })
+}
+
+pub async fn start_login(
+    options: Option<KiroOAuthLoginStartOptions>,
+) -> Result<KiroOAuthStartResponse, String> {
+    if let Some(options) = options {
+        if options
+            .method
+            .as_deref()
+            .map(|value| !value.eq_ignore_ascii_case("social"))
+            .unwrap_or(false)
+        {
+            return start_idc_login(options).await;
+        }
+    }
     hydrate_pending_login_if_missing();
     if let Ok(guard) = PENDING_OAUTH_STATE.lock() {
         if let Some(state) = guard.as_ref() {
-            if state.expires_at > now_timestamp() && state.callback_result.is_none() {
+            if state.flow == "social"
+                && state.expires_at > now_timestamp()
+                && state.callback_result.is_none()
+            {
                 ensure_callback_server_for_state(state);
                 return Ok(KiroOAuthStartResponse {
                     login_id: state.login_id.clone(),
@@ -2221,6 +2518,8 @@ pub async fn start_login() -> Result<KiroOAuthStartResponse, String> {
         state_token: state_token.clone(),
         code_verifier,
         callback_result: None,
+        flow: "social".to_string(),
+        idc: None,
     };
 
     set_pending_login(Some(pending.clone()));
@@ -2264,6 +2563,126 @@ pub async fn start_login() -> Result<KiroOAuthStartResponse, String> {
     })
 }
 
+fn pending_login_is_active(login_id: &str) -> bool {
+    PENDING_OAUTH_STATE
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|state| state.login_id == login_id))
+        .unwrap_or(false)
+}
+
+async fn complete_idc_login(
+    login_id: &str,
+    state: &PendingOAuthState,
+) -> Result<KiroOAuthCompletePayload, String> {
+    let idc = state
+        .idc
+        .clone()
+        .ok_or_else(|| "IAM Identity Center 登录状态缺少设备授权信息".to_string())?;
+    let endpoint = KIRO_AWS_OIDC_TOKEN_ENDPOINT_FMT.replace("{region}", &idc.region);
+    let client = idc_http_client()?;
+    let mut interval_seconds = idc.interval_seconds.max(1);
+
+    loop {
+        if !pending_login_is_active(login_id) {
+            return Err("IAM Identity Center 登录已取消".to_string());
+        }
+        if state.expires_at <= now_timestamp() {
+            let _ = cancel_login(Some(login_id));
+            return Err("IAM Identity Center 设备授权已过期，请重新发起登录".to_string());
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(interval_seconds)).await;
+        if !pending_login_is_active(login_id) {
+            return Err("IAM Identity Center 登录已取消".to_string());
+        }
+
+        let response = client
+            .post(endpoint.as_str())
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .form(&[
+                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                ("device_code", idc.device_code.as_str()),
+                ("client_id", idc.client_id.as_str()),
+                ("client_secret", idc.client_secret.as_str()),
+            ])
+            .send()
+            .await
+            .map_err(|error| format!("轮询 AWS IAM Identity Center Token 失败: {error}"))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|error| format!("读取 AWS IAM Identity Center Token 响应失败: {error}"))?;
+
+        if status.is_success() {
+            let token: KiroIdcTokenResponse = serde_json::from_str(&body)
+                .map_err(|error| format!("解析 AWS IAM Identity Center Token 响应失败: {error}"))?;
+            let expires_at = now_timestamp() + token.expires_in.max(1) as i64;
+            let mut auth_token = json!({
+                "accessToken": token.access_token,
+                "refreshToken": token.refresh_token,
+                "expiresIn": token.expires_in,
+                "expiresAt": expires_at,
+                "authMethod": "IdC",
+                "provider": idc.provider.clone(),
+                "loginProvider": idc.provider.clone(),
+                "idc_region": idc.region.clone(),
+                "idcRegion": idc.region.clone(),
+                "region": idc.region.clone(),
+                "issuer_url": idc.start_url.clone(),
+                "issuerUrl": idc.start_url.clone(),
+                "clientId": idc.client_id.clone(),
+                "clientIdHash": idc.client_id_hash.clone(),
+                "clientRegistration": idc.client_registration.clone(),
+            });
+            if let Some(id_token) = token.id_token {
+                auth_token["idToken"] = Value::String(id_token);
+            }
+            if let Some(token_type) = token.token_type {
+                auth_token["tokenType"] = Value::String(token_type);
+            }
+
+            let payload = build_payload_from_snapshot(auth_token, None, None)?;
+            let payload = enrich_payload_with_runtime_usage(payload).await;
+            let _ = cancel_login(Some(login_id));
+            return Ok(payload);
+        }
+
+        let error =
+            serde_json::from_str::<KiroIdcErrorResponse>(&body).unwrap_or(KiroIdcErrorResponse {
+                error: None,
+                error_description: None,
+            });
+        let error_code = error
+            .error
+            .unwrap_or_else(|| format!("http_{}", status.as_u16()));
+        let description = error.error_description.unwrap_or_default();
+        match error_code.as_str() {
+            "authorization_pending" => continue,
+            "slow_down" => {
+                interval_seconds = interval_seconds.saturating_add(5);
+            }
+            "expired_token" => {
+                let _ = cancel_login(Some(login_id));
+                return Err("IAM Identity Center 设备授权已过期，请重新发起登录".to_string());
+            }
+            "access_denied" => {
+                let _ = cancel_login(Some(login_id));
+                return Err("IAM Identity Center 登录被用户拒绝".to_string());
+            }
+            _ => {
+                let _ = cancel_login(Some(login_id));
+                return Err(if description.trim().is_empty() {
+                    format!("AWS IAM Identity Center 登录失败: {error_code}")
+                } else {
+                    format!("AWS IAM Identity Center 登录失败: {error_code} ({description})")
+                });
+            }
+        }
+    }
+}
+
 pub async fn complete_login(login_id: &str) -> Result<KiroOAuthCompletePayload, String> {
     hydrate_pending_login_if_missing();
     loop {
@@ -2281,6 +2700,10 @@ pub async fn complete_login(login_id: &str) -> Result<KiroOAuthCompletePayload, 
         if state.expires_at <= now_timestamp() {
             let _ = cancel_login(Some(login_id));
             return Err("等待 Kiro 登录超时，请重新发起授权".to_string());
+        }
+
+        if state.flow == "idc" {
+            return complete_idc_login(login_id, &state).await;
         }
 
         if let Some(result) = state.callback_result.clone() {
@@ -2562,6 +2985,111 @@ mod tests {
         assert!(
             chrono::DateTime::parse_from_rfc3339(expires_at).is_ok(),
             "expiresAt should be valid rfc3339"
+        );
+    }
+
+    #[test]
+    fn idc_login_options_use_official_builder_id_defaults() {
+        let method = "builderid";
+        assert_eq!(
+            normalize_idc_start_url(method, None).expect("builder id start url"),
+            KIRO_IDC_BUILDER_ID_START_URL
+        );
+        assert_eq!(
+            normalize_idc_region(None).expect("default region"),
+            "us-east-1"
+        );
+        assert_eq!(
+            compute_idc_client_id_hash(KIRO_IDC_BUILDER_ID_START_URL),
+            "cc18142e2bfa693e309f59d910dcef90c3c47767"
+        );
+    }
+
+    #[test]
+    fn enterprise_start_url_rejects_non_awsapps_hosts() {
+        assert!(
+            normalize_idc_start_url("enterprise", Some("http://login.example.com/start")).is_err()
+        );
+        assert!(
+            normalize_idc_start_url("enterprise", Some("https://tenant.awsapps.com/start")).is_ok()
+        );
+    }
+
+    #[test]
+    fn idc_snapshot_preserves_registration_context_for_refresh_and_switch() {
+        let payload = build_payload_from_snapshot(
+            json!({
+                "accessToken": "access",
+                "refreshToken": "refresh",
+                "expiresIn": 3600,
+                "authMethod": "IdC",
+                "provider": "Enterprise",
+                "idcRegion": "us-east-1",
+                "issuerUrl": "https://tenant.awsapps.com/start",
+                "clientId": "client-id",
+                "clientIdHash": "cc18142e2bfa693e309f59d910dcef90c3c47767",
+                "clientRegistration": {
+                    "clientId": "client-id",
+                    "clientSecret": "client-secret"
+                }
+            }),
+            None,
+            None,
+        )
+        .expect("idc snapshot should parse");
+
+        assert_eq!(payload.login_provider.as_deref(), Some("Enterprise"));
+        assert_eq!(payload.idc_region.as_deref(), Some("us-east-1"));
+        assert_eq!(payload.client_id.as_deref(), Some("client-id"));
+        assert_eq!(
+            payload
+                .kiro_auth_token_raw
+                .as_ref()
+                .and_then(|value| value.get("clientRegistration"))
+                .and_then(|value| value.get("clientSecret"))
+                .and_then(Value::as_str),
+            Some("client-secret")
+        );
+    }
+
+    #[test]
+    fn idc_client_credentials_preserve_inline_and_saved_account_precedence() {
+        let mut account: KiroAccount = serde_json::from_value(json!({
+            "id": "kiro_test",
+            "email": "tester@example.com",
+            "access_token": "access",
+            "created_at": 0,
+            "last_used": 0
+        }))
+        .expect("build test account");
+        account.client_id = Some("saved-client".to_string());
+        let registration = json!({
+            "clientId": "cache-client",
+            "clientSecret": "cache-secret"
+        });
+
+        let inline_auth = json!({
+            "clientId": "inline-client",
+            "clientSecret": "inline-secret",
+            "clientIdHash": "../ignored-because-inline-is-complete"
+        });
+        let inline_credentials =
+            resolve_idc_client_credentials_from_local_cache(&inline_auth, &account)
+                .expect("resolve inline credentials");
+        assert_eq!(
+            inline_credentials,
+            ("inline-client".to_string(), "inline-secret".to_string())
+        );
+
+        let hash_only_auth = json!({
+            "clientIdHash": "eb04fe0de39241e4fa17bec175f7540138ad1bd8"
+        });
+        let saved_credentials =
+            resolve_idc_client_credentials(&hash_only_auth, &account, Some(&registration))
+                .expect("resolve saved and cached credentials");
+        assert_eq!(
+            saved_credentials,
+            ("saved-client".to_string(), "cache-secret".to_string())
         );
     }
 

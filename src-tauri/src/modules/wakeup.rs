@@ -756,11 +756,12 @@ async fn post_gateway_json(
         .unwrap_or_default();
     if !status.is_success() {
         crate::modules::logger::log_error(&format!(
-            "[Wakeup] 网关 {} 返回错误: url={}, status={}, body_len={}",
+            "[Wakeup] 网关 {} 返回错误: url={}, status={}, body_len={}, body={}",
             op_name,
             url,
             status,
-            summarize_body_len(&text)
+            summarize_body_len(&text),
+            truncate_log_text(&text, 512)
         ));
         return Err(format!(
             "网关 {} 返回错误: status={}, body_len={}",
@@ -1929,7 +1930,10 @@ fn extract_agent_model_sorts(
         .or(response.agent_model_sorts.as_ref())
 }
 
-fn extract_ordered_model_ids(response: &AvailableModelsResponse) -> Vec<String> {
+fn extract_ordered_model_ids(
+    response: &AvailableModelsResponse,
+    entries: &HashMap<String, AvailableModelMeta>,
+) -> Vec<String> {
     let mut ids: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
@@ -1943,7 +1947,7 @@ fn extract_ordered_model_ids(response: &AvailableModelsResponse) -> Vec<String> 
                             if trimmed.is_empty() {
                                 continue;
                             }
-                            if seen.insert(trimmed.to_string()) {
+                            if entries.contains_key(trimmed) && seen.insert(trimmed.to_string()) {
                                 ids.push(trimmed.to_string());
                             }
                         }
@@ -1952,6 +1956,13 @@ fn extract_ordered_model_ids(response: &AvailableModelsResponse) -> Vec<String> 
             }
         }
     }
+
+    let mut remaining_ids: Vec<&String> = entries
+        .keys()
+        .filter(|id| !id.trim().is_empty() && !seen.contains(id.as_str()))
+        .collect();
+    remaining_ids.sort_unstable();
+    ids.extend(remaining_ids.into_iter().cloned());
 
     ids
 }
@@ -1972,7 +1983,7 @@ fn build_models_from_available_models_response(
 ) -> Vec<AvailableModel> {
     let mut models = Vec::new();
     if let Some(entries) = extract_available_models_map(response) {
-        let ordered_ids = extract_ordered_model_ids(response);
+        let ordered_ids = extract_ordered_model_ids(response, entries);
         for id in ordered_ids {
             if let Some(meta) = entries.get(&id) {
                 models.push(AvailableModel {
@@ -2184,4 +2195,84 @@ pub async fn fetch_available_models() -> Result<Vec<AvailableModel>, String> {
     Err(last_error.unwrap_or_else(|| {
         "获取模型列表失败：无异常标识账号均不可用，且本地模型列表为空".to_string()
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_available_models(value: serde_json::Value) -> AvailableModelsResponse {
+        serde_json::from_value(value).expect("available-model response should deserialize")
+    }
+
+    fn model_ids(response: &AvailableModelsResponse) -> Vec<String> {
+        build_models_from_available_models_response(response)
+            .into_iter()
+            .map(|model| model.id)
+            .collect()
+    }
+
+    #[test]
+    fn available_models_keep_declared_order_and_append_unsorted_models() {
+        let response = parse_available_models(json!({
+            "payload": {
+                "agentModelSorts": [
+                    {
+                        "groups": [
+                            {
+                                "modelIds": [
+                                    "sorted-b",
+                                    "missing-model",
+                                    " sorted-a ",
+                                    "sorted-b",
+                                    "",
+                                    "   "
+                                ]
+                            },
+                            {},
+                            { "modelIds": ["sorted-c"] }
+                        ]
+                    },
+                    {}
+                ],
+                "models": {
+                    "sorted-a": { "displayName": "Sorted A" },
+                    "sorted-b": { "displayName": "Sorted B" },
+                    "sorted-c": { "displayName": "Sorted C" },
+                    "gemini-3.5-flash": { "displayName": "Gemini 3.5 Flash" },
+                    "alpha-unsorted": {},
+                    "": { "displayName": "Empty" },
+                    "   ": { "displayName": "Whitespace" }
+                }
+            }
+        }));
+
+        assert_eq!(
+            model_ids(&response),
+            [
+                "sorted-b",
+                "sorted-a",
+                "sorted-c",
+                "alpha-unsorted",
+                "gemini-3.5-flash"
+            ]
+        );
+    }
+
+    #[test]
+    fn available_models_without_valid_sort_metadata_have_stable_order() {
+        let response = parse_available_models(json!({
+            "agentModelSorts": [
+                { "groups": null },
+                { "groups": [{ "modelIds": null }] }
+            ],
+            "models": {
+                "zeta": {},
+                "beta": {},
+                "alpha": {}
+            }
+        }));
+
+        assert_eq!(model_ids(&response), ["alpha", "beta", "zeta"]);
+    }
 }

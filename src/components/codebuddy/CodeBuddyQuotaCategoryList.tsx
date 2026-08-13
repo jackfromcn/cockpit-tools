@@ -23,11 +23,6 @@ const CATEGORY_COLORS: Record<string, string> = {
   other: '#6b7280',
 };
 
-function formatQuotaNumber(value: number): string {
-  if (!Number.isFinite(value)) return '0';
-  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(Math.max(0, value));
-}
-
 function getQuotaClass(remainPercent: number | null): string {
   if (remainPercent == null || !Number.isFinite(remainPercent)) return 'high';
   if (remainPercent <= 10) return 'critical';
@@ -36,7 +31,7 @@ function getQuotaClass(remainPercent: number | null): string {
   return 'high';
 }
 
-export function CodeBuddyQuotaCategoryList({ groups, formatDateTime }: CodeBuddyQuotaCategoryListProps) {
+export function CodeBuddyQuotaCategoryList({ groups, formatNumber, formatDateTime }: CodeBuddyQuotaCategoryListProps) {
   const { t } = useTranslation();
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
 
@@ -58,7 +53,7 @@ export function CodeBuddyQuotaCategoryList({ groups, formatDateTime }: CodeBuddy
   if (visibleGroups.length === 0) {
     return (
       <div className="quota-category-empty">
-        {t('codebuddy.quotaCategory.empty', '暂无配额数据')}
+        {t('common.shared.quota.noData', '暂无配额数据')}
       </div>
     );
   }
@@ -88,7 +83,7 @@ export function CodeBuddyQuotaCategoryList({ groups, formatDateTime }: CodeBuddy
               </div>
               <div className="quota-category-stats">
                 <span className="quota-category-value">
-                  {formatQuotaNumber(group.used)} / {formatQuotaNumber(group.total)}
+                  {formatNumber(group.used)} / {formatNumber(group.total)}
                 </span>
                 {hasDetails && (
                   <span className="quota-category-expand-icon">
@@ -113,6 +108,7 @@ export function CodeBuddyQuotaCategoryList({ groups, formatDateTime }: CodeBuddy
                   <QuotaItemDetail
                     key={`${group.key}-${idx}`}
                     item={item}
+                    formatNumber={formatNumber}
                     formatDateTime={formatDateTime}
                   />
                 ))}
@@ -127,29 +123,30 @@ export function CodeBuddyQuotaCategoryList({ groups, formatDateTime }: CodeBuddy
 
 interface QuotaItemDetailProps {
   item: CodebuddyOfficialQuotaResource;
+  formatNumber: (value: number) => string;
   formatDateTime: (timeMs: number | null) => string;
 }
 
-function QuotaItemDetail({ item, formatDateTime }: QuotaItemDetailProps) {
+function QuotaItemDetail({ item, formatNumber, formatDateTime }: QuotaItemDetailProps) {
   const { t } = useTranslation();
   const remainPercent = item.remainPercent ?? (item.total > 0 ? (item.remain / item.total) * 100 : null);
 
   // 时间显示逻辑
   let timeText = '';
   if (item.expireAt) {
-    timeText = t('codebuddy.quotaQuery.expireAt', '到期时间：{{time}}', { time: formatDateTime(item.expireAt) });
+    timeText = t('common.shared.quota.expiresAt', '到期时间：{{time}}', { time: formatDateTime(item.expireAt) });
   } else if (item.refreshAt) {
-    timeText = t('codebuddy.quotaQuery.updatedAt', '下次刷新时间：{{time}}', { time: formatDateTime(item.refreshAt) });
+    timeText = t('common.shared.quota.resetAt', '重置：{{time}}', { time: formatDateTime(item.refreshAt) });
   }
 
   return (
     <div className={`quota-category-detail-item ${getQuotaClass(remainPercent)}`}>
       <div className="quota-detail-header">
         <span className="quota-detail-name" title={item.packageName || ''}>
-          {item.packageName || t('codebuddy.quotaQuery.packageUnknown', '套餐信息未知')}
+          {item.packageName || t('common.shared.quota.noData', '暂无配额数据')}
         </span>
         <span className={`quota-detail-value ${getQuotaClass(remainPercent)}`}>
-          {formatQuotaNumber(item.used)} / {formatQuotaNumber(item.total)}
+          {formatNumber(item.used)} / {formatNumber(item.total)}
         </span>
       </div>
       {timeText && (

@@ -40,8 +40,14 @@ export function AccountTagFilterDropdown({
       if (rootRef.current?.contains(target)) return
       setOpen(false)
     }
-    document.addEventListener('mousedown', handlePointerDown)
-    return () => document.removeEventListener('mousedown', handlePointerDown)
+    // 延迟绑定，避免与打开触发器的同一次点击立刻关闭
+    const timer = window.setTimeout(() => {
+      document.addEventListener('mousedown', handlePointerDown)
+    }, 0)
+    return () => {
+      window.clearTimeout(timer)
+      document.removeEventListener('mousedown', handlePointerDown)
+    }
   }, [open])
 
   return (

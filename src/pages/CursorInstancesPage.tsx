@@ -63,7 +63,7 @@ export function CursorInstancesContent({
       unsupportedTitleKey="common.shared.instances.unsupported.title"
       unsupportedTitleDefault="暂不支持当前系统"
       unsupportedDescKey="cursor.instances.unsupported.descPlatform"
-      unsupportedDescDefault="Cursor 多开实例仅支持 macOS、Windows 和 Linux。"
+      unsupportedDescDefault="Cursor 应用多开仅支持 macOS、Windows 和 Linux。"
     />
   );
 }

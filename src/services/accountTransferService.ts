@@ -1,19 +1,33 @@
 import { ALL_PLATFORM_IDS, PlatformId } from '../types/platform';
 import * as accountService from './accountService';
+import * as claudeService from './claudeService';
 import * as codexService from './codexService';
 import * as githubCopilotService from './githubCopilotService';
 import * as windsurfService from './windsurfService';
 import * as kiroService from './kiroService';
 import * as cursorService from './cursorService';
-import * as geminiService from './geminiService';
 import * as codebuddyService from './codebuddyService';
 import * as codebuddyCnService from './codebuddyCnService';
 import * as qoderService from './qoderService';
+import * as zcodeService from './zcodeService';
 import * as traeService from './traeService';
 import * as workbuddyService from './workbuddyService';
 import * as zedService from './zedService';
+import type { ClaudeAccount } from '../types/claude';
 
 type AccountWithId = { id: string };
+
+async function listClaudeManagerTransferAccounts(): Promise<AccountWithId[]> {
+  const accounts = await claudeService.listClaudeAccounts();
+  const seen = new Set<string>();
+  return accounts.filter((account: ClaudeAccount) => {
+    if (!account.id || seen.has(account.id)) {
+      return false;
+    }
+    seen.add(account.id);
+    return true;
+  });
+}
 
 interface TransferAdapter {
   listAccounts: () => Promise<AccountWithId[]>;
@@ -21,7 +35,9 @@ interface TransferAdapter {
   importFromJson: (jsonContent: string) => Promise<unknown[]>;
 }
 
-const PLATFORM_ADAPTERS: Record<PlatformId, TransferAdapter> = {
+// Grok exports are intentionally metadata-only and cannot restore a login, so
+// it is excluded from the generic credential backup/import pipeline.
+const PLATFORM_ADAPTERS: Partial<Record<PlatformId, TransferAdapter>> = {
   antigravity: {
     listAccounts: accountService.listAccounts,
     exportAccounts: accountService.exportAccounts,
@@ -36,6 +52,11 @@ const PLATFORM_ADAPTERS: Record<PlatformId, TransferAdapter> = {
     listAccounts: codexService.listCodexAccounts,
     exportAccounts: codexService.exportCodexAccounts,
     importFromJson: codexService.importCodexFromJson,
+  },
+  claude_manager: {
+    listAccounts: listClaudeManagerTransferAccounts,
+    exportAccounts: claudeService.exportClaudeAccounts,
+    importFromJson: claudeService.importClaudeFromJson,
   },
   zed: {
     listAccounts: zedService.listZedAccounts,
@@ -62,11 +83,6 @@ const PLATFORM_ADAPTERS: Record<PlatformId, TransferAdapter> = {
     exportAccounts: cursorService.exportCursorAccounts,
     importFromJson: cursorService.importCursorFromJson,
   },
-  gemini: {
-    listAccounts: geminiService.listGeminiAccounts,
-    exportAccounts: geminiService.exportGeminiAccounts,
-    importFromJson: geminiService.importGeminiFromJson,
-  },
   codebuddy: {
     listAccounts: codebuddyService.listCodebuddyAccounts,
     exportAccounts: codebuddyService.exportCodebuddyAccounts,
@@ -82,7 +98,27 @@ const PLATFORM_ADAPTERS: Record<PlatformId, TransferAdapter> = {
     exportAccounts: qoderService.exportQoderAccounts,
     importFromJson: qoderService.importQoderFromJson,
   },
+  zcode: {
+    listAccounts: zcodeService.listZcodeAccounts,
+    exportAccounts: zcodeService.exportZcodeAccounts,
+    importFromJson: zcodeService.importZcodeFromJson,
+  },
   trae: {
+    listAccounts: traeService.listTraeAccounts,
+    exportAccounts: traeService.exportTraeAccounts,
+    importFromJson: traeService.importTraeFromJson,
+  },
+  trae_solo: {
+    listAccounts: traeService.listTraeAccounts,
+    exportAccounts: traeService.exportTraeAccounts,
+    importFromJson: traeService.importTraeFromJson,
+  },
+  trae_cn: {
+    listAccounts: traeService.listTraeAccounts,
+    exportAccounts: traeService.exportTraeAccounts,
+    importFromJson: traeService.importTraeFromJson,
+  },
+  trae_solo_cn: {
     listAccounts: traeService.listTraeAccounts,
     exportAccounts: traeService.exportTraeAccounts,
     importFromJson: traeService.importTraeFromJson,
@@ -229,6 +265,12 @@ function estimatePayloadCount(payload: AccountTransferPlatformPayload): number {
 
 async function exportPlatformPayload(platform: PlatformId): Promise<AccountTransferPlatformPayload> {
   const adapter = PLATFORM_ADAPTERS[platform];
+  if (!adapter) {
+    return {
+      account_count: 0,
+      exported_data: [],
+    };
+  }
   const accounts = await adapter.listAccounts();
   const accountIds = normalizeAccountIds(accounts);
 
@@ -250,12 +292,11 @@ async function exportPlatformPayload(platform: PlatformId): Promise<AccountTrans
 }
 
 export async function buildAccountTransferBundle(): Promise<AccountTransferBundle> {
-  const entries = await Promise.all(
-    ALL_PLATFORM_IDS.map(async (platform) => {
-      const payload = await exportPlatformPayload(platform);
-      return [platform, payload] as const;
-    }),
-  );
+  const entries: Array<readonly [PlatformId, AccountTransferPlatformPayload]> = [];
+  for (const platform of ALL_PLATFORM_IDS) {
+    const payload = await exportPlatformPayload(platform);
+    entries.push([platform, payload] as const);
+  }
 
   const platforms = entries.reduce<Record<PlatformId, AccountTransferPlatformPayload>>(
     (acc, [platform, payload]) => {
@@ -364,6 +405,16 @@ export async function importAllAccountsFromTransferJson(
     const data = payload.exported_data;
     const detailIndex = progressDetails.findIndex((item) => item.platform === platform);
     const detail = progressDetails[detailIndex];
+
+    if (!adapter) {
+      progressDetails[detailIndex] = {
+        ...detail,
+        status: 'skipped',
+        imported_count: 0,
+      };
+      emitProgress(null);
+      continue;
+    }
 
     const isEmptyPayload =
       data == null || (Array.isArray(data) && data.length === 0);

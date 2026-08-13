@@ -1,3 +1,5 @@
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -74,13 +76,36 @@ pub fn load_account(account_id: &str) -> Option<WorkbuddyAccount> {
         return None;
     }
     let content = fs::read_to_string(&account_path).ok()?;
-    crate::modules::atomic_write::parse_json_with_auto_restore(&account_path, &content).ok()
+    match crate::modules::secure_account_storage::deserialize_account_file::<WorkbuddyAccount>(
+        &account_path,
+        &content,
+    ) {
+        Ok((account, needs_rotation)) => {
+            if needs_rotation {
+                let account_for_rewrite = account.clone();
+                crate::modules::deferred_account_rewrite::schedule_account_rewrite_if_unchanged(
+                    "workbuddy",
+                    account_for_rewrite.id.clone(),
+                    account_path.clone(),
+                    content.as_bytes(),
+                    move || {
+                        crate::modules::secure_account_storage::serialize_account_file(
+                            "workbuddy",
+                            &account_for_rewrite,
+                        )
+                    },
+                );
+            }
+            Some(account)
+        }
+        Err(_) => None,
+    }
 }
 
 fn save_account_file(account: &WorkbuddyAccount) -> Result<(), String> {
     let path = resolve_account_file_path(account.id.as_str())?;
     let content =
-        serde_json::to_string_pretty(account).map_err(|e| format!("序列化账号失败:{}", e))?;
+        crate::modules::secure_account_storage::serialize_account_file("workbuddy", account)?;
     crate::modules::atomic_write::write_string_atomic(&path, &content)
         .map_err(|e| format!("保存账号失败:{}", e))
 }
@@ -88,7 +113,8 @@ fn save_account_file(account: &WorkbuddyAccount) -> Result<(), String> {
 fn delete_account_file(account_id: &str) -> Result<(), String> {
     let path = resolve_account_file_path(account_id)?;
     if path.exists() {
-        fs::remove_file(path).map_err(|e| format!("删除账号文件失败:{}", e))?;
+        crate::modules::atomic_write::remove_file_locked(&path)
+            .map_err(|e| format!("删除账号文件失败:{}", e))?;
     }
     Ok(())
 }
@@ -517,6 +543,7 @@ fn normalize_account_index(index: &mut WorkbuddyAccountIndex) -> Vec<WorkbuddyAc
 pub fn list_accounts() -> Vec<WorkbuddyAccount> {
     let mut index = load_account_index();
     let had_index_accounts = !index.accounts.is_empty();
+    let index_before_normalize = serde_json::to_vec(&index).ok();
     let accounts = normalize_account_index(&mut index);
     if had_index_accounts && accounts.is_empty() {
         logger::log_warn(
@@ -524,8 +551,14 @@ pub fn list_accounts() -> Vec<WorkbuddyAccount> {
         );
         return accounts;
     }
-    if let Err(err) = save_account_index(&index) {
-        logger::log_warn(&format!("[WorkBuddy Account] 保存账号索引失败:{}", err));
+    let index_changed = index_before_normalize
+        .as_ref()
+        .map(|before| Some(before.as_slice()) != serde_json::to_vec(&index).ok().as_deref())
+        .unwrap_or(true);
+    if index_changed {
+        if let Err(err) = save_account_index(&index) {
+            logger::log_warn(&format!("[WorkBuddy Account] 保存账号索引失败:{}", err));
+        }
     }
     accounts
 }
@@ -533,12 +566,19 @@ pub fn list_accounts() -> Vec<WorkbuddyAccount> {
 pub fn list_accounts_checked() -> Result<Vec<WorkbuddyAccount>, String> {
     let mut index = load_account_index_checked()?;
     let had_index_accounts = !index.accounts.is_empty();
+    let index_before_normalize = serde_json::to_vec(&index).ok();
     let accounts = normalize_account_index(&mut index);
     if had_index_accounts && accounts.is_empty() {
         return Err("WorkBuddy 账号索引中存在账号，但详情文件均无法读取；已保留前端缓存，请从账号备份或本地账号文件恢复。".to_string());
     }
-    if let Err(err) = save_account_index(&index) {
-        logger::log_warn(&format!("[WorkBuddy Account] 保存账号索引失败:{}", err));
+    let index_changed = index_before_normalize
+        .as_ref()
+        .map(|before| Some(before.as_slice()) != serde_json::to_vec(&index).ok().as_deref())
+        .unwrap_or(true);
+    if index_changed {
+        if let Err(err) = save_account_index(&index) {
+            logger::log_warn(&format!("[WorkBuddy Account] 保存账号索引失败:{}", err));
+        }
     }
     Ok(accounts)
 }
@@ -657,6 +697,7 @@ pub fn upsert_account(payload: WorkbuddyOAuthCompletePayload) -> Result<Workbudd
         checkin_rewards: None,
         created_at,
         last_used: now,
+        web_session_enabled: None,
     });
 
     apply_payload(&mut account, payload);
@@ -901,6 +942,7 @@ fn upsert_account_record_from_payload(
         checkin_rewards: None,
         created_at: now,
         last_used: now,
+        web_session_enabled: None,
     };
     upsert_account_record(account)
 }
@@ -1132,6 +1174,26 @@ fn extract_local_workbuddy_token_parts(token: &str) -> Option<(Option<String>, S
         return Some((uid_opt, token_value.to_string()));
     }
     Some((None, trimmed.to_string()))
+}
+
+// 新版 WorkBuddy 本机登录态使用标准 JWT 作为 access token，其 payload 的 `sub`
+// 字段即为客户端账号 uid（与 CodeBuddyExtension/Data/{uid} 目录名一致）。
+// 当 token 前缀/账号字段都无法取出 uid 时，回退到解析 JWT 的 `sub`。
+fn extract_uid_from_jwt(token: &str) -> Option<String> {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let decoded = URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .or_else(|_| base64::engine::general_purpose::STANDARD.decode(parts[1]))
+        .ok()?;
+    let value: Value = serde_json::from_slice(&decoded).ok()?;
+    value
+        .get("sub")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn json_object_string_field(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
@@ -1463,6 +1525,8 @@ pub fn import_payload_from_local() -> Result<Option<WorkbuddyOAuthCompletePayloa
     else {
         return Err("本地 WorkBuddy 登录信息解析失败: access token 无效".to_string());
     };
+    // 回退：新版 JWT token 无法从前缀得到 uid，改从 sub 声明提取。
+    let uid_from_token = uid_from_token.or_else(|| extract_uid_from_jwt(&raw_token));
     let Some(access_token) = normalize_local_workbuddy_token(&normalized_token) else {
         return Err("本地 WorkBuddy 登录信息解析失败: access token 为空".to_string());
     };
@@ -1510,6 +1574,35 @@ pub fn sync_account_to_default_client(account_id: &str) -> Result<(), String> {
 }
 
 pub(crate) fn resolve_current_account_id(accounts: &[WorkbuddyAccount]) -> Option<String> {
+    match import_payload_from_local() {
+        Ok(Some(payload)) => {
+            let incoming_uid = normalize_identity(payload.uid.as_deref());
+            let incoming_email = normalize_email_identity(Some(payload.email.as_str()));
+
+            if let Some(account_id) = accounts
+                .iter()
+                .find(|account| {
+                    let existing_uid = normalize_identity(account.uid.as_deref());
+                    let existing_email = normalize_email_identity(Some(account.email.as_str()));
+                    account_matches_payload_identity(
+                        existing_uid.as_ref(),
+                        existing_email.as_ref(),
+                        incoming_uid.as_ref(),
+                        incoming_email.as_ref(),
+                    )
+                })
+                .map(|account| account.id.clone())
+            {
+                return Some(account_id);
+            }
+        }
+        Ok(None) => {}
+        Err(err) => logger::log_warn(&format!(
+            "[WorkBuddy Account] 读取默认客户端当前账号失败，回退内部当前账号: {}",
+            err
+        )),
+    }
+
     crate::modules::provider_current_state::resolve_existing_current_account_id(
         "workbuddy",
         accounts.iter().map(|account| account.id.as_str()),

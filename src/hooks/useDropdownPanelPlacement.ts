@@ -20,24 +20,33 @@ export function useDropdownPanelPlacement(
       return;
     }
 
-    const updatePanelPosition = () => {
+    const updatePanelPosition = (event?: Event) => {
       const rootElement = rootRef.current;
       const panelElement = panelRef.current;
       if (!rootElement || !panelElement) return;
+      const eventTarget = event?.target;
+      if (
+        event?.type === 'scroll'
+        && eventTarget instanceof Node
+        && panelElement.contains(eventTarget)
+      ) {
+        return;
+      }
 
       const rootRect = rootElement.getBoundingClientRect();
-      const panelHeight = panelElement.offsetHeight;
+      const panelHeight = panelElement.scrollHeight || panelElement.offsetHeight;
       const availableBelow = window.innerHeight - rootRect.bottom - PANEL_GAP - VIEWPORT_MARGIN;
       const availableAbove = rootRect.top - PANEL_GAP - VIEWPORT_MARGIN;
       const nextPlacement =
         availableBelow < panelHeight && availableAbove > availableBelow ? 'top' : 'bottom';
       const availableSpace = nextPlacement === 'top' ? availableAbove : availableBelow;
+      const nextMaxHeight = Math.max(48, Math.floor(availableSpace - PANEL_PADDING_BUFFER));
 
-      setPanelPlacement(nextPlacement);
-      setPanelMaxHeight(Math.max(48, Math.floor(availableSpace - PANEL_PADDING_BUFFER)));
+      setPanelPlacement((prev) => (prev === nextPlacement ? prev : nextPlacement));
+      setPanelMaxHeight((prev) => (prev === nextMaxHeight ? prev : nextMaxHeight));
     };
 
-    const frameId = window.requestAnimationFrame(updatePanelPosition);
+    const frameId = window.requestAnimationFrame(() => updatePanelPosition());
     window.addEventListener('resize', updatePanelPosition);
     window.addEventListener('scroll', updatePanelPosition, true);
 

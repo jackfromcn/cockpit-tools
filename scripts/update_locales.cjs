@@ -76,7 +76,12 @@ const translations = {
     error_fileCorrupted_errorInfo: "Error Details",
     error_fileCorrupted_filePath: "File Location",
     error_fileCorrupted_helpText: "Please open the folder to repair manually or delete the file, then restart the application.",
-    error_fileCorrupted_openFolder: "Open Folder"
+    error_fileCorrupted_openFolder: "Open Folder",
+    settings_webdav_retentionTitle: "Remote Retention Days",
+    settings_webdav_retentionDesc: "Backups older than this on the cloud will be removed during the next sync.",
+    settings_webdav_retentionUnit: "days",
+    settings_webdav_collapseAll: "Collapse remote backups",
+    settings_webdav_expandAll: "Expand all remote backups ({{count}} more)"
   },
   es: {
     nav_instances: "Multi-Instancia",
@@ -259,14 +264,14 @@ const translations = {
     error_fileCorrupted_openFolder: "Mở thư mục"
   },
   "zh-tw": {
-    nav_instances: "多開實例",
+    nav_instances: "應用多開",
     wakeup_subtitle: "管理喚醒任務，支援獨立啟停與統一開關。",
     codex_subtitle: "即時監控所有Codex帳號的模型配額狀態。",
     codex_instances_subtitle: "多實例獨立配置，多帳號並行運行。",
-    codex_instances_comingSoon: "多開實例功能即將上線",
+    codex_instances_comingSoon: "應用多開功能即將上線",
     codex_instances_comingSoonDesc: "支援以不同帳號同時運行多個 Codex.app 實例，敬請期待。",
     codex_instances_unsupported_title: "暫不支援目前系統",
-    codex_instances_unsupported_desc: "Codex 多開實例僅支援 macOS，請在 macOS 上使用。",
+    codex_instances_unsupported_desc: "Codex 應用多開僅支援 macOS，請在 macOS 上使用。",
     codex_instances_quota_hourly: "5小時",
     codex_instances_quota_weekly: "週",
     error_fileCorrupted_title: "檔案讀取失敗",
@@ -274,7 +279,12 @@ const translations = {
     error_fileCorrupted_errorInfo: "錯誤資訊",
     error_fileCorrupted_filePath: "檔案位置",
     error_fileCorrupted_helpText: "請開啟資料夾手動修復或刪除該檔案，然後重新啟動應用程式。",
-    error_fileCorrupted_openFolder: "開啟資料夾"
+    error_fileCorrupted_openFolder: "開啟資料夾",
+    settings_webdav_retentionTitle: "雲端保留天數",
+    settings_webdav_retentionDesc: "雲端超過天數的備份會在下次同步時自動清理。",
+    settings_webdav_retentionUnit: "天",
+    settings_webdav_collapseAll: "收起遠端備份",
+    settings_webdav_expandAll: "展開全部遠端備份 (還有 {{count}} 個)"
   }
 };
 
@@ -418,6 +428,13 @@ function updateFile(fileName) {
     if(setKey(content, 'error.fileCorrupted.filePath', actualTrans.error_fileCorrupted_filePath)) modified = true;
     if(setKey(content, 'error.fileCorrupted.helpText', actualTrans.error_fileCorrupted_helpText)) modified = true;
     if(setKey(content, 'error.fileCorrupted.openFolder', actualTrans.error_fileCorrupted_openFolder)) modified = true;
+
+    // WebDAV sync keys
+    if(setKey(content, 'settings.webdav.retentionTitle', actualTrans.settings_webdav_retentionTitle || enTrans.settings_webdav_retentionTitle)) modified = true;
+    if(setKey(content, 'settings.webdav.retentionDesc', actualTrans.settings_webdav_retentionDesc || enTrans.settings_webdav_retentionDesc)) modified = true;
+    if(setKey(content, 'settings.webdav.retentionUnit', actualTrans.settings_webdav_retentionUnit || enTrans.settings_webdav_retentionUnit)) modified = true;
+    if(setKey(content, 'settings.webdav.collapseAll', actualTrans.settings_webdav_collapseAll || enTrans.settings_webdav_collapseAll)) modified = true;
+    if(setKey(content, 'settings.webdav.expandAll', actualTrans.settings_webdav_expandAll || enTrans.settings_webdav_expandAll)) modified = true;
 
     if (modified) {
       fs.writeFileSync(filePath, JSON.stringify(content, null, 2));

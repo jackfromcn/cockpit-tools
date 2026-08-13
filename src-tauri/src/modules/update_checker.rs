@@ -1,5 +1,6 @@
 use crate::modules::logger;
 use serde::{Deserialize, Serialize};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -9,6 +10,12 @@ const LEGACY_PREVIOUS_DEFAULT_CHECK_INTERVAL_HOURS: u64 = 6;
 const PENDING_UPDATE_NOTES_FILE: &str = "pending_update_notes.json";
 const CHANGELOG_MARKDOWN_EN: &str = include_str!("../../../CHANGELOG.md");
 const CHANGELOG_MARKDOWN_ZH: &str = include_str!("../../../CHANGELOG.zh-CN.md");
+
+static UPDATE_SETTINGS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn update_settings_lock() -> &'static Mutex<()> {
+    UPDATE_SETTINGS_LOCK.get_or_init(|| Mutex::new(()))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateSettings {
@@ -347,7 +354,7 @@ pub fn save_pending_update_notes(
 }
 
 /// Load update settings from config file
-pub fn load_update_settings() -> Result<UpdateSettings, String> {
+fn load_update_settings_unlocked() -> Result<UpdateSettings, String> {
     let data_dir = get_data_dir()?;
     let settings_path = data_dir.join("update_settings.json");
 
@@ -393,14 +400,21 @@ pub fn load_update_settings() -> Result<UpdateSettings, String> {
     }
 
     if should_persist {
-        let _ = save_update_settings(&settings);
+        let _ = save_update_settings_unlocked(&settings);
     }
 
     Ok(settings)
 }
 
+pub fn load_update_settings() -> Result<UpdateSettings, String> {
+    let _guard = update_settings_lock()
+        .lock()
+        .map_err(|_| "Update settings lock poisoned".to_string())?;
+    load_update_settings_unlocked()
+}
+
 /// Save update settings to config file
-pub fn save_update_settings(settings: &UpdateSettings) -> Result<(), String> {
+fn save_update_settings_unlocked(settings: &UpdateSettings) -> Result<(), String> {
     let data_dir = ensure_data_dir()?;
 
     let settings_path = data_dir.join("update_settings.json");
@@ -412,27 +426,50 @@ pub fn save_update_settings(settings: &UpdateSettings) -> Result<(), String> {
         .map_err(|e| format!("Failed to write settings file: {}", e))
 }
 
+pub fn save_update_settings(settings: &UpdateSettings) -> Result<(), String> {
+    let _guard = update_settings_lock()
+        .lock()
+        .map_err(|_| "Update settings lock poisoned".to_string())?;
+    save_update_settings_unlocked(settings)
+}
+
+pub fn patch_update_settings<F>(patch: F) -> Result<UpdateSettings, String>
+where
+    F: FnOnce(&mut UpdateSettings),
+{
+    let _guard = update_settings_lock()
+        .lock()
+        .map_err(|_| "Update settings lock poisoned".to_string())?;
+    let mut settings = load_update_settings_unlocked()?;
+    patch(&mut settings);
+    save_update_settings_unlocked(&settings)?;
+    Ok(settings)
+}
+
 /// Update last check time
 pub fn update_last_check_time() -> Result<(), String> {
-    let mut settings = load_update_settings()?;
-    settings.last_check_time = SystemTime::now()
+    let last_check_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    save_update_settings(&settings)
+    patch_update_settings(|settings| settings.last_check_time = last_check_time)?;
+    Ok(())
 }
 
 /// Check if a version jump occurred (app was updated since last run)
 /// Returns Some(VersionJumpInfo) if the current version is higher than the last recorded version
 pub fn check_version_jump() -> Result<Option<VersionJumpInfo>, String> {
-    let mut settings = load_update_settings()?;
+    let _guard = update_settings_lock()
+        .lock()
+        .map_err(|_| "Update settings lock poisoned".to_string())?;
+    let mut settings = load_update_settings_unlocked()?;
     let current = CURRENT_VERSION.to_string();
 
     // First run or same version – just record and return
     if settings.last_run_version.is_empty() || settings.last_run_version == current {
         if settings.last_run_version != current {
             settings.last_run_version = current;
-            save_update_settings(&settings)?;
+            save_update_settings_unlocked(&settings)?;
         }
         return Ok(None);
     }
@@ -442,7 +479,7 @@ pub fn check_version_jump() -> Result<Option<VersionJumpInfo>, String> {
     // Only trigger if current > previous (upgrade, not downgrade)
     if !compare_versions(&current, &previous) {
         settings.last_run_version = current;
-        save_update_settings(&settings)?;
+        save_update_settings_unlocked(&settings)?;
         return Ok(None);
     }
 
@@ -467,7 +504,7 @@ pub fn check_version_jump() -> Result<Option<VersionJumpInfo>, String> {
 
     // Update the stored version
     settings.last_run_version = current.clone();
-    save_update_settings(&settings)?;
+    save_update_settings_unlocked(&settings)?;
 
     logger::log_info(&format!("检测到版本跳跃: {} -> {}", previous, current));
 

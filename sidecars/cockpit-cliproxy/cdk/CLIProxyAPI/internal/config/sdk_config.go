@@ -19,6 +19,13 @@ type SDKConfig struct {
 	//     while keeping /v1/images/generations and /v1/images/edits enabled and preserving image_generation there.
 	DisableImageGeneration DisableImageGenerationMode `yaml:"disable-image-generation" json:"disable-image-generation"`
 
+	// GPTImage2BaseModel sets the base (mainline) model used when proxying GPT Image 2
+	// requests via the hosted image_generation tool (e.g. Codex OAuth /v1/images/*).
+	//
+	// The value must start with "gpt-" (case-insensitive). If empty or invalid, the
+	// default base model ("gpt-5.4-mini") is used.
+	GPTImage2BaseModel string `yaml:"gpt-image-2-base-model,omitempty" json:"gpt-image-2-base-model,omitempty"`
+
 	// EnableGeminiCLIEndpoint controls whether Gemini CLI internal endpoints (/v1internal:*) are enabled.
 	// Default is false for safety; when false, /v1internal:* requests are rejected.
 	EnableGeminiCLIEndpoint bool `yaml:"enable-gemini-cli-endpoint" json:"enable-gemini-cli-endpoint"`
@@ -31,8 +38,18 @@ type SDKConfig struct {
 	// RequestLog enables or disables detailed request logging functionality.
 	RequestLog bool `yaml:"request-log" json:"request-log"`
 
+	// CodexOptimizeMultiAgentV2 mirrors the provider-wide runtime setting for API handlers.
+	CodexOptimizeMultiAgentV2 bool `yaml:"-" json:"-"`
+
 	// APIKeys is a list of keys for authenticating clients to this proxy server.
 	APIKeys []string `yaml:"api-keys" json:"api-keys"`
+
+	// APIKeyAccountIDs optionally limits which auth IDs a client API key may use.
+	APIKeyAccountIDs map[string][]string `yaml:"api-key-account-ids,omitempty" json:"api-key-account-ids,omitempty"`
+
+	// AuthErrorLocalization provides user-facing auth selection messages keyed by locale.
+	// The request Accept-Language is preferred, then DefaultLocale, then English.
+	AuthErrorLocalization AuthErrorLocalizationConfig `yaml:"auth-error-localization,omitempty" json:"auth-error-localization,omitempty"`
 
 	// PassthroughHeaders controls whether upstream response headers are forwarded to downstream clients.
 	// Default is false (disabled).
@@ -46,6 +63,13 @@ type SDKConfig struct {
 	NonStreamKeepAliveInterval int `yaml:"nonstream-keepalive-interval,omitempty" json:"nonstream-keepalive-interval,omitempty"`
 }
 
+// AuthErrorLocalizationConfig contains localized user-facing auth selection errors.
+type AuthErrorLocalizationConfig struct {
+	DefaultLocale   string            `yaml:"default-locale,omitempty" json:"default-locale,omitempty"`
+	AuthUnavailable map[string]string `yaml:"auth-unavailable,omitempty" json:"auth-unavailable,omitempty"`
+	AuthNotFound    map[string]string `yaml:"auth-not-found,omitempty" json:"auth-not-found,omitempty"`
+}
+
 // StreamingConfig holds server streaming behavior configuration.
 type StreamingConfig struct {
 	// KeepAliveSeconds controls how often the server emits SSE heartbeats (": keep-alive\n\n").
@@ -56,6 +80,12 @@ type StreamingConfig struct {
 	// to allow auth rotation / transient recovery.
 	// <= 0 disables bootstrap retries. Default is 0.
 	BootstrapRetries int `yaml:"bootstrap-retries,omitempty" json:"bootstrap-retries,omitempty"`
+
+	// BootstrapRetryBaseDelayMS controls the initial wait before a bootstrap retry.
+	BootstrapRetryBaseDelayMS int `yaml:"bootstrap-retry-base-delay-ms,omitempty" json:"bootstrap-retry-base-delay-ms,omitempty"`
+
+	// BootstrapRetryMaxDelayMS caps the bootstrap retry wait.
+	BootstrapRetryMaxDelayMS int `yaml:"bootstrap-retry-max-delay-ms,omitempty" json:"bootstrap-retry-max-delay-ms,omitempty"`
 
 	// StreamOpenTimeoutMS controls how long the sidecar waits for a text stream to open.
 	StreamOpenTimeoutMS int `yaml:"stream-open-timeout-ms,omitempty" json:"stream-open-timeout-ms,omitempty"`

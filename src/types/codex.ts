@@ -1,4 +1,5 @@
 export type CodexApiProviderMode = "openai_builtin" | "custom";
+export type CodexProviderWireApi = "responses" | "chat_completions";
 
 export interface CodexQuickConfig {
   context_window_1m: boolean;
@@ -24,21 +25,38 @@ export interface CodexAccount {
   api_provider_mode?: CodexApiProviderMode;
   api_provider_id?: string;
   api_provider_name?: string;
+  api_model_catalog?: string[];
+  api_sync_model_catalog_to_codex?: boolean;
+  api_wire_api?: CodexProviderWireApi | null;
+  api_supports_websockets?: boolean;
+  api_supports_vision?: boolean;
+  api_model_vision_support?: Record<string, boolean>;
+  api_vision_routing_model?: string | null;
   bound_oauth_account_id?: string | null;
   user_id?: string;
   plan_type?: string;
   subscription_active_until?: string;
+  subscription_query_last_attempt_at?: number;
+  subscription_query_last_success_at?: number;
+  subscription_query_next_retry_at?: number;
+  subscription_query_last_error?: string;
   auth_file_plan_type?: string;
   account_id?: string;
   organization_id?: string;
+  agent_identity?: CodexAgentIdentity;
   account_name?: string;
   account_structure?: string;
   account_note?: string;
+  two_factor_secret?: string;
+  account_password?: string;
+  phone_number?: string;
+  mail_url?: string;
   app_speed?: CodexAppSpeed;
   tokens: CodexTokens;
   token_generation?: number;
   token_updated_at?: number;
   token_source_mode?: string;
+  authorization_status?: string | null;
   requires_reauth?: boolean;
   reauth_reason?: string;
   quota?: CodexQuota;
@@ -46,6 +64,35 @@ export interface CodexAccount {
   tags?: string[];
   created_at: number;
   last_used: number;
+}
+
+export interface CodexAccountNoteUpdate {
+  note?: string;
+  twoFactorSecret?: string;
+  accountPassword?: string;
+  phoneNumber?: string;
+  mailUrl?: string;
+  chatgptAccountId?: string;
+}
+
+export interface CodexBatchDeleteError {
+  accountId: string;
+  error: string;
+}
+
+export type CodexBatchDeleteStatusState =
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'failed';
+
+export interface CodexBatchDeleteJobStatus {
+  jobId: string;
+  status: CodexBatchDeleteStatusState;
+  total: number;
+  completed: number;
+  failed: number;
+  errors: CodexBatchDeleteError[];
 }
 
 export interface CodexQuotaErrorInfo {
@@ -59,6 +106,26 @@ export interface CodexTokens {
   id_token: string;
   access_token: string;
   refresh_token?: string;
+}
+
+export interface CodexAgentIdentity {
+  agent_runtime_id: string;
+  agent_private_key: string;
+  task_id?: string;
+  account_id: string;
+  chatgpt_user_id: string;
+  email?: string;
+  plan_type?: string;
+  chatgpt_account_is_fedramp?: boolean;
+}
+
+export function isCodexAgentIdentityAccount(account?: CodexAccount | null): boolean {
+  return Boolean(account?.agent_identity?.agent_runtime_id?.trim());
+}
+
+/** ChatGPT Web Session 导入账号：仅支持查看额度，不可启动/切号/加入 API。 */
+export function isCodexWebSessionAccount(account?: CodexAccount | null): boolean {
+  return (account?.token_source_mode || "").trim() === "chatgpt_web_session";
 }
 
 /** Codex 配额数据 */
@@ -79,8 +146,30 @@ export interface CodexQuota {
   weekly_window_minutes?: number;
   /** 次窗口是否存在（接口返回） */
   weekly_window_present?: boolean;
+  /** 主动重置次数（rate-limit reset credits） */
+  reset_credits_available?: number;
+  /** 主动重置明细（rate-limit reset credits） */
+  reset_credits?: CodexResetCredit[];
+  /** 最近一张可用主动重置次数的到期时间 (Unix timestamp) */
+  reset_credits_next_expires_at?: number;
   /** 原始响应数据 */
   raw_data?: unknown;
+}
+
+export interface CodexResetCredit {
+  id?: string;
+  status?: string;
+  reset_type?: string;
+  granted_at?: number;
+  expires_at?: number;
+  redeemed_at?: number;
+  raw_status?: string;
+}
+
+export interface CodexResetCreditsSnapshot {
+  available_count?: number;
+  credits: CodexResetCredit[];
+  next_expires_at?: number;
 }
 
 const COCKPIT_API_BASE_URL = "https://chongcodex.cn/v1";
@@ -128,6 +217,21 @@ export interface CodexCodeReviewQuotaMetric {
   resetTime?: number;
 }
 
+export interface CodexAdditionalQuotaWindow {
+  id: string;
+  label: string;
+  percentage: number;
+  resetTime?: number;
+  windowMinutes?: number;
+  limitName: string;
+  limitLabel: string;
+  meteredFeature: string;
+  windowKind: "primary" | "secondary";
+  sourceIndex: number;
+  allowed?: boolean;
+  limitReached?: boolean;
+}
+
 export interface CodexInstanceThreadSyncItem {
   instanceId: string;
   instanceName: string;
@@ -154,9 +258,66 @@ export interface CodexSessionVisibilityRepairItem {
   targetProvider: string;
   changedRolloutFileCount: number;
   updatedSqliteRowCount: number;
+  updatedSqliteTimestampRowCount: number;
+  addedSessionIndexEntryCount: number;
+  updatedSessionIndexEntryCount: number;
   skippedSqliteFile: boolean;
+  metadataRebuildFailed: boolean;
   backupDir?: string | null;
   running: boolean;
+}
+
+export type CodexSessionVisibilityRepairMode = 'quick' | 'deep';
+export type CodexSessionVisibilityAutoRepairMode =
+  | 'legacy_before_4eb75d96'
+  | 'legacy_4eb75d96'
+  | 'current';
+
+export type CodexSessionVisibilityRepairProviderSource = 'config' | 'rollout' | 'sqlite';
+
+export interface CodexSessionVisibilityRepairProviderOption {
+  id: string;
+  sources: CodexSessionVisibilityRepairProviderSource[];
+  isDefault: boolean;
+}
+
+export interface CodexSessionVisibilityRepairProviderList {
+  defaultProvider: string;
+  providers: CodexSessionVisibilityRepairProviderOption[];
+}
+
+export interface CodexSessionVisibilityRepairInstanceOption {
+  id: string;
+  name: string;
+  userDataDir: string;
+  currentProvider: string;
+  isDefault: boolean;
+  running: boolean;
+}
+
+export interface CodexSessionVisibilityRepairInstanceList {
+  defaultInstanceId: string;
+  instances: CodexSessionVisibilityRepairInstanceOption[];
+}
+
+export interface CodexSessionVisibilityRepairRequestOptions {
+  mode?: CodexSessionVisibilityRepairMode;
+  dryRun?: boolean;
+  targetProvider?: string | null;
+  targetInstanceId?: string | null;
+  repairInstanceIds?: string[] | null;
+  sessionIds?: string[] | null;
+}
+
+export interface CodexSessionVisibilityRepairProgress {
+  runId?: string | null;
+  mode: CodexSessionVisibilityRepairMode;
+  stage: string;
+  percent: number;
+  current: number;
+  total: number;
+  instanceId?: string | null;
+  instanceName?: string | null;
 }
 
 export interface CodexSessionVisibilityRepairSummary {
@@ -164,7 +325,11 @@ export interface CodexSessionVisibilityRepairSummary {
   mutatedInstanceCount: number;
   changedRolloutFileCount: number;
   updatedSqliteRowCount: number;
+  updatedSqliteTimestampRowCount: number;
+  addedSessionIndexEntryCount: number;
+  updatedSessionIndexEntryCount: number;
   skippedSqliteFileCount: number;
+  metadataRebuildFailedCount: number;
   items: CodexSessionVisibilityRepairItem[];
   backupDirs: string[];
   message: string;
@@ -178,11 +343,18 @@ export interface CodexSessionLocation {
 
 export interface CodexSessionRecord {
   sessionId: string;
+  /** conversation | external | subagent */
+  sessionKind?: string;
   title: string;
   cwd: string;
   updatedAt?: number | null;
   locationCount: number;
   locations: CodexSessionLocation[];
+}
+
+export interface CodexSessionSearchOptions {
+  titleQuery?: string | null;
+  contentQuery?: string | null;
 }
 
 export interface CodexSessionTokenStats {
@@ -222,6 +394,7 @@ export interface CodexTrashedSessionRecord {
   title: string;
   cwd: string;
   deletedAt?: number | null;
+  sizeBytes: number;
   locationCount: number;
   locations: CodexTrashedSessionLocation[];
 }
@@ -231,6 +404,90 @@ export interface CodexSessionRestoreSummary {
   restoredSessionCount: number;
   restoredInstanceCount: number;
   message: string;
+}
+
+export interface CodexSessionTrashDeleteSummary {
+  requestedSessionCount: number;
+  deletedSessionCount: number;
+  deletedEntryCount: number;
+  freedSizeBytes: number;
+  message: string;
+}
+
+export interface CodexSessionExportSummary {
+  requestedSessionCount: number;
+  exportedSessionCount: number;
+  skippedSessionCount: number;
+  exportPath: string;
+  message: string;
+}
+
+export interface CodexSessionExportPreviewItem {
+  sessionId: string;
+  title: string;
+  cwd: string;
+  updatedAt?: number | null;
+  sizeBytes: number;
+  sourceInstanceId: string;
+  sourceInstanceName: string;
+}
+
+export interface CodexSessionExportPreview {
+  requestedSessionCount: number;
+  exportableSessionCount: number;
+  missingSessionCount: number;
+  totalSizeBytes: number;
+  items: CodexSessionExportPreviewItem[];
+}
+
+export type CodexSessionImportPreviewStatus =
+  | 'ready'
+  | 'duplicate'
+  | 'conflict'
+  | 'invalid';
+
+export interface CodexSessionImportPreviewItem {
+  sessionId: string;
+  title: string;
+  cwd: string;
+  updatedAt?: number | null;
+  sizeBytes: number;
+  status: CodexSessionImportPreviewStatus;
+  reason?: string | null;
+  existingInstanceNames: string[];
+}
+
+export interface CodexSessionImportPreview {
+  packageVersion: number;
+  exportedAt?: string | null;
+  importFilePath: string;
+  targetInstanceId: string;
+  targetInstanceName: string;
+  totalSessionCount: number;
+  importableSessionCount: number;
+  items: CodexSessionImportPreviewItem[];
+}
+
+export interface CodexSessionImportSummary {
+  requestedSessionCount: number;
+  importedSessionCount: number;
+  skippedSessionCount: number;
+  targetInstanceId: string;
+  targetInstanceName: string;
+  message: string;
+}
+
+export type CodexSessionTransferOperation = 'export' | 'import';
+
+export interface CodexSessionTransferProgress {
+  transferId: string;
+  operation: CodexSessionTransferOperation;
+  phase: string;
+  current: number;
+  total: number;
+  percent: number;
+  currentLabel?: string | null;
+  running: boolean;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -418,8 +675,119 @@ export function getCodexCodeReviewQuotaMetric(
   );
 }
 
+function normalizeCodexAdditionalLimitLabel(
+  limitName: string,
+  meteredFeature: string,
+): string {
+  const fallback = limitName || meteredFeature;
+  if (!fallback) return "";
+  return fallback
+    .replace(/^gpt[-\s]*/i, "GPT ")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\bcodex\b/gi, "Codex")
+    .replace(/\bspark\b/gi, "Spark")
+    .trim();
+}
+
+function normalizeCodexUnixSeconds(value: unknown): number | undefined {
+  const timestamp = toFiniteNumber(value);
+  if (timestamp === undefined || timestamp <= 0) return undefined;
+  return Math.floor(timestamp > 10_000_000_000 ? timestamp / 1000 : timestamp);
+}
+
+function normalizeAdditionalRateLimitWindow(
+  window: JsonRecord,
+  fallback: "hourly" | "weekly",
+): Pick<CodexQuotaWindow, "label" | "percentage" | "resetTime" | "windowMinutes"> | null {
+  const usedPercent = toFiniteNumber(window.used_percent);
+  if (usedPercent === undefined) return null;
+  const percentage = Math.max(0, Math.min(100, 100 - Math.round(usedPercent)));
+  const limitWindowSeconds = toFiniteNumber(window.limit_window_seconds);
+  const windowMinutes =
+    limitWindowSeconds !== undefined && limitWindowSeconds > 0
+      ? Math.ceil(limitWindowSeconds / 60)
+      : undefined;
+
+  return {
+    label: getCodexQuotaWindowLabel(windowMinutes, fallback),
+    percentage,
+    resetTime: normalizeCodexUnixSeconds(window.reset_at),
+    windowMinutes,
+  };
+}
+
+export function getCodexAdditionalQuotaWindows(
+  quota: CodexQuota | undefined,
+): CodexAdditionalQuotaWindow[] {
+  const raw = toJsonRecord(quota?.raw_data);
+  const additionalRateLimits = raw?.additional_rate_limits;
+  if (!Array.isArray(additionalRateLimits)) return [];
+
+  return additionalRateLimits.flatMap((entry, sourceIndex) => {
+    const record = toJsonRecord(entry);
+    const rateLimit = toJsonRecord(record?.rate_limit);
+    if (!record || !rateLimit) return [];
+
+    const limitName = toStringValue(record.limit_name) || "";
+    const meteredFeature = toStringValue(record.metered_feature) || "";
+    const limitLabel = normalizeCodexAdditionalLimitLabel(
+      limitName,
+      meteredFeature,
+    );
+    // Spark and other model-specific windows stay in this list so the UI switch
+    // (`showAdditionalQuota` / additional:* keys) remains the sole hide control.
+    const allowed = toBoolValue(rateLimit.allowed);
+    const limitReached = toBoolValue(rateLimit.limit_reached);
+    const result: CodexAdditionalQuotaWindow[] = [];
+
+    ([
+      ["primary_window", "primary", "hourly"] as const,
+      ["secondary_window", "secondary", "weekly"] as const,
+    ]).forEach(([windowKey, windowKind, fallback]) => {
+      const window = toJsonRecord(rateLimit[windowKey]);
+      if (!window) return;
+      const normalized = normalizeAdditionalRateLimitWindow(window, fallback);
+      if (!normalized) return;
+      result.push({
+        id: `additional:${sourceIndex}:${windowKind}`,
+        sourceIndex,
+        windowKind,
+        limitName,
+        limitLabel,
+        meteredFeature,
+        allowed,
+        limitReached,
+        ...normalized,
+      });
+    });
+
+    return result;
+  });
+}
+
 export function isCodexApiKeyAccount(account: CodexAccount): boolean {
   return (account.auth_mode || "").trim().toLowerCase() === "apikey";
+}
+
+export function isCodexPendingOAuthAccount(account?: CodexAccount | null): boolean {
+  if (!account) return false;
+  if ((account.authorization_status || "").trim().toLowerCase() === "pending") {
+    return true;
+  }
+  if (isCodexApiKeyAccount(account)) return false;
+  if (isCodexAgentIdentityAccount(account)) return false;
+  const hasToken =
+    Boolean((account.tokens?.access_token || "").trim()) ||
+    Boolean((account.tokens?.refresh_token || "").trim()) ||
+    Boolean((account.tokens?.id_token || "").trim());
+  const hasSavedNote =
+    Boolean((account.account_note || "").trim()) ||
+    Boolean((account.two_factor_secret || "").trim()) ||
+    Boolean((account.account_password || "").trim()) ||
+    Boolean((account.phone_number || "").trim()) ||
+    Boolean((account.mail_url || "").trim());
+  return !hasToken && hasSavedNote;
 }
 
 export function isCodexNewApiAccount(account: CodexAccount): boolean {
@@ -435,6 +803,15 @@ export function isCodexNewApiAccount(account: CodexAccount): boolean {
   );
 }
 
+export function isCodexChatCompletionsApiKeyAccount(
+  account: CodexAccount,
+): boolean {
+  return (
+    isCodexApiKeyAccount(account) &&
+    (account.api_wire_api || "").trim().toLowerCase() === "chat_completions"
+  );
+}
+
 /** 获取订阅类型显示名称 */
 export function getCodexPlanDisplayName(planType?: string): string {
   if (!planType) return "FREE";
@@ -443,6 +820,7 @@ export function getCodexPlanDisplayName(planType?: string): string {
   if (upper.includes("ENTERPRISE")) return "ENTERPRISE";
   if (upper.includes("PLUS")) return "PLUS";
   if (upper.includes("PRO")) return "PRO";
+  if (upper.includes("API")) return "API";
   return upper;
 }
 
@@ -497,6 +875,9 @@ function getCodexPlanBadgeLabel(account: CodexAccount): string {
   if (isCodexNewApiAccount(account)) {
     return account.plan_type?.trim() || "Cockpit Api";
   }
+  if (isCodexApiKeyAccount(account)) {
+    return "API";
+  }
   const baseLabel = getCodexPlanDisplayName(account.plan_type);
   if (normalizeCodexPlanKey(account.plan_type) !== "pro") {
     return baseLabel;
@@ -543,13 +924,29 @@ export interface CodexPlanBadgePresentation {
 export function getCodexPlanBadgePresentation(
   account: CodexAccount,
 ): CodexPlanBadgePresentation {
+  // Label stays the raw plan presentation (no i18n mapping). Style class is chrome only.
   return {
     label: getCodexPlanBadgeLabel(account),
     className: getCodexPlanBadgeClass(account),
   };
 }
 
+export function getCodexPlanBadgePresentationWithStyle(
+  account: CodexAccount,
+  styleClassName?: string,
+): CodexPlanBadgePresentation {
+  const base = getCodexPlanBadgePresentation(account);
+  if (!styleClassName) {
+    return base;
+  }
+  return {
+    label: base.label,
+    className: `${base.className} ${styleClassName}`.trim(),
+  };
+}
+
 export function getCodexPlanFilterKey(account: CodexAccount): string {
+  if (isCodexPendingOAuthAccount(account)) return "PENDING";
   return normalizeCodexPlanKey(account.plan_type).toUpperCase();
 }
 
@@ -593,6 +990,7 @@ const HOUR_IN_MS = 60 * 60 * 1000;
 
 export type CodexSubscriptionExpiryBucket =
   | "missing"
+  | "access_token_only"
   | "expired"
   | "within_24h"
   | "within_7d"
@@ -705,6 +1103,49 @@ export function getCodexSubscriptionPresentation(
     detailText,
     titleText: t("codex.subscription.titleWithDate", { date: detailText }),
     timestampMs,
+  };
+}
+
+export function isCodexOpaqueAccessTokenOnlyAccount(
+  account: CodexAccount,
+): boolean {
+  const accessToken = account.tokens?.access_token?.trim() || "";
+  const refreshToken = account.tokens?.refresh_token?.trim() || "";
+  return accessToken.startsWith("at-") && !refreshToken;
+}
+
+function isCodexAccessTokenOnlySubscriptionLimited(account: CodexAccount): boolean {
+  if (!isCodexTeamLikePlan(account.plan_type)) return false;
+  if (!isCodexOpaqueAccessTokenOnlyAccount(account)) return false;
+  if (!account.quota || account.quota_error) return false;
+  const lastError = account.subscription_query_last_error || "";
+  return /no_matching_rule|rejected_by_access_enforcement|access enforcement/i.test(
+    lastError,
+  );
+}
+
+export function getCodexSubscriptionPresentationForAccount(
+  account: CodexAccount,
+  t: Translate,
+): CodexSubscriptionPresentation {
+  const base = getCodexSubscriptionPresentation(account.subscription_active_until, t);
+  if (base.bucket !== "missing") return base;
+
+  if (!isCodexAccessTokenOnlySubscriptionLimited(account)) return base;
+
+  const valueText = t("codex.subscription.accessTokenOnlyUsable", {
+    defaultValue: "Token 可用",
+  });
+  const detailText = t("codex.subscription.accessTokenOnlyUsableDetail", {
+    defaultValue: "订阅信息接口受限，但配额与 Codex 使用正常",
+  });
+  return {
+    bucket: "access_token_only",
+    tone: "active",
+    valueText,
+    detailText,
+    titleText: detailText,
+    timestampMs: null,
   };
 }
 

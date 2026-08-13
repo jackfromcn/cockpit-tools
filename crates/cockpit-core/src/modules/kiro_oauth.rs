@@ -647,6 +647,40 @@ fn resolve_idc_client_secret(auth_token: &Value) -> Option<String> {
     .and_then(|value| normalize_non_empty(Some(value.as_str())))
 }
 
+fn resolve_idc_client_credentials(
+    auth_token: &Value,
+    account: &KiroAccount,
+    client_registration: Option<&Value>,
+) -> Result<(String, String), String> {
+    let client_id = resolve_idc_client_id(auth_token, account)
+        .or_else(|| {
+            pick_string(client_registration, &[&["clientId"]])
+                .and_then(|value| normalize_non_empty(Some(value.as_str())))
+        })
+        .ok_or_else(|| "缺少 client_id，无法执行 AWS IAM Identity Center 刷新".to_string())?;
+    let client_secret = resolve_idc_client_secret(auth_token)
+        .or_else(|| {
+            pick_string(client_registration, &[&["clientSecret"]])
+                .and_then(|value| normalize_non_empty(Some(value.as_str())))
+        })
+        .ok_or_else(|| "缺少 client_secret，无法执行 AWS IAM Identity Center 刷新".to_string())?;
+    Ok((client_id, client_secret))
+}
+
+fn resolve_idc_client_credentials_from_local_cache(
+    auth_token: &Value,
+    account: &KiroAccount,
+) -> Result<(String, String), String> {
+    if resolve_idc_client_id(auth_token, account).is_some()
+        && resolve_idc_client_secret(auth_token).is_some()
+    {
+        return resolve_idc_client_credentials(auth_token, account, None);
+    }
+
+    let client_registration = kiro_account::read_local_idc_client_registration(auth_token)?;
+    resolve_idc_client_credentials(auth_token, account, client_registration.as_ref())
+}
+
 fn should_prefer_idc_refresh(auth_token: &Value, account: &KiroAccount) -> bool {
     let auth_method_is_idc = normalize_ascii_lower(
         pick_string(Some(auth_token), &[&["authMethod"], &["auth_method"]]).as_deref(),
@@ -1514,10 +1548,8 @@ async fn refresh_token_via_idc_oidc(
 ) -> Result<Value, String> {
     let region = resolve_idc_region(auth_token, account)
         .ok_or_else(|| "缺少 idc_region，无法执行 AWS IAM Identity Center 刷新".to_string())?;
-    let client_id = resolve_idc_client_id(auth_token, account)
-        .ok_or_else(|| "缺少 client_id，无法执行 AWS IAM Identity Center 刷新".to_string())?;
-    let client_secret = resolve_idc_client_secret(auth_token)
-        .ok_or_else(|| "缺少 client_secret，无法执行 AWS IAM Identity Center 刷新".to_string())?;
+    let (client_id, client_secret) =
+        resolve_idc_client_credentials_from_local_cache(auth_token, account)?;
 
     let endpoint = KIRO_AWS_OIDC_TOKEN_ENDPOINT_FMT.replace("{region}", region.as_str());
     let response = reqwest::Client::new()
@@ -2526,6 +2558,47 @@ mod tests {
         assert!(
             chrono::DateTime::parse_from_rfc3339(expires_at).is_ok(),
             "expiresAt should be valid rfc3339"
+        );
+    }
+
+    #[test]
+    fn idc_client_credentials_preserve_inline_and_saved_account_precedence() {
+        let mut account: KiroAccount = serde_json::from_value(json!({
+            "id": "kiro_test",
+            "email": "tester@example.com",
+            "access_token": "access",
+            "created_at": 0,
+            "last_used": 0
+        }))
+        .expect("build test account");
+        account.client_id = Some("saved-client".to_string());
+        let registration = json!({
+            "clientId": "cache-client",
+            "clientSecret": "cache-secret"
+        });
+
+        let inline_auth = json!({
+            "clientId": "inline-client",
+            "clientSecret": "inline-secret",
+            "clientIdHash": "../ignored-because-inline-is-complete"
+        });
+        let inline_credentials =
+            resolve_idc_client_credentials_from_local_cache(&inline_auth, &account)
+                .expect("resolve inline credentials");
+        assert_eq!(
+            inline_credentials,
+            ("inline-client".to_string(), "inline-secret".to_string())
+        );
+
+        let hash_only_auth = json!({
+            "clientIdHash": "eb04fe0de39241e4fa17bec175f7540138ad1bd8"
+        });
+        let saved_credentials =
+            resolve_idc_client_credentials(&hash_only_auth, &account, Some(&registration))
+                .expect("resolve saved and cached credentials");
+        assert_eq!(
+            saved_credentials,
+            ("saved-client".to_string(), "cache-secret".to_string())
         );
     }
 

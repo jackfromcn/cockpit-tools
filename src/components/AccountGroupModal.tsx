@@ -122,7 +122,7 @@ export const AccountGroupModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal account-group-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>
@@ -342,7 +342,7 @@ export const AddToGroupModal = ({ isOpen, onClose, accountIds, sourceGroupId, on
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal add-to-group-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>

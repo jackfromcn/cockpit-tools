@@ -225,6 +225,16 @@
   color: var(--danger);
 }
 
+/* #1287 denser Codex account cards — hit real Codex DOM classes */
+.codex-accounts-page .codex-accounts-grid .codex-account-card {
+  padding: 12px 14px;
+  gap: 12px;
+}
+.codex-accounts-page .codex-accounts-grid .codex-account-card .card-actions {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 /* Tech-Badge - Compact */
 .tier-badge {
   padding: 2px 6px;
@@ -241,6 +251,26 @@
   top: 0; left: 0; right: 0; bottom: 0;
   background: linear-gradient(45deg, rgba(255,255,255,0.1), rgba(255,255,255,0));
   z-index: -1;
+}
+
+/* Style-only plan badge variants (#772); plan text stays raw. */
+.tier-badge.plan-badge-style-outline,
+.instance-plan-badge.plan-badge-style-outline {
+  background: transparent !important;
+  border-width: 1px;
+  border-style: solid;
+}
+.tier-badge.plan-badge-style-soft,
+.instance-plan-badge.plan-badge-style-soft {
+  filter: saturate(0.85);
+  opacity: 0.92;
+  border-radius: 999px;
+}
+.tier-badge.plan-badge-style-mono,
+.instance-plan-badge.plan-badge-style-mono {
+  background: var(--bg-secondary, #2a2a2a) !important;
+  color: var(--text-primary, #e8e8e8) !important;
+  border: 1px solid var(--border-light, #444) !important;
 }
 
 .tier-badge.pro {
@@ -403,6 +433,15 @@
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.folder-inline-quota-meta {
+  color: var(--text-muted);
+  font-weight: 500;
 }
 
 .folder-inline-name-input {
@@ -561,4 +600,194 @@
 [data-theme="dark"] .card-date {
   background: rgba(255,255,255,0.05);
   color: #94a3b8;
+}
+
+/* Custom quota columns layout for Antigravity */
+.card-quota-grid .quota-column,
+.quota-grid .quota-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.card-quota-grid .quota-column-title,
+.quota-grid .quota-column-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.accounts-page .card-quota-grid,
+.accounts-page .quota-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 10px 12px;
+}
+
+/* Custom Sort Modal Styles (added for Antigravity custom sorting) */
+.codex-custom-sort-modal {
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 48px));
+}
+
+.codex-custom-sort-modal .modal-header {
+  align-items: flex-start;
+}
+
+.codex-custom-sort-modal-desc {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.codex-custom-sort-modal .modal-body {
+  max-height: min(560px, calc(100vh - 220px));
+  overflow: auto;
+}
+
+.codex-custom-sort-list {
+  display: grid;
+  gap: 8px;
+}
+
+.codex-custom-sort-list.is-sorting {
+  user-select: none;
+}
+
+.codex-custom-sort-list.is-sorting .codex-custom-sort-row,
+.codex-custom-sort-list.is-sorting .codex-custom-sort-drag-handle {
+  cursor: grabbing;
+}
+
+.codex-custom-sort-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  background: var(--bg-card);
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+
+.codex-custom-sort-row:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.codex-custom-sort-row.is-dragging {
+  border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+  background: var(--bg-hover);
+  box-shadow: var(--shadow-sm);
+  transform: scale(1.005);
+}
+
+.codex-custom-sort-row.is-drop-candidate {
+  border-style: dashed;
+}
+
+.codex-custom-sort-row.is-drop-target {
+  border-color: color-mix(in srgb, var(--primary) 62%, var(--border));
+  background: var(--bg-hover);
+}
+
+.codex-custom-sort-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.codex-custom-sort-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: grab;
+  flex-shrink: 0;
+}
+
+.codex-custom-sort-drag-handle:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.codex-custom-sort-index {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.codex-custom-sort-account {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.codex-custom-sort-account-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.codex-custom-sort-account-title > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.codex-custom-sort-quota-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.codex-custom-sort-quota {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.codex-custom-sort-quota > span {
+  color: var(--text-muted);
+}
+
+.codex-custom-sort-quota-empty {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.codex-custom-sort-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }

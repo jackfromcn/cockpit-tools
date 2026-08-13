@@ -25,6 +25,14 @@ pub fn encode_string_field(field_num: u32, value: &str) -> Vec<u8> {
     encode_len_delim_field(field_num, value.as_bytes())
 }
 
+/// 编码 Varint 字段 (wire_type = 0)
+pub fn encode_varint_field(field_num: u32, value: u64) -> Vec<u8> {
+    let tag = (field_num << 3) | 0;
+    let mut field = encode_varint(tag as u64);
+    field.extend(encode_varint(value));
+    field
+}
+
 /// 读取 Protobuf Varint
 pub fn read_varint(data: &[u8], offset: usize) -> Result<(u64, usize), String> {
     let mut result = 0u64;
@@ -74,6 +82,26 @@ pub fn skip_field(data: &[u8], offset: usize, wire_type: u8) -> Result<usize, St
 
 /// 创建 OAuthTokenInfo 消息
 pub fn create_oauth_info(access_token: &str, refresh_token: &str, expiry: i64) -> Vec<u8> {
+    create_oauth_info_with_metadata(access_token, refresh_token, expiry, None, None, None)
+}
+
+/// 创建包含官方客户端登录态元数据的 OAuthTokenInfo 消息
+pub fn create_oauth_info_with_metadata(
+    access_token: &str,
+    refresh_token: &str,
+    expiry: i64,
+    is_gcp_tos: Option<bool>,
+    id_token: Option<&str>,
+    email: Option<&str>,
+) -> Vec<u8> {
+    let mut is_gcp_tos = is_gcp_tos.unwrap_or(false);
+    if let Some(email) = email.map(str::trim).filter(|value| !value.is_empty()) {
+        let lower = email.to_ascii_lowercase();
+        if lower.ends_with("@gmail.com") || lower.ends_with("@googlemail.com") {
+            is_gcp_tos = false;
+        }
+    }
+
     // Field 1: access_token (string, wire_type = 2)
     let field1 = encode_string_field(1, access_token);
 
@@ -87,11 +115,43 @@ pub fn create_oauth_info(access_token: &str, refresh_token: &str, expiry: i64) -
     let timestamp_tag = (1 << 3) | 0;
     let mut timestamp_msg = encode_varint(timestamp_tag);
     timestamp_msg.extend(encode_varint(expiry as u64));
+    timestamp_msg.extend(encode_varint_field(2, 0));
 
     let field4 = encode_len_delim_field(4, &timestamp_msg);
 
-    // 合并所有字段为 OAuthTokenInfo 消息
-    [field1, field2, field3, field4].concat()
+    let mut oauth_info = Vec::new();
+    oauth_info.extend(field1);
+    oauth_info.extend(field2);
+    oauth_info.extend(field3);
+    oauth_info.extend(field4);
+    if let Some(id_token) = id_token.map(str::trim).filter(|value| !value.is_empty()) {
+        oauth_info.extend(encode_string_field(5, id_token));
+    }
+    if is_gcp_tos {
+        oauth_info.extend(encode_varint_field(6, 1));
+    }
+    oauth_info
+}
+
+/// 创建 unified-state Topic.data entry。
+pub fn create_unified_topic_entry(sentinel_key: &str, payload: &[u8]) -> Vec<u8> {
+    let row = encode_string_field(1, &general_purpose::STANDARD.encode(payload));
+    let entry = [
+        encode_string_field(1, sentinel_key),
+        encode_len_delim_field(2, &row),
+    ]
+    .concat();
+    encode_len_delim_field(1, &entry)
+}
+
+/// 创建 unified-state stringValue payload。
+pub fn create_string_value_payload(value: &str) -> Vec<u8> {
+    encode_string_field(3, value)
+}
+
+/// 创建最小可用的 UserStatus payload。
+pub fn create_minimal_user_status_payload(email: &str) -> Vec<u8> {
+    [encode_string_field(3, email), encode_string_field(7, email)].concat()
 }
 
 /// 从 Topic.data 中移除指定 map entry，保留同 topic 下其他 sentinel row。

@@ -1,11 +1,12 @@
 import type { Account } from '../types/account';
+import type { ClaudeAccount } from '../types/claude';
 import type { CodebuddyAccount } from '../types/codebuddy';
 import { getCodebuddyExtraCreditSummary, getCodebuddyOfficialQuotaModel, getCodebuddyResourceSummary } from '../types/codebuddy';
 import type { CodexAccount } from '../types/codex';
 import type { CursorAccount } from '../types/cursor';
 import { getCursorUsage } from '../types/cursor';
-import type { GeminiAccount } from '../types/gemini';
-import { getGeminiTierQuotaSummary } from '../types/gemini';
+import type { GrokAccount } from '../types/grok';
+import { getGrokUsage } from '../types/grok';
 import type { GitHubCopilotAccount } from '../types/githubCopilot';
 import type { KiroAccount } from '../types/kiro';
 import { getKiroCreditsSummary, isKiroAccountBanned } from '../types/kiro';
@@ -20,16 +21,21 @@ import type { WorkbuddyAccount } from '../types/workbuddy';
 import { getWorkbuddyOfficialQuotaModel } from '../types/workbuddy';
 import type { ZedAccount } from '../types/zed';
 import { getZedUsage } from '../types/zed';
+import type { ZcodeAccount } from '../types/zcode';
 
 export const GHCP_CURRENT_ACCOUNT_ID_KEY = 'agtools.github_copilot.current_account_id';
 export const WINDSURF_CURRENT_ACCOUNT_ID_KEY = 'agtools.windsurf.current_account_id';
 export const KIRO_CURRENT_ACCOUNT_ID_KEY = 'agtools.kiro.current_account_id';
 export const CURSOR_CURRENT_ACCOUNT_ID_KEY = 'agtools.cursor.current_account_id';
-export const GEMINI_CURRENT_ACCOUNT_ID_KEY = 'agtools.gemini.current_account_id';
+export const GROK_CURRENT_ACCOUNT_ID_KEY = 'agtools.grok.current_account_id';
 export const CODEBUDDY_CURRENT_ACCOUNT_ID_KEY = 'agtools.codebuddy.current_account_id';
 export const CODEBUDDY_CN_CURRENT_ACCOUNT_ID_KEY = 'agtools.codebuddycn.current_account_id';
 export const QODER_CURRENT_ACCOUNT_ID_KEY = 'agtools.qoder.current_account_id';
+export const ZCODE_CURRENT_ACCOUNT_ID_KEY = 'agtools.zcode.current_account_id';
 export const TRAE_CURRENT_ACCOUNT_ID_KEY = 'agtools.trae.current_account_id';
+export const TRAE_SOLO_CURRENT_ACCOUNT_ID_KEY = 'agtools.trae_solo.current_account_id';
+export const TRAE_CN_CURRENT_ACCOUNT_ID_KEY = 'agtools.trae_cn.current_account_id';
+export const TRAE_SOLO_CN_CURRENT_ACCOUNT_ID_KEY = 'agtools.trae_solo_cn.current_account_id';
 export const WORKBUDDY_CURRENT_ACCOUNT_ID_KEY = 'agtools.workbuddy.current_account_id';
 export const ZED_CURRENT_ACCOUNT_ID_KEY = 'agtools.zed.current_account_id';
 
@@ -44,11 +50,15 @@ export type StoredCurrentPlatformId =
   | 'windsurf'
   | 'kiro'
   | 'cursor'
-  | 'gemini'
+  | 'grok'
   | 'codebuddy'
   | 'codebuddy_cn'
   | 'qoder'
+  | 'zcode'
   | 'trae'
+  | 'trae_solo'
+  | 'trae_cn'
+  | 'trae_solo_cn'
   | 'workbuddy'
   | 'zed';
 
@@ -57,11 +67,15 @@ const CURRENT_ACCOUNT_STORAGE_KEYS: Record<StoredCurrentPlatformId, string> = {
   windsurf: WINDSURF_CURRENT_ACCOUNT_ID_KEY,
   kiro: KIRO_CURRENT_ACCOUNT_ID_KEY,
   cursor: CURSOR_CURRENT_ACCOUNT_ID_KEY,
-  gemini: GEMINI_CURRENT_ACCOUNT_ID_KEY,
+  grok: GROK_CURRENT_ACCOUNT_ID_KEY,
   codebuddy: CODEBUDDY_CURRENT_ACCOUNT_ID_KEY,
   codebuddy_cn: CODEBUDDY_CN_CURRENT_ACCOUNT_ID_KEY,
   qoder: QODER_CURRENT_ACCOUNT_ID_KEY,
+  zcode: ZCODE_CURRENT_ACCOUNT_ID_KEY,
   trae: TRAE_CURRENT_ACCOUNT_ID_KEY,
+  trae_solo: TRAE_SOLO_CURRENT_ACCOUNT_ID_KEY,
+  trae_cn: TRAE_CN_CURRENT_ACCOUNT_ID_KEY,
+  trae_solo_cn: TRAE_SOLO_CN_CURRENT_ACCOUNT_ID_KEY,
   workbuddy: WORKBUDDY_CURRENT_ACCOUNT_ID_KEY,
   zed: ZED_CURRENT_ACCOUNT_ID_KEY,
 };
@@ -152,6 +166,36 @@ export function getRecommendedCodexAccount(
   return others.reduce((best, candidate) => (
     getScore(candidate) > getScore(best) ? candidate : best
   ));
+}
+
+export function getRecommendedClaudeAccount(
+  accounts: ClaudeAccount[],
+  currentId: string | null | undefined,
+): ClaudeAccount | null {
+  if (accounts.length <= 1) return null;
+  const others = accounts.filter((account) => account.id !== currentId);
+  if (others.length === 0) return null;
+
+  const getScore = (account: ClaudeAccount) => {
+    const usedValues = [
+      account.quota?.five_hour_percentage,
+      account.quota?.seven_day_percentage,
+    ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+    const remaining = usedValues.length > 0 ? 100 - Math.max(...usedValues) : -1;
+    return {
+      remaining,
+      freshness: account.last_used || account.created_at || 0,
+    };
+  };
+
+  return others.reduce((best, candidate) => {
+    const bestScore = getScore(best);
+    const candidateScore = getScore(candidate);
+    if (candidateScore.remaining !== bestScore.remaining) {
+      return candidateScore.remaining > bestScore.remaining ? candidate : best;
+    }
+    return candidateScore.freshness > bestScore.freshness ? candidate : best;
+  });
 }
 
 export function getRecommendedGitHubCopilotAccount(
@@ -308,33 +352,34 @@ export function getRecommendedCursorAccount(
   });
 }
 
-export function getRecommendedGeminiAccount(
-  accounts: GeminiAccount[],
-  currentId: string | null | undefined,
-): GeminiAccount | null {
-  if (accounts.length <= 1) return null;
-  const others = accounts.filter((account) => account.id !== currentId);
-  if (others.length === 0) return null;
 
-  const getScore = (account: GeminiAccount) => {
-    const tiers = getGeminiTierQuotaSummary(account);
-    const remainingValues = [tiers.pro.remainingPercent, tiers.flash.remainingPercent].filter(
-      (value): value is number => typeof value === 'number' && Number.isFinite(value),
+export function getRecommendedGrokAccount(
+  accounts: GrokAccount[],
+  currentId: string | null | undefined,
+): GrokAccount | null {
+  if (accounts.length <= 1) return null;
+  const others = accounts.filter((account) => {
+    if (account.id === currentId) return false;
+    const usage = getGrokUsage(account);
+    return (
+      usage.isNormal &&
+      !usage.exhausted &&
+      usage.totalUsedPercent != null
     );
-    const totalUsed = remainingValues.length > 0
-      ? 100 - Math.min(...remainingValues)
-      : null;
+  });
+  if (others.length === 0) return null;
+  const score = (account: GrokAccount) => {
+    const used = getGrokUsage(account).totalUsedPercent;
     return {
-      remainingPercent: totalUsed == null ? -1 : 100 - totalUsed,
+      remaining: 100 - (used ?? 100),
       freshness: account.last_used || account.created_at || 0,
     };
   };
-
   return others.reduce((best, candidate) => {
-    const bestScore = getScore(best);
-    const candidateScore = getScore(candidate);
-    if (candidateScore.remainingPercent !== bestScore.remainingPercent) {
-      return candidateScore.remainingPercent > bestScore.remainingPercent ? candidate : best;
+    const bestScore = score(best);
+    const candidateScore = score(candidate);
+    if (candidateScore.remaining !== bestScore.remaining) {
+      return candidateScore.remaining > bestScore.remaining ? candidate : best;
     }
     return candidateScore.freshness > bestScore.freshness ? candidate : best;
   });
@@ -422,6 +467,35 @@ export function getRecommendedQoderAccount(
     const usedPercent = subscription.totalUsagePercentage ?? subscription.userQuota.percentage ?? 101;
     return {
       remaining: 100 - usedPercent,
+      freshness: account.last_used || account.created_at || 0,
+    };
+  };
+
+  return others.reduce((best, candidate) => {
+    const bestScore = getScore(best);
+    const candidateScore = getScore(candidate);
+    if (candidateScore.remaining !== bestScore.remaining) {
+      return candidateScore.remaining > bestScore.remaining ? candidate : best;
+    }
+    return candidateScore.freshness > bestScore.freshness ? candidate : best;
+  });
+}
+
+export function getRecommendedZcodeAccount(
+  accounts: ZcodeAccount[],
+  currentId: string | null | undefined,
+): ZcodeAccount | null {
+  if (accounts.length <= 1) return null;
+  const others = accounts.filter((account) => account.id !== currentId);
+  if (others.length === 0) return null;
+
+  const getScore = (account: ZcodeAccount) => {
+    const total = toFiniteNumber(account.quota_total);
+    const remaining = toFiniteNumber(account.quota_remaining);
+    return {
+      remaining: total != null && total > 0 && remaining != null
+        ? (remaining / total) * 100
+        : -1,
       freshness: account.last_used || account.created_at || 0,
     };
   };

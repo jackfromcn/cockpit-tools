@@ -323,7 +323,7 @@ export function CodexQuickConfigCard({ onClose }: { onClose?: () => void }) {
   }, [applyLoadedConfig, loading, saving, t, targetConfig, validationError]);
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal codex-quick-config-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <button className="btn btn-secondary icon-only" onClick={onClose} title={t('common.back', '返回')} aria-label={t('common.back', '返回')}><ChevronLeft size={14} /></button>

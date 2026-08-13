@@ -154,13 +154,35 @@ pub fn load_account(account_id: &str) -> Option<QoderAccount> {
         return None;
     }
     let content = fs::read_to_string(&account_path).ok()?;
-    crate::modules::atomic_write::parse_json_with_auto_restore(&account_path, &content).ok()
+    match crate::modules::secure_account_storage::deserialize_account_file::<QoderAccount>(
+        &account_path,
+        &content,
+    ) {
+        Ok((account, needs_rotation)) => {
+            if needs_rotation {
+                let account_for_rewrite = account.clone();
+                crate::modules::deferred_account_rewrite::schedule_account_rewrite_if_unchanged(
+                    "qoder",
+                    account_for_rewrite.id.clone(),
+                    account_path.clone(),
+                    content.as_bytes(),
+                    move || {
+                        crate::modules::secure_account_storage::serialize_account_file(
+                            "qoder",
+                            &account_for_rewrite,
+                        )
+                    },
+                );
+            }
+            Some(account)
+        }
+        Err(_) => None,
+    }
 }
 
 fn save_account_file(account: &QoderAccount) -> Result<(), String> {
     let path = resolve_account_file_path(account.id.as_str())?;
-    let content =
-        serde_json::to_string_pretty(account).map_err(|e| format!("序列化账号失败: {}", e))?;
+    let content = crate::modules::secure_account_storage::serialize_account_file("qoder", account)?;
     crate::modules::atomic_write::write_string_atomic(&path, &content)
         .map_err(|e| format!("保存账号失败: {}", e))
 }
@@ -168,7 +190,8 @@ fn save_account_file(account: &QoderAccount) -> Result<(), String> {
 fn delete_account_file(account_id: &str) -> Result<(), String> {
     let path = resolve_account_file_path(account_id)?;
     if path.exists() {
-        fs::remove_file(path).map_err(|e| format!("删除账号文件失败: {}", e))?;
+        crate::modules::atomic_write::remove_file_locked(&path)
+            .map_err(|e| format!("删除账号文件失败: {}", e))?;
     }
     Ok(())
 }

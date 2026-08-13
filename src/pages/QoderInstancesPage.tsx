@@ -69,7 +69,7 @@ export function QoderInstancesContent({
       unsupportedTitleKey="common.shared.instances.unsupported.title"
       unsupportedTitleDefault="暂不支持当前系统"
       unsupportedDescKey="qoder.instances.unsupported.descPlatform"
-      unsupportedDescDefault="Qoder 多开实例仅支持 macOS、Windows 和 Linux。"
+      unsupportedDescDefault="Qoder 应用多开仅支持 macOS、Windows 和 Linux。"
     />
   );
 }

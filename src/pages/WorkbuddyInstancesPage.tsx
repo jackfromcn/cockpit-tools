@@ -56,7 +56,7 @@ export function WorkbuddyInstancesContent({
       unsupportedTitleKey="common.shared.instances.unsupported.title"
       unsupportedTitleDefault="暂不支持当前系统"
       unsupportedDescKey="workbuddy.instances.unsupported.descPlatform"
-      unsupportedDescDefault="WorkBuddy 多开实例仅支持 macOS、Windows 和 Linux。"
+      unsupportedDescDefault="WorkBuddy 应用多开仅支持 macOS、Windows 和 Linux。"
     />
   );
 }

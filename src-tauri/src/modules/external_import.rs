@@ -61,10 +61,11 @@ fn resolve_provider_and_page(value: &str) -> Option<(&'static str, &'static str)
         "windsurf" => Some(("windsurf", "windsurf")),
         "kiro" => Some(("kiro", "kiro")),
         "cursor" => Some(("cursor", "cursor")),
-        "gemini" => Some(("gemini", "gemini")),
+        "grok" => Some(("grok", "grok")),
         "codebuddy" => Some(("codebuddy", "codebuddy")),
         "codebuddy_cn" | "codebuddycn" => Some(("codebuddy_cn", "codebuddy-cn")),
         "qoder" => Some(("qoder", "qoder")),
+        "zcode" => Some(("zcode", "zcode")),
         "trae" => Some(("trae", "trae")),
         "workbuddy" => Some(("workbuddy", "workbuddy")),
         "zed" => Some(("zed", "zed")),
@@ -299,6 +300,18 @@ fn emit_external_import_payload<R: Runtime>(
     ));
 }
 
+/// Skip argv[0] (the executable name) for sources where the first argument
+/// is guaranteed to be the process path rather than a deep link.
+/// On Linux/WSL the single-instance callback and startup args always include
+/// the binary name as the first element (e.g. `["cockpit-tools",
+/// "cockpit-tools://import?..."]`).  Consuming it wastes a log line, can
+/// mislead diagnostics (`is_deep_link=false, candidate='cockpit-tools'`),
+/// and on WSL where D-Bus is unreliable it is the *only* element received,
+/// causing an "未发现 Deep Link 参数" dead-end.
+fn should_skip_argv0(source: &str) -> bool {
+    matches!(source, "single-instance" | "startup")
+}
+
 pub fn handle_external_import_args<R: Runtime>(
     app: &AppHandle<R>,
     args: &[String],
@@ -309,8 +322,12 @@ pub fn handle_external_import_args<R: Runtime>(
         source,
         args.len()
     ));
+    let skip_argv0 = should_skip_argv0(source);
     let mut saw_deep_link = false;
-    for arg in args {
+    for (i, arg) in args.iter().enumerate() {
+        if skip_argv0 && i == 0 {
+            continue;
+        }
         let candidate = arg.trim();
         if candidate.is_empty() {
             continue;
@@ -370,7 +387,28 @@ pub fn handle_external_import_args<R: Runtime>(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_external_import_url;
+    use super::{parse_external_import_url, should_skip_argv0};
+
+    // --- argv0 skip logic ---
+
+    #[test]
+    fn skip_argv0_for_single_instance() {
+        assert!(should_skip_argv0("single-instance"));
+    }
+
+    #[test]
+    fn skip_argv0_for_startup() {
+        assert!(should_skip_argv0("startup"));
+    }
+
+    #[test]
+    fn do_not_skip_argv0_for_deep_link_sources() {
+        assert!(!should_skip_argv0("deep-link-open-url"));
+        assert!(!should_skip_argv0("deep-link-current"));
+        assert!(!should_skip_argv0("run-event-opened"));
+    }
+
+    // --- URL parsing (existing) ---
 
     #[test]
     fn parse_basic_import_link() {
@@ -397,6 +435,15 @@ mod tests {
         assert_eq!(payload.api_base_url, None);
         assert_eq!(payload.min_app_version, None);
         assert!(payload.auto_import);
+    }
+
+    #[test]
+    fn parse_grok_import_link() {
+        let raw = "cockpit-tools://import?provider=grok&token=%7B%7D";
+        let payload = parse_external_import_url(raw).expect("payload");
+        assert_eq!(payload.provider_id, "grok");
+        assert_eq!(payload.page, "grok");
+        assert_eq!(payload.token, "{}");
     }
 
     #[test]

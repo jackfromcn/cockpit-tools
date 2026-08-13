@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { scrollElementIntoView } from '../utils/reducedMotion';
 
 interface ModalErrorMessageProps {
   message?: string | null;
@@ -64,8 +65,7 @@ export function ModalErrorMessage({
     if (!node) return;
 
     const frame = window.requestAnimationFrame(() => {
-      node.scrollIntoView({
-        behavior: 'smooth',
+      scrollElementIntoView(node, {
         block: position === 'bottom' ? 'end' : 'start',
       });
     });

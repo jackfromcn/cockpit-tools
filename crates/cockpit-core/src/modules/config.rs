@@ -2,9 +2,9 @@
 //! 管理应用配置，包括 WebSocket 端口等
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Map, Value};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
 /// 默认 WebSocket 端口
@@ -20,9 +20,13 @@ const SERVER_STATUS_FILE: &str = "server.json";
 
 /// 用户配置文件名
 const USER_CONFIG_FILE: &str = "config.json";
+const USER_CONFIG_LOCK_FILE: &str = "config.json.lock";
 
 /// 数据目录名
 const DATA_DIR: &str = ".antigravity_cockpit";
+const DEV_DATA_DIR: &str = ".antigravity_cockpit_dev";
+const DATA_DIR_ENV: &str = "COCKPIT_TOOLS_DATA_DIR";
+const PROFILE_ENV: &str = "COCKPIT_TOOLS_PROFILE";
 
 /// 服务状态（写入共享文件供其他客户端读取）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +77,9 @@ pub struct UserConfig {
     /// 应用主题
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// 是否减少界面动画
+    #[serde(default = "default_reduced_motion_enabled")]
+    pub reduced_motion_enabled: bool,
     /// 界面缩放比例
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f64,
@@ -82,6 +89,15 @@ pub struct UserConfig {
     /// Codex 自动刷新间隔（分钟），-1 表示禁用
     #[serde(default = "default_codex_auto_refresh")]
     pub codex_auto_refresh_minutes: i32,
+    /// Codex 切号时是否同步覆盖 WSL 配置 (Windows Only)
+    #[serde(default = "default_codex_sync_wsl")]
+    pub codex_sync_wsl: bool,
+    /// 是否启用 Codex 客户端中的 API 服务额度显示注入
+    #[serde(default = "default_codex_app_ui_injection_enabled")]
+    pub codex_app_ui_injection_enabled: bool,
+    /// Codex WSL 配置目录 (Windows Only)
+    #[serde(default = "default_codex_wsl_config_dir")]
+    pub codex_wsl_config_dir: String,
     /// Zed 自动刷新间隔（分钟），-1 表示禁用
     #[serde(default = "default_zed_auto_refresh")]
     pub zed_auto_refresh_minutes: i32,
@@ -97,12 +113,6 @@ pub struct UserConfig {
     /// Cursor 自动刷新间隔（分钟），-1 表示禁用
     #[serde(default = "default_cursor_auto_refresh")]
     pub cursor_auto_refresh_minutes: i32,
-    /// Gemini 自动刷新间隔（分钟），-1 表示禁用
-    #[serde(default = "default_gemini_auto_refresh")]
-    pub gemini_auto_refresh_minutes: i32,
-    /// Gemini 切号时是否同步覆盖 WSL 配置 (Windows Only)
-    #[serde(default = "default_gemini_sync_wsl")]
-    pub gemini_sync_wsl: bool,
     /// CodeBuddy 自动刷新间隔（分钟），-1 表示禁用
     #[serde(default = "default_codebuddy_auto_refresh")]
     pub codebuddy_auto_refresh_minutes: i32,
@@ -118,6 +128,12 @@ pub struct UserConfig {
     /// Trae 自动刷新间隔（分钟），-1 表示禁用
     #[serde(default = "default_trae_auto_refresh")]
     pub trae_auto_refresh_minutes: i32,
+    #[serde(default = "default_trae_auto_refresh")]
+    pub trae_solo_auto_refresh_minutes: i32,
+    #[serde(default = "default_trae_auto_refresh")]
+    pub trae_cn_auto_refresh_minutes: i32,
+    #[serde(default = "default_trae_auto_refresh")]
+    pub trae_solo_cn_auto_refresh_minutes: i32,
     /// 窗口关闭行为
     #[serde(default = "default_close_behavior")]
     pub close_behavior: CloseWindowBehavior,
@@ -199,6 +215,9 @@ pub struct UserConfig {
     /// CodeBuddy 启动路径（为空则使用默认路径）
     #[serde(default = "default_codebuddy_app_path")]
     pub codebuddy_app_path: String,
+    /// 切换 CodeBuddy 账号时是否在本机账号间合并本地会话
+    #[serde(default = "default_codebuddy_share_sessions_on_switch")]
+    pub codebuddy_share_sessions_on_switch: bool,
     /// CodeBuddy CN 启动路径（为空则使用默认路径）
     #[serde(default = "default_codebuddy_cn_app_path")]
     pub codebuddy_cn_app_path: String,
@@ -208,9 +227,27 @@ pub struct UserConfig {
     /// Trae 启动路径（为空则使用默认路径）
     #[serde(default = "default_trae_app_path")]
     pub trae_app_path: String,
+    #[serde(default = "default_trae_app_path")]
+    pub trae_solo_app_path: String,
+    #[serde(default = "default_trae_app_path")]
+    pub trae_cn_app_path: String,
+    #[serde(default = "default_trae_app_path")]
+    pub trae_solo_cn_app_path: String,
+    /// Trae Windows 应用扫描范围（每行一个目录）
+    #[serde(default = "default_trae_app_scan_roots")]
+    pub trae_app_scan_roots: String,
+    #[serde(default = "default_trae_app_scan_roots")]
+    pub trae_solo_app_scan_roots: String,
+    #[serde(default = "default_trae_app_scan_roots")]
+    pub trae_cn_app_scan_roots: String,
+    #[serde(default = "default_trae_app_scan_roots")]
+    pub trae_solo_cn_app_scan_roots: String,
     /// WorkBuddy 启动路径（为空则使用默认路径）
     #[serde(default = "default_workbuddy_app_path")]
     pub workbuddy_app_path: String,
+    /// 切换 WorkBuddy 账号时是否在本机账号间合并本地会话
+    #[serde(default = "default_workbuddy_share_sessions_on_switch")]
+    pub workbuddy_share_sessions_on_switch: bool,
     /// 切换 Codex 时是否自动重启 OpenCode
     #[serde(default = "default_opencode_sync_on_switch")]
     pub opencode_sync_on_switch: bool,
@@ -316,12 +353,6 @@ pub struct UserConfig {
     /// Cursor 配额预警阈值（百分比）
     #[serde(default = "default_cursor_quota_alert_threshold")]
     pub cursor_quota_alert_threshold: i32,
-    /// 是否启用 Gemini 配额预警通知
-    #[serde(default = "default_gemini_quota_alert_enabled")]
-    pub gemini_quota_alert_enabled: bool,
-    /// Gemini 配额预警阈值（百分比）
-    #[serde(default = "default_gemini_quota_alert_threshold")]
-    pub gemini_quota_alert_threshold: i32,
     /// 是否启用 CodeBuddy 配额预警通知
     #[serde(default = "default_codebuddy_quota_alert_enabled")]
     pub codebuddy_quota_alert_enabled: bool,
@@ -346,12 +377,27 @@ pub struct UserConfig {
     /// Trae 配额预警阈值（百分比）
     #[serde(default = "default_trae_quota_alert_threshold")]
     pub trae_quota_alert_threshold: i32,
+    #[serde(default = "default_trae_quota_alert_enabled")]
+    pub trae_solo_quota_alert_enabled: bool,
+    #[serde(default = "default_trae_quota_alert_threshold")]
+    pub trae_solo_quota_alert_threshold: i32,
+    #[serde(default = "default_trae_quota_alert_enabled")]
+    pub trae_cn_quota_alert_enabled: bool,
+    #[serde(default = "default_trae_quota_alert_threshold")]
+    pub trae_cn_quota_alert_threshold: i32,
+    #[serde(default = "default_trae_quota_alert_enabled")]
+    pub trae_solo_cn_quota_alert_enabled: bool,
+    #[serde(default = "default_trae_quota_alert_threshold")]
+    pub trae_solo_cn_quota_alert_threshold: i32,
     /// 是否启用 WorkBuddy 配额预警通知
     #[serde(default = "default_workbuddy_quota_alert_enabled")]
     pub workbuddy_quota_alert_enabled: bool,
     /// WorkBuddy 配额预警阈值（百分比）
     #[serde(default = "default_workbuddy_quota_alert_threshold")]
     pub workbuddy_quota_alert_threshold: i32,
+    /// 保留宿主应用新增但 CLI 尚未建模的配置字段。
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// 窗口关闭行为
@@ -421,6 +467,9 @@ fn default_default_terminal() -> String {
 fn default_theme() -> String {
     "system".to_string()
 }
+fn default_reduced_motion_enabled() -> bool {
+    false
+}
 fn default_ui_scale() -> f64 {
     1.0
 }
@@ -430,6 +479,15 @@ fn default_auto_refresh() -> i32 {
 fn default_codex_auto_refresh() -> i32 {
     10
 } // 默认 10 分钟
+fn default_codex_sync_wsl() -> bool {
+    false
+}
+fn default_codex_app_ui_injection_enabled() -> bool {
+    true
+}
+fn default_codex_wsl_config_dir() -> String {
+    String::new()
+}
 fn default_zed_auto_refresh() -> i32 {
     10
 }
@@ -445,12 +503,6 @@ fn default_kiro_auto_refresh() -> i32 {
 fn default_cursor_auto_refresh() -> i32 {
     10
 } // 默认 10 分钟
-fn default_gemini_auto_refresh() -> i32 {
-    10
-}
-fn default_gemini_sync_wsl() -> bool {
-    true
-}
 fn default_codebuddy_auto_refresh() -> i32 {
     10
 }
@@ -554,6 +606,9 @@ fn default_cursor_app_path() -> String {
 fn default_codebuddy_app_path() -> String {
     String::new()
 }
+fn default_codebuddy_share_sessions_on_switch() -> bool {
+    false
+}
 fn default_codebuddy_cn_app_path() -> String {
     String::new()
 }
@@ -563,8 +618,14 @@ fn default_qoder_app_path() -> String {
 fn default_trae_app_path() -> String {
     String::new()
 }
+fn default_trae_app_scan_roots() -> String {
+    String::new()
+}
 fn default_workbuddy_app_path() -> String {
     String::new()
+}
+fn default_workbuddy_share_sessions_on_switch() -> bool {
+    false
 }
 fn default_opencode_sync_on_switch() -> bool {
     false
@@ -671,12 +732,6 @@ fn default_cursor_quota_alert_enabled() -> bool {
 fn default_cursor_quota_alert_threshold() -> i32 {
     20
 }
-fn default_gemini_quota_alert_enabled() -> bool {
-    false
-}
-fn default_gemini_quota_alert_threshold() -> i32 {
-    20
-}
 fn default_codebuddy_quota_alert_enabled() -> bool {
     false
 }
@@ -722,21 +777,26 @@ impl Default for UserConfig {
             language: default_language(),
             default_terminal: default_default_terminal(),
             theme: default_theme(),
+            reduced_motion_enabled: default_reduced_motion_enabled(),
             ui_scale: default_ui_scale(),
             auto_refresh_minutes: default_auto_refresh(),
             codex_auto_refresh_minutes: default_codex_auto_refresh(),
+            codex_sync_wsl: default_codex_sync_wsl(),
+            codex_app_ui_injection_enabled: default_codex_app_ui_injection_enabled(),
+            codex_wsl_config_dir: default_codex_wsl_config_dir(),
             zed_auto_refresh_minutes: default_zed_auto_refresh(),
             ghcp_auto_refresh_minutes: default_ghcp_auto_refresh(),
             windsurf_auto_refresh_minutes: default_windsurf_auto_refresh(),
             kiro_auto_refresh_minutes: default_kiro_auto_refresh(),
             cursor_auto_refresh_minutes: default_cursor_auto_refresh(),
-            gemini_auto_refresh_minutes: default_gemini_auto_refresh(),
-            gemini_sync_wsl: default_gemini_sync_wsl(),
             codebuddy_auto_refresh_minutes: default_codebuddy_auto_refresh(),
             codebuddy_cn_auto_refresh_minutes: default_codebuddy_cn_auto_refresh(),
             workbuddy_auto_refresh_minutes: default_workbuddy_auto_refresh(),
             qoder_auto_refresh_minutes: default_qoder_auto_refresh(),
             trae_auto_refresh_minutes: default_trae_auto_refresh(),
+            trae_solo_auto_refresh_minutes: default_trae_auto_refresh(),
+            trae_cn_auto_refresh_minutes: default_trae_auto_refresh(),
+            trae_solo_cn_auto_refresh_minutes: default_trae_auto_refresh(),
             close_behavior: default_close_behavior(),
             minimize_behavior: default_minimize_behavior(),
             hide_dock_icon: default_hide_dock_icon(),
@@ -765,10 +825,19 @@ impl Default for UserConfig {
             kiro_app_path: default_kiro_app_path(),
             cursor_app_path: default_cursor_app_path(),
             codebuddy_app_path: default_codebuddy_app_path(),
+            codebuddy_share_sessions_on_switch: default_codebuddy_share_sessions_on_switch(),
             codebuddy_cn_app_path: default_codebuddy_cn_app_path(),
             qoder_app_path: default_qoder_app_path(),
             trae_app_path: default_trae_app_path(),
+            trae_solo_app_path: default_trae_app_path(),
+            trae_cn_app_path: default_trae_app_path(),
+            trae_solo_cn_app_path: default_trae_app_path(),
+            trae_app_scan_roots: default_trae_app_scan_roots(),
+            trae_solo_app_scan_roots: default_trae_app_scan_roots(),
+            trae_cn_app_scan_roots: default_trae_app_scan_roots(),
+            trae_solo_cn_app_scan_roots: default_trae_app_scan_roots(),
             workbuddy_app_path: default_workbuddy_app_path(),
+            workbuddy_share_sessions_on_switch: default_workbuddy_share_sessions_on_switch(),
             opencode_sync_on_switch: default_opencode_sync_on_switch(),
             opencode_auth_overwrite_on_switch: default_opencode_auth_overwrite_on_switch(),
             ghcp_opencode_sync_on_switch: default_ghcp_opencode_sync_on_switch(),
@@ -807,8 +876,6 @@ impl Default for UserConfig {
             kiro_quota_alert_threshold: default_kiro_quota_alert_threshold(),
             cursor_quota_alert_enabled: default_cursor_quota_alert_enabled(),
             cursor_quota_alert_threshold: default_cursor_quota_alert_threshold(),
-            gemini_quota_alert_enabled: default_gemini_quota_alert_enabled(),
-            gemini_quota_alert_threshold: default_gemini_quota_alert_threshold(),
             codebuddy_quota_alert_enabled: default_codebuddy_quota_alert_enabled(),
             codebuddy_quota_alert_threshold: default_codebuddy_quota_alert_threshold(),
             codebuddy_cn_quota_alert_enabled: default_codebuddy_cn_quota_alert_enabled(),
@@ -817,8 +884,15 @@ impl Default for UserConfig {
             qoder_quota_alert_threshold: default_qoder_quota_alert_threshold(),
             trae_quota_alert_enabled: default_trae_quota_alert_enabled(),
             trae_quota_alert_threshold: default_trae_quota_alert_threshold(),
+            trae_solo_quota_alert_enabled: default_trae_quota_alert_enabled(),
+            trae_solo_quota_alert_threshold: default_trae_quota_alert_threshold(),
+            trae_cn_quota_alert_enabled: default_trae_quota_alert_enabled(),
+            trae_cn_quota_alert_threshold: default_trae_quota_alert_threshold(),
+            trae_solo_cn_quota_alert_enabled: default_trae_quota_alert_enabled(),
+            trae_solo_cn_quota_alert_threshold: default_trae_quota_alert_threshold(),
             workbuddy_quota_alert_enabled: default_workbuddy_quota_alert_enabled(),
             workbuddy_quota_alert_threshold: default_workbuddy_quota_alert_threshold(),
+            extra: Map::new(),
         }
     }
 }
@@ -949,16 +1023,26 @@ pub fn sync_global_proxy_env(config: &UserConfig) {
 
 /// 获取数据目录路径
 pub fn get_data_dir() -> Result<PathBuf, String> {
+    if let Ok(raw) = std::env::var(DATA_DIR_ENV) {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
+
     let home = dirs::home_dir().ok_or("无法获取 Home 目录")?;
-    Ok(home.join(DATA_DIR))
+    let dir_name = std::env::var(PROFILE_ENV)
+        .map(|value| value.trim().eq_ignore_ascii_case("dev"))
+        .unwrap_or(false)
+        .then_some(DEV_DATA_DIR)
+        .unwrap_or(DATA_DIR);
+    Ok(home.join(dir_name))
 }
 
 /// 获取共享目录路径（供其他模块使用）
 /// 与 get_data_dir 相同，但不返回 Result
 pub fn get_shared_dir() -> PathBuf {
-    dirs::home_dir()
-        .map(|h| h.join(DATA_DIR))
-        .unwrap_or_else(|| PathBuf::from(DATA_DIR))
+    get_data_dir().unwrap_or_else(|_| PathBuf::from(DATA_DIR))
 }
 
 /// 获取服务状态文件路径
@@ -1037,31 +1121,23 @@ pub fn load_user_config() -> Result<UserConfig, String> {
             );
         }
 
-        if !obj.contains_key("gemini_auto_refresh_minutes") {
-            let inherited_refresh = obj
-                .get("cursor_auto_refresh_minutes")
-                .or_else(|| obj.get("kiro_auto_refresh_minutes"))
-                .or_else(|| obj.get("windsurf_auto_refresh_minutes"))
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32)
-                .unwrap_or_else(default_gemini_auto_refresh);
+        if !obj.contains_key("codex_sync_wsl") {
             obj.insert(
-                "gemini_auto_refresh_minutes".to_string(),
-                json!(inherited_refresh),
+                "codex_sync_wsl".to_string(),
+                json!(default_codex_sync_wsl()),
             );
         }
 
-        if !obj.contains_key("gemini_sync_wsl") {
+        if !obj.contains_key("codex_wsl_config_dir") {
             obj.insert(
-                "gemini_sync_wsl".to_string(),
-                json!(default_gemini_sync_wsl()),
+                "codex_wsl_config_dir".to_string(),
+                json!(default_codex_wsl_config_dir()),
             );
         }
 
         if !obj.contains_key("qoder_auto_refresh_minutes") {
             let inherited_refresh = obj
-                .get("gemini_auto_refresh_minutes")
-                .or_else(|| obj.get("cursor_auto_refresh_minutes"))
+                .get("cursor_auto_refresh_minutes")
                 .or_else(|| obj.get("kiro_auto_refresh_minutes"))
                 .and_then(|v| v.as_i64())
                 .map(|v| v as i32)
@@ -1075,7 +1151,6 @@ pub fn load_user_config() -> Result<UserConfig, String> {
         if !obj.contains_key("codebuddy_cn_auto_refresh_minutes") {
             let inherited_refresh = obj
                 .get("codebuddy_auto_refresh_minutes")
-                .or_else(|| obj.get("gemini_auto_refresh_minutes"))
                 .and_then(|v| v.as_i64())
                 .map(|v| v as i32)
                 .unwrap_or_else(default_codebuddy_cn_auto_refresh);
@@ -1089,7 +1164,6 @@ pub fn load_user_config() -> Result<UserConfig, String> {
             let inherited_refresh = obj
                 .get("codebuddy_cn_auto_refresh_minutes")
                 .or_else(|| obj.get("codebuddy_auto_refresh_minutes"))
-                .or_else(|| obj.get("gemini_auto_refresh_minutes"))
                 .and_then(|v| v.as_i64())
                 .map(|v| v as i32)
                 .unwrap_or_else(default_workbuddy_auto_refresh);
@@ -1102,7 +1176,6 @@ pub fn load_user_config() -> Result<UserConfig, String> {
         if !obj.contains_key("trae_auto_refresh_minutes") {
             let inherited_refresh = obj
                 .get("qoder_auto_refresh_minutes")
-                .or_else(|| obj.get("gemini_auto_refresh_minutes"))
                 .and_then(|v| v.as_i64())
                 .map(|v| v as i32)
                 .unwrap_or_else(default_trae_auto_refresh);
@@ -1110,6 +1183,20 @@ pub fn load_user_config() -> Result<UserConfig, String> {
                 "trae_auto_refresh_minutes".to_string(),
                 json!(inherited_refresh),
             );
+        }
+        let inherited_trae_refresh = obj
+            .get("trae_auto_refresh_minutes")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32)
+            .unwrap_or_else(default_trae_auto_refresh);
+        for key in [
+            "trae_solo_auto_refresh_minutes",
+            "trae_cn_auto_refresh_minutes",
+            "trae_solo_cn_auto_refresh_minutes",
+        ] {
+            if !obj.contains_key(key) {
+                obj.insert(key.to_string(), json!(inherited_trae_refresh));
+            }
         }
 
         if !obj.contains_key("hide_dock_icon") {
@@ -1226,6 +1313,12 @@ pub fn load_user_config() -> Result<UserConfig, String> {
             obj.insert(
                 "default_terminal".to_string(),
                 json!(default_default_terminal()),
+            );
+        }
+        if !obj.contains_key("reduced_motion_enabled") {
+            obj.insert(
+                "reduced_motion_enabled".to_string(),
+                json!(default_reduced_motion_enabled()),
             );
         }
         if !obj.contains_key("global_proxy_enabled") {
@@ -1406,18 +1499,6 @@ pub fn load_user_config() -> Result<UserConfig, String> {
                 json!(legacy_threshold),
             );
         }
-        if !obj.contains_key("gemini_quota_alert_enabled") {
-            obj.insert(
-                "gemini_quota_alert_enabled".to_string(),
-                json!(legacy_enabled),
-            );
-        }
-        if !obj.contains_key("gemini_quota_alert_threshold") {
-            obj.insert(
-                "gemini_quota_alert_threshold".to_string(),
-                json!(legacy_threshold),
-            );
-        }
         if !obj.contains_key("codebuddy_quota_alert_enabled") {
             obj.insert(
                 "codebuddy_quota_alert_enabled".to_string(),
@@ -1465,6 +1546,33 @@ pub fn load_user_config() -> Result<UserConfig, String> {
                 "trae_quota_alert_threshold".to_string(),
                 json!(legacy_threshold),
             );
+        }
+        let inherited_trae_quota_enabled = obj
+            .get("trae_quota_alert_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(legacy_enabled);
+        let inherited_trae_quota_threshold = obj
+            .get("trae_quota_alert_threshold")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32)
+            .unwrap_or(legacy_threshold);
+        for key in [
+            "trae_solo_quota_alert_enabled",
+            "trae_cn_quota_alert_enabled",
+            "trae_solo_cn_quota_alert_enabled",
+        ] {
+            if !obj.contains_key(key) {
+                obj.insert(key.to_string(), json!(inherited_trae_quota_enabled));
+            }
+        }
+        for key in [
+            "trae_solo_quota_alert_threshold",
+            "trae_cn_quota_alert_threshold",
+            "trae_solo_cn_quota_alert_threshold",
+        ] {
+            if !obj.contains_key(key) {
+                obj.insert(key.to_string(), json!(inherited_trae_quota_threshold));
+            }
         }
         if !obj.contains_key("workbuddy_quota_alert_enabled") {
             obj.insert(
@@ -1525,8 +1633,7 @@ pub fn load_user_config() -> Result<UserConfig, String> {
     Ok(config)
 }
 
-/// 保存用户配置
-pub fn save_user_config(config: &UserConfig) -> Result<(), String> {
+fn persist_user_config(config: &UserConfig) -> Result<(), String> {
     let config_path = get_user_config_path()?;
     let data_dir = get_data_dir()?;
 
@@ -1541,18 +1648,86 @@ pub fn save_user_config(config: &UserConfig) -> Result<(), String> {
     crate::modules::atomic_write::write_string_atomic(&config_path, &json)
         .map_err(|e| format!("写入配置文件失败: {}", e))?;
 
-    // 更新运行时状态
-    if let Ok(mut state) = get_runtime_state().write() {
-        state.user_config = config.clone();
-    }
+    Ok(())
+}
 
+fn acquire_config_file_lock(path: &Path) -> Result<fs::File, String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("创建配置目录失败: {}", error))?;
+    }
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path)
+        .map_err(|error| format!("打开配置锁文件失败: {}", error))?;
+    file.lock()
+        .map_err(|error| format!("锁定配置文件失败: {}", error))?;
+    Ok(file)
+}
+
+fn finish_user_config_update(config: &UserConfig) {
     sync_global_proxy_env(config);
 
     crate::modules::logger::log_info(&format!(
         "[Config] 用户配置已保存: ws_enabled={}, ws_port={}, report_enabled={}, report_port={}",
         config.ws_enabled, config.ws_port, config.report_enabled, config.report_port
     ));
+}
 
+fn patch_runtime_state<F, L, P, C>(
+    state: &RwLock<RuntimeState>,
+    lock_path: &Path,
+    load_latest: L,
+    persist: P,
+    commit: C,
+    patch: F,
+) -> Result<UserConfig, String>
+where
+    F: FnOnce(&mut UserConfig) -> Result<(), String>,
+    L: FnOnce() -> Result<UserConfig, String>,
+    P: FnOnce(&UserConfig) -> Result<(), String>,
+    C: FnOnce(&UserConfig),
+{
+    let mut state = state
+        .write()
+        .map_err(|_| "用户配置状态锁已损坏".to_string())?;
+    let _file_lock_guard = acquire_config_file_lock(lock_path)?;
+    let mut next_config = load_latest()?;
+    patch(&mut next_config)?;
+    persist(&next_config)?;
+    state.user_config = next_config.clone();
+    commit(&next_config);
+    Ok(next_config)
+}
+
+/// 基于锁内重读到的最新磁盘配置修改并保存指定字段。
+pub fn patch_user_config<F>(patch: F) -> Result<UserConfig, String>
+where
+    F: FnOnce(&mut UserConfig) -> Result<(), String>,
+{
+    let lock_path = get_data_dir()?.join(USER_CONFIG_LOCK_FILE);
+    patch_runtime_state(
+        get_runtime_state(),
+        &lock_path,
+        load_user_config,
+        persist_user_config,
+        finish_user_config_update,
+        patch,
+    )
+}
+
+/// 保存完整用户配置。
+pub fn save_user_config(config: &UserConfig) -> Result<(), String> {
+    let replacement = config.clone();
+    let mut state = get_runtime_state()
+        .write()
+        .map_err(|_| "用户配置状态锁已损坏".to_string())?;
+    let lock_path = get_data_dir()?.join(USER_CONFIG_LOCK_FILE);
+    let _file_lock_guard = acquire_config_file_lock(&lock_path)?;
+    persist_user_config(&replacement)?;
+    state.user_config = replacement.clone();
+    finish_user_config_update(&replacement);
     Ok(())
 }
 
@@ -1623,7 +1798,40 @@ pub fn init_server_status(actual_port: u16) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::UserConfig;
+    use super::{patch_runtime_state, RuntimeState, UserConfig};
+    use std::fs;
+    use std::path::Path;
+    use std::sync::{Arc, Barrier, RwLock};
+    use std::thread;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("{}_{}_{}", prefix, std::process::id(), unique));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn make_runtime_state() -> RwLock<RuntimeState> {
+        RwLock::new(RuntimeState {
+            actual_port: None,
+            user_config: UserConfig::default(),
+        })
+    }
+
+    fn persist_test_config(path: &Path, config: &UserConfig) -> Result<(), String> {
+        let content = serde_json::to_string_pretty(config).map_err(|error| error.to_string())?;
+        crate::modules::atomic_write::write_string_atomic(path, &content)
+    }
+
+    fn load_test_config(path: &Path) -> Result<UserConfig, String> {
+        let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
+        serde_json::from_str(&content).map_err(|error| error.to_string())
+    }
 
     #[test]
     fn openclaw_auth_overwrite_default_is_disabled() {
@@ -1632,9 +1840,106 @@ mod tests {
     }
 
     #[test]
+    fn codex_api_service_quota_display_defaults_to_enabled() {
+        let default_cfg = UserConfig::default();
+        assert!(default_cfg.codex_app_ui_injection_enabled);
+
+        let upgraded_cfg: UserConfig =
+            serde_json::from_value(serde_json::json!({})).expect("旧配置反序列化应成功");
+        assert!(upgraded_cfg.codex_app_ui_injection_enabled);
+
+        let disabled_cfg: UserConfig = serde_json::from_value(serde_json::json!({
+            "codex_app_ui_injection_enabled": false
+        }))
+        .expect("显式关闭配置反序列化应成功");
+        assert!(!disabled_cfg.codex_app_ui_injection_enabled);
+    }
+
+    #[test]
     fn openclaw_auth_overwrite_missing_field_falls_back_to_disabled() {
         let cfg: UserConfig =
             serde_json::from_value(serde_json::json!({})).expect("反序列化默认配置应成功");
         assert!(!cfg.openclaw_auth_overwrite_on_switch);
+    }
+
+    #[test]
+    fn unknown_host_fields_survive_cli_config_round_trip() {
+        let cfg: UserConfig = serde_json::from_value(serde_json::json!({
+            "language": "zh-cn",
+            "diagnostics_error_reporting_enabled": false,
+            "grok_auto_refresh_minutes": 5,
+            "webdav_sync_remote_dir": "backups"
+        }))
+        .expect("CLI 应能读取宿主新增配置字段");
+
+        let serialized = serde_json::to_value(cfg).expect("CLI 配置应能重新序列化");
+        assert_eq!(serialized["diagnostics_error_reporting_enabled"], false);
+        assert_eq!(serialized["grok_auto_refresh_minutes"], 5);
+        assert_eq!(serialized["webdav_sync_remote_dir"], "backups");
+    }
+
+    #[test]
+    fn separate_cli_runtime_states_merge_through_shared_file_lock() {
+        let dir = make_temp_dir("core_config_cross_runtime_patch");
+        let path = Arc::new(dir.join("config.json"));
+        let lock_path = Arc::new(dir.join("config.json.lock"));
+        persist_test_config(path.as_path(), &UserConfig::default()).expect("seed config");
+
+        let language_state = Arc::new(make_runtime_state());
+        let theme_state = Arc::new(make_runtime_state());
+        let barrier = Arc::new(Barrier::new(3));
+
+        let language_thread = {
+            let path = Arc::clone(&path);
+            let lock_path = Arc::clone(&lock_path);
+            let state = Arc::clone(&language_state);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                patch_runtime_state(
+                    &state,
+                    lock_path.as_path(),
+                    || load_test_config(path.as_path()),
+                    |config| persist_test_config(path.as_path(), config),
+                    |_| {},
+                    |config| {
+                        config.language = "en-us".to_string();
+                        Ok(())
+                    },
+                )
+                .expect("patch language from first CLI runtime");
+            })
+        };
+        let theme_thread = {
+            let path = Arc::clone(&path);
+            let lock_path = Arc::clone(&lock_path);
+            let state = Arc::clone(&theme_state);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                patch_runtime_state(
+                    &state,
+                    lock_path.as_path(),
+                    || load_test_config(path.as_path()),
+                    |config| persist_test_config(path.as_path(), config),
+                    |_| {},
+                    |config| {
+                        config.theme = "light".to_string();
+                        Ok(())
+                    },
+                )
+                .expect("patch theme from second CLI runtime");
+            })
+        };
+
+        barrier.wait();
+        language_thread.join().expect("join language runtime");
+        theme_thread.join().expect("join theme runtime");
+
+        let disk = load_test_config(path.as_path()).expect("load merged config");
+        assert_eq!(disk.language, "en-us");
+        assert_eq!(disk.theme, "light");
+
+        fs::remove_dir_all(dir).expect("remove temp dir");
     }
 }

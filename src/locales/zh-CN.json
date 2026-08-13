@@ -2,16 +2,20 @@
   "common": {
     "confirm": "确认",
     "cancel": "取消",
+    "cancelling": "正在取消...",
+    "cancelled": "已取消",
     "save": "保存",
     "saving": "保存中...",
     "delete": "删除",
     "refresh": "刷新",
+    "reauthorize": "重新授权",
     "loading": "加载中...",
     "success": "成功",
     "failed": "失败",
     "enabled": "已启用",
     "disabled": "已禁用",
     "close": "关闭",
+    "back": "返回",
     "open": "打开",
     "copy": "复制",
     "copied": "已复制",
@@ -22,6 +26,11 @@
     "detail": "详情",
     "editable": "可编辑",
     "preview": "预览",
+    "sessionSharing": {
+      "title": "切号共享本地会话",
+      "fullDesc": "切号时在本机 {{platform}} 账号间合并本地会话与恢复状态；仅读写本地文件，不上传会话内容。",
+      "workspaceDesc": "切号时在本机 {{platform}} 账号间复制并合并 workspace 会话索引与恢复状态；不修改加密的 Builder/Agent 会话数据库，也不上传内容。"
+    },
     "topRightAd": {
       "ariaLabel": "全局右上角广告位",
       "badge": "广告",
@@ -121,7 +130,7 @@
           "inline": "内嵌建议"
         },
         "subtitle": "多实例独立配置，多账号并行运行。",
-        "title": "多开实例"
+        "title": "应用多开"
       },
       "noMatch": {
         "desc": "请尝试调整搜索或筛选条件",
@@ -131,6 +140,8 @@
         "failed": "授权失败",
         "hint": "完成授权后，此窗口将自动更新",
         "openBrowser": "在浏览器中打开",
+        "normalWindow": "普通窗口",
+        "incognitoWindow": "无痕窗口",
         "success": "授权成功",
         "meta": "授权有效期：{{expires}}s；轮询间隔：{{interval}}s",
         "preparing": "正在准备授权信息...",
@@ -181,7 +192,9 @@
         "resetDone": "已重置",
         "hourly": "Inline Suggestions",
         "weekly": "Chat messages",
-        "resetAt": "重置：{{time}}"
+        "resetAt": "重置：{{time}}",
+        "expiresAt": "到期时间：{{time}}",
+        "leftPercent": "剩余 {{value}}%"
       },
       "subtitle": "实时监控所有账号的配额状态。",
       "time": {
@@ -204,7 +217,7 @@
         "planEndsInHours": "{{hours}} 小时后重置"
       },
       "flowNotice": {
-        "alternative": "多开实例隔离：使用不同 --user-data-dir 做账号隔离；每个实例登录一次，后续按实例启动即可快速切换到对应账号环境。"
+        "alternative": "应用多开隔离：使用独立受管 profile；每个实例登录一次，后续按实例快速切换账号环境。"
       },
       "injecting": "注入中...",
       "usage": {
@@ -260,6 +273,7 @@
     "errors": {
       "refreshFailed": "刷新失败：{{error}}",
       "switchFailed": "切换失败：{{error}}",
+      "stopInstanceBeforeSwitch": "请先停止实例再切换账号",
       "pinFailed": "置顶设置失败：{{error}}",
       "closeFailed": "关闭失败：{{error}}"
     },
@@ -277,20 +291,21 @@
     "overview": "Antigravity IDE",
     "accounts": "账号管理",
     "wakeup": "唤醒任务",
-    "fingerprints": "设备指纹",
     "settings": "设置",
     "codex": "Codex",
     "zed": "Zed 平台",
     "codebuddy": "CodeBuddy",
     "githubCopilot": "GitHub Copilot",
-    "windsurf": "Windsurf",
-    "gemini": "Gemini Cli",
+    "windsurf": "Devin",
     "dashboard": "仪表盘",
     "morePlatforms": "更多平台",
     "collapseSidebar": "收起侧边栏",
     "expandSidebar": "展开侧边栏",
     "logs": "日志",
-    "instances": "多开实例",
+    "sponsors": "赞助商",
+    "sponsorAppreciation": "赞赏",
+    "apiRelay": "中转站",
+    "instances": "应用多开",
     "manual": "使用手册",
     "quickUpdate": {
       "update": "更新",
@@ -299,13 +314,181 @@
     },
     "qoder": "Qoder",
     "trae": "Trae",
+    "traeSolo": "TRAE SOLO",
+    "traeCn": "Trae CN",
+    "traeSoloCn": "TRAE SOLO CN",
     "codebuddyCn": "CodeBuddy CN",
     "switchClassicLayoutEntry": "切换到经典布局",
     "switchClassicLayoutTitle": "切换至经典侧边栏布局",
     "switchClassicLayoutDesc": "经典布局将展示完整平台导航，并支持可折叠侧边栏。你可在“设置 > 通用 > 侧边栏布局”中随时切换回原始布局。",
     "switchClassicLayoutDontAskAgain": "不再提示此引导",
     "switchClassicLayoutConfirm": "立即切换",
-    "2faManager": "2FA 管理"
+    "2faManager": "2FA 管理",
+    "claude": "Claude",
+    "openrouter": "OpenRouter",
+    "opencode": "OpenCode"
+  },
+  "sponsors": {
+    "pageTitle": "赞助商",
+    "pageDesc": "感谢以下赞助商支持 Cockpit Tools。",
+    "loading": "正在加载赞助商...",
+    "emptyTitle": "暂无赞助商",
+    "emptyDesc": "当前远端未开启赞助商模块。",
+    "listAriaLabel": "赞助商列表",
+    "defaultDescription": "感谢支持 Cockpit Tools。",
+    "openSponsor": "查看"
+  },
+  "relay": {
+    "pageTitle": "专属中转站",
+    "pageDesc": "为 Cockpit Tools 用户提供的合作 API 服务，可用于 Codex API Key 账号。",
+    "loading": "正在加载中转站...",
+    "emptyTitle": "中转站未开启",
+    "emptyDesc": "当前远端配置未开启专属中转站。",
+    "defaultDescription": "合作 API 中转服务。",
+    "getApiKey": "获取 API Key",
+    "configTitle": "启用到 Codex",
+    "apiKeyLabel": "API 密钥",
+    "apiKeyPlaceholder": "粘贴从中转站获取的 API Key",
+    "apiKeyRequired": "请输入 API Key。",
+    "baseUrl": "接口地址",
+    "protocol": "协议",
+    "vision": "图片输入",
+    "testConnection": "测试连接",
+    "saveAndEnable": "保存并启用",
+    "goCodex": "前往 Codex",
+    "statusUnavailable": "当前中转站配置不可用。",
+    "testing": "正在测试连接...",
+    "testSuccess": "连接测试通过，已确认该 API Key 可用于中转站。",
+    "testFailed": "连接测试失败。",
+    "saving": "正在保存并启用到 Codex...",
+    "saveSuccess": "已保存中转站配置，可在 Codex 账号页使用。",
+    "saveFailed": "保存中转站配置失败。",
+    "savedProvider": "已保存供应商：{{name}}",
+    "modelsTitle": "支持模型",
+    "modelsEmpty": "远端暂未配置固定模型列表，保存后可由 Codex 侧按服务能力使用。"
+  },
+  "apiKeyFun": {
+    "eyebrow": "中转站",
+    "title": "APIKEY.FUN 中转站",
+    "description": "Cockpit 官方合作中转站，为用户提供稳定、开放、高性价比的大模型 API 接入服务。支持 Claude、OpenAI、Gemini 等主流模型，适合在 Codex、Gemini CLI、Claude Code 及其他开发工具中统一配置使用。通过 Cockpit 专属链接注册，可享受最高充值永久 95 折优惠。",
+    "register": "专属注册链接",
+    "docs": "官方文档",
+    "viewNow": "立即查看",
+    "queryTitle": "密钥额度查询",
+    "queryDesc": "输入 APIKEY.FUN 的 API Key 后自动查询额度。",
+    "keyNotSet": "未输入秘钥",
+    "apiKeyLabel": "API 密钥",
+    "apiKeyPlaceholder": "粘贴 APIKEY.FUN 控制台创建的 API Key",
+    "hideKey": "隐藏",
+    "showKey": "显示",
+    "endpointLabel": "接入端点",
+    "protocolLabel": "Codex 协议",
+    "queryUsage": "查询额度",
+    "querying": "查询中",
+    "saveToCodex": "一键写入 Codex",
+    "saving": "写入中",
+    "saveSuccess": "已写入 Codex Provider：{{name}}",
+    "toolsTitle": "一键写入客户端",
+    "toolsDesc": "按 APIKEY.FUN 文档和 CC Switch 的落盘方式，直接写入本机客户端配置文件。",
+    "endpoint": {
+      "global": "全球线路",
+      "globalDesc": "官方默认 API Base，适合大多数网络环境。",
+      "direct": "专线直连",
+      "directDesc": "适合对延迟敏感的场景使用。"
+    },
+    "wireApi": {
+      "responses": "Responses 协议",
+      "responsesDesc": "Codex 优先使用，直连 OpenAI Responses 协议。",
+      "chatCompletions": "Chat Completions 协议",
+      "chatCompletionsDesc": "通过本地网关兼容 Chat Completions 协议。"
+    },
+    "usage": {
+      "remaining": "剩余额度",
+      "used": "已用额度",
+      "todayRequests": "今日请求",
+      "todayTokens": "今日 Token",
+      "totalRequests": "总请求",
+      "totalTokens": "总 Token"
+    },
+    "tool": {
+      "codexTitle": "Codex 供应商",
+      "codexDesc": "写入模型 Provider，Base URL 使用当前线路的 /v1 地址。",
+      "envTitle": "环境变量",
+      "envDesc": "适合 Claude Code、Gemini CLI、Hermes 等 OpenAI 兼容入口参考。",
+      "curlTitle": "API 脚本",
+      "curlDesc": "快速验证 Responses 兼容请求。"
+    },
+    "docTool": {
+      "codex": "可直接一键写入 Codex Provider。",
+      "claudeCode": "复制 Anthropic Messages 兼容参数。",
+      "geminiCli": "复制 OpenAI 兼容 Base URL 与 API Key。",
+      "traeSolo": "复制官方文档所需的中转参数。",
+      "openClaw": "复制 OpenAI 兼容接入参数。",
+      "hermes": "复制 Hermes 模型页可填写的参数。",
+      "apiScript": "复制脚本接入的基础参数。"
+    },
+    "apply": {
+      "codexTitle": "Codex",
+      "codexDesc": "写入 ~/.codex/config.toml 与 auth.json，使用 Responses 协议和当前 API Key。",
+      "geminiTitle": "Gemini CLI 配置",
+      "geminiDesc": "写入 ~/.gemini/.env，并把 settings.json 的认证模式设为 gemini-api-key。",
+      "openclawTitle": "OpenClaw 配置",
+      "openclawDesc": "写入 ~/.openclaw/openclaw.json 的 models.providers.apikeyfun。",
+      "hermesTitle": "Hermes 配置",
+      "hermesDesc": "写入 ~/.hermes/config.yaml 的 custom_providers，并切到 apikeyfun 默认模型。",
+      "button": "写入配置",
+      "applying": "写入中",
+      "success": "已写入配置文件：{{paths}}",
+      "failed": "写入配置失败：{{error}}"
+    },
+    "error": {
+      "missingApiKey": "请输入 API Key。",
+      "queryFailed": "额度查询失败：{{error}}",
+      "saveFailed": "一键写入失败：{{error}}"
+    },
+    "models": {
+      "title": "可用模型",
+      "desc": "从当前 API Key 的模型接口读取，保存到 Codex 或 Claude CLI 时会带入这些模型目录。",
+      "count": "{{count}} 个模型",
+      "loading": "读取中",
+      "loadingDesc": "正在从当前 API Key 读取模型列表...",
+      "empty": "输入 API Key 后读取可用模型。",
+      "emptyFromKey": "当前 API Key 未返回模型列表。",
+      "queryFailed": "模型列表读取失败：{{error}}"
+    },
+    "copyKey": "复制密钥",
+    "clearKey": "清空输入",
+    "keyManager": {
+      "title": "密钥管理",
+      "desc": "保存常用 API Key，点击即可切换并自动查询额度。",
+      "saveButton": "保存密钥",
+      "savedButton": "已保存",
+      "empty": "暂无保存的密钥。",
+      "lastRemaining": "上次余额 {{value}}",
+      "notQueried": "未查询",
+      "deleteButton": "删除",
+      "editAlias": "修改别名",
+      "renamePlaceholder": "输入新别名...",
+      "createdAt": "添加于 {{time}}",
+      "saveFlash": "刚刚保存",
+      "addingToCodex": "正在添加到 Codex...",
+      "addedToCodex": "已添加到 Codex",
+      "addToCodexFailed": "添加到 Codex 失败：{{error}}",
+      "addingToClaude": "正在添加到 Claude CLI...",
+      "addedToClaude": "已添加到 Claude CLI",
+      "addToClaudeFailed": "添加到 Claude CLI 失败：{{error}}",
+      "codexAdded": "Codex 已添加",
+      "claudeAdded": "Claude 已添加",
+      "addToCodex": "添加到 Codex",
+      "addToClaude": "添加到 Claude CLI",
+      "addToClaudeDesktop": "添加到 Claude",
+      "addToClaudeCli": "添加到 Claude CLI",
+      "codexShort": "Codex",
+      "claudeShort": "Claude CLI"
+    },
+    "prefill": {
+      "claudeDesktopReady": "已带入 APIKEY.FUN 配置，请确认后添加到 Claude。"
+    }
   },
   "platformLayout": {
     "title": "平台布局",
@@ -313,7 +496,7 @@
     "sidebarSelectedUnlimited": "侧边栏已选择 {{count}}",
     "reset": "恢复默认",
     "tip": "拖拽可排序；最多选择三个平台显示在侧边栏。若只选择一个，侧边栏只显示一个。",
-    "tipWithGroups": "拖拽可排序；最多选择三个入口显示在侧边栏。分组子级不参与侧边栏/仪表盘开关，仅用于菜单栏与默认平台切换。",
+    "tipWithGroups": "拖拽可排序；最多选择 {{max}} 个入口显示在侧边栏。分组子级不参与侧边栏/仪表盘开关，仅用于菜单栏与默认平台切换。",
     "tipWithGroupsUnlimited": "拖拽可排序；可选择任意数量入口显示在侧边栏。分组子级不参与侧边栏/仪表盘开关，仅用于菜单栏与默认平台切换。",
     "addGroup": "新建分组",
     "editGroup": "编辑",
@@ -322,6 +505,7 @@
     "sidebarToggle": "侧边栏显示",
     "dashboardToggle": "仪表盘显示",
     "trayToggle": "菜单栏显示",
+    "apiRelayTrayDisabled": "中转站暂不支持菜单栏显示",
     "groupDefault": "默认平台",
     "groupName": "分组名称",
     "groupNamePlaceholder": "例如：CodeBuddy 套件",
@@ -353,7 +537,7 @@
     "showSensitive": "显示邮箱"
   },
   "instances": {
-    "title": "多开实例",
+    "title": "应用多开",
     "subtitle": "多实例独立配置，多账号并行运行。",
     "defaultName": "默认实例",
     "search": "搜索实例",
@@ -505,7 +689,9 @@
       "pathRequired": "请选择实例目录",
       "bindRequired": "请选择要绑定的账号",
       "appSpeed": "速度",
-      "appSpeedDesc": "启动官方 Codex 前写入对应速度"
+      "appSpeedDesc": "启动官方 Codex 前写入对应速度",
+      "autoSyncThreads": "自动同步会话",
+      "autoSyncThreadsDesc": "关闭时保持多实例会话隔离；开启后仅在所有 Codex 实例已停止时，启动或关闭实例会自动合并本地会话记录。"
     },
     "quota": {
       "unbound": "未绑定账号",
@@ -520,6 +706,7 @@
       "deleted": "实例已删除",
       "started": "实例已启动",
       "launchPrepared": "启动命令已准备",
+      "codexManagedStoreLaunchUnsafe": "Windows Store 无法可靠传递实例目录，已阻止打开默认账号。请将该实例的启动方式切换为 CLI 后重试。详情：{{detail}}",
       "stopped": "实例已关闭",
       "startedAll": "已启动所有未运行实例",
       "restartedAll": "已重启运行中的实例",
@@ -590,9 +777,299 @@
   "settings": {
     "title": "应用设置",
     "subtitle": "个性化您的 Cockpit Tools 体验。",
+    "general": {
+      "appearance": "界面外观",
+      "language": "显示语言",
+      "languageDesc": "选择界面的显示语言",
+      "theme": "应用主题",
+      "themeDesc": "切换深色或浅色模式",
+      "defaultTerminal": "默认终端",
+      "defaultTerminalDesc": "CLI 打开时使用的终端",
+      "terminalSystem": "跟随系统",
+      "terminalSystemWindowsCompatibility": "系统兼容（PowerShell）",
+      "sideNavLayout": "侧边栏布局",
+      "sideNavLayoutDesc": "切换原始布局或经典布局",
+      "sideNavLayoutOriginal": "原始布局",
+      "sideNavLayoutClassic": "经典布局",
+      "themeLight": "浅色 (Light)",
+      "themeDark": "深色 (Dark)",
+      "themeSystem": "跟随系统",
+      "uiScale": "界面缩放",
+      "uiScaleDesc": "调整界面缩放比例（⌘+/⌘- 缩放，⌘0 重置）",
+      "accountManagement": "账号管理",
+      "autoRefresh": "Antigravity IDE 自动刷新配额",
+      "codexAutoRefresh": "Codex 自动刷新配额",
+      "autoRefreshDesc": "后台自动更新频率",
+      "codexAutoRefreshDesc": "后台自动更新频率",
+      "autoRefreshDisabled": "禁用",
+      "autoRefreshCustom": "自定义...",
+      "every15min": "每 15 分钟",
+      "every30min": "每 30 分钟",
+      "every1hour": "每 1 小时",
+      "minutes": "分",
+      "refreshIntervalLimited": "配额重置唤醒已启用，刷新间隔最小值为 2 分钟",
+      "currentAccountRefreshTitle": "当前账号刷新",
+      "currentAccountRefreshItemDesc": "仅刷新当前账号，默认 1 分钟。",
+      "currentAccountRefreshRequiresAutoRefresh": "需先开启“配额自动刷新”后，才能设置当前账号刷新。",
+      "closeBehavior": "窗口关闭行为",
+      "closeBehaviorDesc": "选择关闭窗口时的默认行为",
+      "closeBehaviorAsk": "每次询问",
+      "closeBehaviorMinimize": "最小化到托盘",
+      "closeBehaviorQuit": "退出应用",
+      "startupMinimized": "启动后自动最小化",
+      "startupMinimizedDesc": "应用启动完成后自动最小化主窗口，可从 Dock、任务栏或托盘恢复",
+      "rememberMainWindowState": "记住主窗口位置和大小",
+      "rememberMainWindowStateDesc": "重启或从托盘重新打开时恢复主窗口位置和大小；默认关闭",
+      "minimizeBehavior": "窗口最小化行为（仅 macOS）",
+      "minimizeBehaviorDesc": "选择最小化窗口时保留在程序坞和菜单栏，或仅保留在菜单栏",
+      "minimizeBehaviorDockAndTray": "程序坞 + 菜单栏（推荐默认）",
+      "minimizeBehaviorTrayOnly": "仅菜单栏",
+      "hideDockIcon": "是否隐藏Dock图标（仅 macOS）",
+      "hideDockIconDesc": "独立控制程序坞图标显示状态，不受窗口最小化行为影响",
+      "hideDockIconOff": "否（显示Dock图标）",
+      "hideDockIconOn": "是（隐藏Dock图标）",
+      "trayIconStyle": "菜单栏图标样式（仅 macOS）",
+      "trayIconStyleDesc": "选择系统单色图标或原彩色 App 图标",
+      "trayIconStyleTemplate": "单色图标",
+      "trayIconStyleColor": "彩色图标",
+      "floatingCardStartup": "启动时显示悬浮卡片",
+      "floatingCardStartupDesc": "应用启动后默认展示悬浮账号卡片",
+      "floatingCardAlwaysOnTop": "悬浮卡片默认置顶",
+      "floatingCardAlwaysOnTopDesc": "新打开的悬浮卡片窗口默认保持置顶",
+      "appAutoLaunch": "开机自启动 Cockpit Tools",
+      "appAutoLaunchDesc": "系统登录后自动启动应用。若 Windows 开机时出现 PowerShell 报错，请先关闭此选项。",
+      "startupWakeupDisabled": "关闭",
+      "startupWakeupImmediate": "立即唤醒",
+      "startupWakeupDelayed": "延时唤醒",
+      "floatingCardShowNow": "立即显示悬浮卡片",
+      "floatingCardShowNowDesc": "关闭后可在这里或托盘菜单中重新打开",
+      "floatingCardShowNowAction": "显示悬浮卡片",
+      "dataDir": "数据目录",
+      "dataDirDesc": "账号与配置文件的存储位置。",
+      "topRightAdVisible": "显示顶部推广",
+      "topRightAdVisibleDesc": "关闭后隐藏应用顶部推广位。",
+      "opencodeTitle": "OpenCode 联动",
+      "opencodeAuthOverwrite": "切换 Codex 时覆盖 OpenCode 登录信息",
+      "opencodeAuthOverwriteDesc": "关闭后仅切换 Codex，不会改写 OpenCode 当前登录态",
+      "opencodeRestart": "切换 Codex 时自动重启 OpenCode",
+      "opencodeRestartDesc": "覆盖 OpenCode 登录信息后自动重启 OpenCode，使登录态立即生效",
+      "opencodeRestartRequiresOverwrite": "需先开启“切换 Codex 时覆盖 OpenCode 登录信息”",
+      "opencodeAppPath": "OpenCode 启动路径",
+      "opencodeAppPathDesc": "留空则使用默认路径",
+      "opencodeAppPathPlaceholder": "默认路径",
+      "opencodePathReset": "重置默认",
+      "opencodePathSelect": "选择",
+      "codexTitle": "Codex 启动",
+      "codexAppPath": "Codex 启动路径",
+      "codexAppPathDesc": "留空则使用默认路径",
+      "codexAppPathPlaceholder": "默认路径",
+      "codexPathSelect": "选择",
+      "codexPathReset": "重置默认",
+      "codexSyncWsl": "同步 Codex 到 WSL",
+      "codexSyncWslDesc": "切换默认 Codex 账号后，同时把 auth.json 和 config.toml 写入 WSL 的 Codex 配置目录。",
+      "codexAppUiInjection": "显示 API 服务额度",
+      "codexAppUiInjectionDesc": "重启 Codex 实例后，在输入框下方显示 Cockpit Tools API 服务的账号数、周额度和 5h 额度。需保持 Cockpit Tools 在后台运行；完全退出或网络不可用时，额度不会继续刷新。",
+      "codexAppUiInjectionPoolLabel": "账号",
+      "codexAppUiInjectionWeeklyLabel": "周",
+      "codexAppUiInjectionFiveHourLabel": "5h",
+      "codexWslConfigDir": "WSL Codex 目录",
+      "codexWslConfigDirDesc": "填写 WSL 中的 .codex 目录，支持 \\\\wsl.localhost\\ 形式。",
+      "codexWslConfigDirPlaceholder": "例如：\\\\wsl.localhost\\Ubuntu-24.04\\home\\user\\.codex",
+      "vscodeTitle": "VS Code 启动",
+      "vscodeAppPath": "VS Code 启动路径",
+      "vscodeAppPathDesc": "留空则使用默认路径",
+      "vscodeAppPathPlaceholder": "默认路径",
+      "vscodePathSelect": "选择",
+      "vscodePathReset": "重置默认",
+      "antigravityAppPath": "Antigravity IDE 启动路径",
+      "antigravityTitle": "Antigravity IDE 启动",
+      "commonTitle": "通用",
+      "antigravitySettingsTitle": "Antigravity IDE 设置",
+      "codexSettingsTitle": "Codex 设置",
+      "githubCopilotSettingsTitle": "GitHub Copilot 设置",
+      "ghcpAutoRefresh": "GitHub Copilot 自动刷新配额",
+      "ghcpAutoRefreshDesc": "后台自动更新频率",
+      "windsurfSettingsTitle": "Devin 设置",
+      "windsurfAutoRefresh": "Devin 自动刷新配额",
+      "windsurfAutoRefreshDesc": "后台自动更新频率",
+      "windsurfAppPath": "Devin 启动路径",
+      "windsurfAppPathDesc": "留空则使用默认路径",
+      "windsurfAppPathPlaceholder": "默认路径",
+      "windsurfPathSelect": "选择",
+      "windsurfPathReset": "重置默认",
+      "kiroSettingsTitle": "Kiro 设置",
+      "kiroAutoRefresh": "Kiro 自动刷新配额",
+      "kiroAutoRefreshDesc": "后台自动更新频率",
+      "kiroAppPath": "Kiro 启动路径",
+      "kiroAppPathDesc": "留空则使用默认路径",
+      "kiroAppPathPlaceholder": "默认路径",
+      "kiroPathSelect": "选择",
+      "kiroPathReset": "重置默认",
+      "codebuddySettingsTitle": "CodeBuddy 设置",
+      "codebuddyAutoRefresh": "CodeBuddy 自动刷新配额",
+      "codebuddyAutoRefreshDesc": "后台自动更新频率",
+      "codebuddyShareSessionsOnSwitch": "切号共享本地会话",
+      "codebuddyShareSessionsOnSwitchDesc": "切号时在本机 CodeBuddy 账号间合并本地会话与恢复状态；仅读写本地文件，不上传会话内容。",
+      "workbuddyShareSessionsOnSwitch": "切号共享本地会话",
+      "workbuddyShareSessionsOnSwitchDesc": "切号时在本机 WorkBuddy 账号间合并本地会话与恢复状态；仅读写本地文件，不上传会话内容。",
+      "codebuddyAppPath": "CodeBuddy 启动路径",
+      "codebuddyAppPathDesc": "留空则使用默认路径",
+      "codebuddyAppPathPlaceholder": "默认路径",
+      "codebuddyPathSelect": "选择",
+      "codebuddyPathReset": "重置默认",
+      "cursorPathReset": "重置默认",
+      "antigravityStartupWakeup": "启动后执行 Antigravity IDE 唤醒",
+      "antigravityStartupWakeupDesc": "应用启动后按此策略触发一次已启用的 Antigravity IDE 唤醒任务",
+      "codexLaunchOnSwitch": "切换 Codex 时自动启动 Codex App",
+      "codexLaunchOnSwitchDesc": "切换账号后自动启动或重启 Codex App",
+      "codexRestartSpecifiedAppOnSwitch": "切换 Codex 时重启指定应用",
+      "codexRestartSpecifiedAppOnSwitchDesc": "开启后按下方路径重启指定应用（适用于依赖插件宿主的场景）",
+      "codexSpecifiedAppPath": "指定应用启动路径",
+      "codexSpecifiedAppPathDesc": "填写需联动重启的应用路径",
+      "codexSpecifiedAppPathPlaceholder": "例如 /Applications/Host.app",
+      "codexSpecifiedAppPathClear": "清空",
+      "codexLocalAccessEntryVisible": "显示 API 服务入口",
+      "codexLocalAccessEntryVisibleDesc": "仅控制 Codex 总览中的 API 服务入口显示，不会停止本地 API 服务；关闭后可在这里或快捷设置中重新打开。",
+      "codexLocalAccessEnabled": "启用 API 服务",
+      "codexLocalAccessEnabledDesc": "控制本地 Codex API 服务是否实际运行。",
+      "codexLocalAccessEnabledRequiresCollection": "需先把账号加入 API 服务集合，才能启用或停用服务。",
+      "autoSwitchAccountScope": "自动切号账号范围",
+      "autoSwitchAccountScopeDesc": "仅在该范围内监控并切换账号。",
+      "autoSwitchAccountScopeAll": "全部账号",
+      "autoSwitchAccountScopeSelected": "指定账号",
+      "autoSwitchAccountScopeChoose": "选择账号",
+      "autoSwitchAccountScopeManage": "管理账号",
+      "autoSwitchAccountScopeAllSummary": "当前范围：全部账号（共 {{total}} 个）",
+      "autoSwitchAccountScopeSummary": "已选择 {{selected}} / {{total}} 个账号",
+      "autoSwitchAccountScopeDialogTitle": "选择自动切号账号范围",
+      "autoSwitchAccountScopeAllHint": "当前范围为全部账号，共 {{total}} 个账号将参与自动切号。",
+      "codexAutoSwitchAccountScope": "Codex 自动切号账号范围",
+      "codexAutoSwitchAccountScopeDesc": "当前 Codex 自动切号状态：{{status}}。仅在该范围内参与切号。",
+      "codexStartupWakeup": "启动后执行 Codex 唤醒",
+      "codexStartupWakeupDesc": "应用启动后按此策略触发一次已启用的 Codex 唤醒任务",
+      "autoUpdate": "后台自动更新",
+      "autoUpdateDesc": "检测到新版本时，在后台静默更新；完成后提示重启。",
+      "autoUpdateOff": "关闭（手动更新）",
+      "autoUpdateOn": "开启（静默更新）",
+      "updateReminder": "更新提醒",
+      "updateReminderDesc": "检测到新版本时，提示更新并在侧边栏显示快捷入口。",
+      "updateReminderOff": "关闭（不提示）",
+      "updateReminderOn": "开启（提示更新）",
+      "qoderPathReset": "重置默认",
+      "zedAutoRefresh": "Zed 自动刷新配额",
+      "zedAutoRefreshDesc": "后台自动更新频率",
+      "zedAppPath": "Zed 启动路径",
+      "zedAppPathDesc": "留空则使用默认路径",
+      "zedAppPathPlaceholder": "默认路径",
+      "zedPathSelect": "选择",
+      "zedPathReset": "重置默认",
+      "traeAutoRefresh": "Trae 自动刷新配额",
+      "platformAutoRefresh": "{{platform}} 自动刷新配额",
+      "traeAutoRefreshDesc": "后台自动更新频率",
+      "traeAppPath": "Trae 启动路径",
+      "traeSoloAppPath": "TRAE SOLO 启动路径",
+      "traeCnAppPath": "Trae CN 启动路径",
+      "traeSoloCnAppPath": "TRAE SOLO CN 启动路径",
+      "traeAppPathDesc": "留空则使用默认路径",
+      "traeAppPathPlaceholder": "默认路径",
+      "traePathSelect": "选择",
+      "traePathReset": "重置默认",
+      "workbuddyAppPath": "WorkBuddy 启动路径",
+      "workbuddyAppPathDesc": "留空则使用默认路径",
+      "workbuddyAppPathPlaceholder": "默认路径",
+      "workbuddyPathSelect": "选择",
+      "workbuddyPathReset": "重置默认",
+      "openclawAuthOverwrite": "切换 Codex 时覆盖 OpenClaw 登录信息",
+      "openclawAuthOverwriteDesc": "关闭后仅切换 Codex，不会改写 OpenClaw 当前登录态",
+      "ghcpOpencodeAuthOverwrite": "切换 GitHub Copilot 时覆盖 OpenCode 登录信息",
+      "ghcpOpencodeRestart": "切换 GitHub Copilot 时自动重启 OpenCode",
+      "ghcpLaunchOnSwitch": "切换 GitHub Copilot 时自动启动 GitHub Copilot App",
+      "antigravityDualSwitchNoRestart": "无感双通道切号（不重启）",
+      "antigravityDualSwitchNoRestartDesc": "切号时同时执行本地落盘与扩展无感切号，不再自动重启 Antigravity IDE。",
+      "codebuddyCnAppPath": "CodeBuddy CN 启动路径",
+      "codebuddyCnAppPathDesc": "留空则使用默认路径",
+      "codebuddyCnAppPathPlaceholder": "默认路径",
+      "codebuddyCnAutoRefresh": "CodeBuddy CN 自动刷新配额",
+      "codebuddyCnAutoRefreshDesc": "后台自动更新频率",
+      "codebuddyCnPathReset": "重置默认",
+      "codebuddyCnPathSelect": "选择",
+      "codebuddyCnSettingsTitle": "CodeBuddy CN 设置",
+      "zcodeAppPath": "ZCode 启动路径",
+      "zcodeAppPathDesc": "留空则使用默认路径",
+      "qoderAppPath": "Qoder 启动路径",
+      "qoderAppPathDesc": "留空则使用默认路径",
+      "qoderAppPathPlaceholder": "默认路径",
+      "zcodeAutoRefresh": "ZCode 自动刷新",
+      "zcodeAutoRefreshDesc": "后台配额刷新间隔",
+      "qoderAutoRefresh": "Qoder 自动刷新配额",
+      "qoderAutoRefreshDesc": "后台自动更新频率",
+      "qoderPathSelect": "选择",
+      "workbuddyAutoRefresh": "WorkBuddy 自动刷新配额",
+      "workbuddyAutoRefreshDesc": "后台自动更新频率",
+      "codexAppSpeed": "Codex 速度",
+      "codexAppSpeedDesc": "保存为官方 Codex 启动速度；每次从本应用启动 Codex 前都会写入。",
+      "codexAppSpeedStandard": "标准",
+      "codexAppSpeedFast": "快速",
+      "codexAppSpeedLaunch": "重启 Codex",
+      "codexAppSpeedSaveFailed": "保存 Codex 速度失败：{{error}}",
+      "codexAppSpeedLaunchFailed": "重启 Codex 失败：{{error}}",
+      "claudeSettingsTitle": "Claude 设置",
+      "claudeAutoRefresh": "Claude 自动刷新配额",
+      "claudeAutoRefreshDesc": "后台自动更新 Claude 账号配额缓存",
+      "claudeAppPath": "Claude Desktop 启动目标",
+      "claudeAppPathDesc": "默认实例可使用 Microsoft Store 应用目标；应用多开请选择真实 Claude.exe。",
+      "antigravityLaunchOnSwitch": "切换时启动 Antigravity",
+      "antigravityLaunchOnSwitchDesc": "关闭后切号只写入 Antigravity 默认账号数据，不会关闭、启动或重启应用。",
+      "tokenKeeper": "后台授权保活",
+      "tokenKeeperDesc": "仅在授权快过期时分批刷新账号 Token，降低大量账号场景下的后台请求压力。",
+      "autoImportFromLocal": "本机账号自动导入",
+      "autoImportFromLocalDesc": "开启后会立即扫描本机客户端登录状态并导入当前账号；之后当官方客户端更换登录时自动导入。首次可能弹出系统钥匙串授权，请选择「始终允许」。",
+      "reducedMotion": "减少动画",
+      "reducedMotionDesc": "降低页面淡入、弹层过渡、阴影、模糊和平滑滚动，仅保留必要加载反馈",
+      "autoImportFromLocalScanning": "正在扫描本机账号，可随时关闭…",
+      "autoImportFromLocalScanDone": "扫描完成：发现 {{scanned}} 个本机登录，已导入 {{imported}} 个",
+      "autoImportFromLocalScanEmpty": "扫描完成：未发现可导入的本机登录",
+      "autoImportFromLocalScanPartial": "扫描完成：未成功导入，部分平台失败，可到账号页手动导入",
+      "autoImportFromLocalScanFailed": "扫描失败：{{error}}",
+      "autoImportFromLocalScanCancelled": "已关闭，后台扫描将忽略结果",
+      "startupPage": "启动默认页",
+      "startupPageDesc": "应用冷启动时打开的页面；选“记住上次”则恢复上次离开时的页面",
+      "startupPageLast": "记住上次",
+      "startupPageCodexApi": "Codex API 服务",
+      "hermesAuthOverwrite": "切换 Codex 时同步 Hermes",
+      "hermesAuthOverwriteDesc": "仅 OAuth 账号：切号后写入 ~/.hermes/auth.json 的 openai-codex 凭据（默认关闭）",
+      "themeColor": "主题色套件",
+      "themeColorDesc": "在浅色/深色之上叠加配色包（Nord、Tokyo Night 等）",
+      "themeColorDefault": "默认",
+      "themeColorNord": "Nord",
+      "themeColorTokyoNight": "Tokyo Night",
+      "themeColorCatppuccin": "Catppuccin",
+      "themeColorGruvbox": "Gruvbox",
+      "themeColorEverforest": "Everforest",
+      "externalNetwork": "允许外连",
+      "externalNetworkDesc": "关闭后阻断 WebDAV 同步、OpenRouter 用量刷新、远端公告与自动更新检查（不影响本地功能）",
+      "webdavAllowedDomains": "WebDAV 域名白名单",
+      "webdavAllowedDomainsDesc": "逗号分隔；留空不限制。非空时同步 URL 主机必须匹配",
+      "claudeQuotaDisplayRemaining": "Claude 额度显示剩余%",
+      "claudeQuotaDisplayRemainingDesc": "默认显示已用百分比；开启后改为显示剩余百分比。自动切号与预警仍按已用比例计算。",
+      "menuBarQuota": "菜单栏显示实时额度",
+      "menuBarQuotaDesc": "启用后在菜单栏图标旁显示所选平台当前账号的剩余额度；平台等专属选项在弹框中配置",
+      "menuBarQuotaEnabledDesc": "已启用 · {{platform}} · 显示该平台当前账号剩余额度（多条取最低）",
+      "menuBarQuotaConfigure": "配置",
+      "menuBarQuotaModalTitle": "菜单栏额度",
+      "menuBarQuotaModalDesc": "以下为菜单栏额度的专属选项：跟随所选平台当前账号。Codex 当前为 API 服务时显示「API + 池剩余%」；API Key 账号显示「API + 剩余额度」；普通账号显示邮箱前缀与剩余%（多条取最低；低红、中橙、高绿）。",
+      "menuBarQuotaPlatform": "额度账号平台",
+      "menuBarQuotaPlatformDesc": "跟随该平台当前正在使用的账号，刷新或切换后自动更新",
+      "menuBarAccountPrefix": "显示账号邮箱前 4 位",
+      "menuBarAccountPrefixDesc": "仅普通账号：关闭后不显示邮箱前缀。Codex API 服务 / API Key 仍会显示 API 标签",
+      "menuBarQuotaConfirmEnable": "启用",
+      "codexHideRelayQuota": "隐藏中转站额度",
+      "codexHideRelayQuotaDesc": "开启后，Codex 账号总览隐藏中转 / New API 类额度面板，减轻列表重叠与视觉干扰。"
+    },
     "tabs": {
       "general": "通用",
       "network": "网络服务",
+      "data": "数据管理",
       "about": "关于"
     },
     "transfer": {
@@ -668,7 +1145,7 @@
       "importModalDesc": "选择要导入的数据类型。旧版账号备份会自动按“仅账号数据”处理。",
       "selectionTitle": "数据范围",
       "accountsOptionTitle": "账号数据",
-      "accountsOptionDesc": "包含各平台账号备份，并继续兼容旧版账号 JSON。",
+      "accountsOptionDesc": "包含可恢复的平台账号备份，并继续兼容旧版账号 JSON。Grok CLI 凭据不在其中，需单独导入官方 auth.json。",
       "configOptionTitle": "配置数据",
       "configOptionDesc": "包含应用设置、分组、实例、唤醒任务与模型 Provider 配置。",
       "exportConfirm": "导出数据",
@@ -693,215 +1170,65 @@
         "unsupportedVersion": "当前版本暂不支持该数据包版本"
       }
     },
-    "general": {
-      "appearance": "界面外观",
-      "language": "显示语言",
-      "languageDesc": "选择界面的显示语言",
-      "theme": "应用主题",
-      "themeDesc": "切换深色或浅色模式",
-      "defaultTerminal": "默认终端",
-      "defaultTerminalDesc": "Gemini CLI 打开时使用的终端",
-      "terminalSystem": "跟随系统",
-      "sideNavLayout": "侧边栏布局",
-      "sideNavLayoutDesc": "切换原始布局或经典布局",
-      "sideNavLayoutOriginal": "原始布局",
-      "sideNavLayoutClassic": "经典布局",
-      "themeLight": "浅色 (Light)",
-      "themeDark": "深色 (Dark)",
-      "themeSystem": "跟随系统",
-      "uiScale": "界面缩放",
-      "uiScaleDesc": "调整界面缩放比例",
-      "accountManagement": "账号管理",
-      "autoRefresh": "Antigravity IDE 自动刷新配额",
-      "codexAutoRefresh": "Codex 自动刷新配额",
-      "autoRefreshDesc": "后台自动更新频率",
-      "codexAutoRefreshDesc": "后台自动更新频率",
-      "autoRefreshDisabled": "禁用",
-      "autoRefreshCustom": "自定义...",
-      "every15min": "每 15 分钟",
-      "every30min": "每 30 分钟",
-      "every1hour": "每 1 小时",
-      "minutes": "分",
-      "refreshIntervalLimited": "配额重置唤醒已启用，刷新间隔最小值为 2 分钟",
-      "currentAccountRefreshTitle": "当前账号刷新",
-      "currentAccountRefreshItemDesc": "仅刷新当前账号，默认 1 分钟。",
-      "currentAccountRefreshRequiresAutoRefresh": "需先开启“配额自动刷新”后，才能设置当前账号刷新。",
-      "closeBehavior": "窗口关闭行为",
-      "closeBehaviorDesc": "选择关闭窗口时的默认行为",
-      "closeBehaviorAsk": "每次询问",
-      "closeBehaviorMinimize": "最小化到托盘",
-      "closeBehaviorQuit": "退出应用",
-      "minimizeBehavior": "窗口最小化行为（仅 macOS）",
-      "minimizeBehaviorDesc": "选择最小化窗口时保留在程序坞和菜单栏，或仅保留在菜单栏",
-      "minimizeBehaviorDockAndTray": "程序坞 + 菜单栏（推荐默认）",
-      "minimizeBehaviorTrayOnly": "仅菜单栏",
-      "hideDockIcon": "是否隐藏Dock图标（仅 macOS）",
-      "hideDockIconDesc": "独立控制程序坞图标显示状态，不受窗口最小化行为影响",
-      "hideDockIconOff": "否（显示Dock图标）",
-      "hideDockIconOn": "是（隐藏Dock图标）",
-      "trayIconStyle": "菜单栏图标样式（仅 macOS）",
-      "trayIconStyleDesc": "选择系统单色图标或原彩色 App 图标",
-      "trayIconStyleTemplate": "单色图标",
-      "trayIconStyleColor": "彩色图标",
-      "floatingCardStartup": "启动时显示悬浮卡片",
-      "floatingCardStartupDesc": "应用启动后默认展示悬浮账号卡片",
-      "floatingCardAlwaysOnTop": "悬浮卡片默认置顶",
-      "floatingCardAlwaysOnTopDesc": "新打开的悬浮卡片窗口默认保持置顶",
-      "appAutoLaunch": "开机自启动 Cockpit Tools",
-      "appAutoLaunchDesc": "系统登录后自动启动应用",
-      "startupWakeupDisabled": "关闭",
-      "startupWakeupImmediate": "立即唤醒",
-      "startupWakeupDelayed": "延时唤醒",
-      "floatingCardShowNow": "立即显示悬浮卡片",
-      "floatingCardShowNowDesc": "关闭后可在这里或托盘菜单中重新打开",
-      "floatingCardShowNowAction": "显示悬浮卡片",
-      "dataDir": "数据目录",
-      "dataDirDesc": "账号与配置文件的存储位置。",
-      "fpDir": "Antigravity IDE 存储目录",
-      "fpDirDesc": "Antigravity IDE 数据文件的存储位置。",
-      "opencodeTitle": "OpenCode 联动",
-      "opencodeAuthOverwrite": "切换 Codex 时覆盖 OpenCode 登录信息",
-      "opencodeAuthOverwriteDesc": "关闭后仅切换 Codex，不会改写 OpenCode 当前登录态",
-      "opencodeRestart": "切换 Codex 时自动重启 OpenCode",
-      "opencodeRestartDesc": "覆盖 OpenCode 登录信息后自动重启 OpenCode，使登录态立即生效",
-      "opencodeRestartRequiresOverwrite": "需先开启“切换 Codex 时覆盖 OpenCode 登录信息”",
-      "opencodeAppPath": "OpenCode 启动路径",
-      "opencodeAppPathDesc": "留空则使用默认路径",
-      "opencodeAppPathPlaceholder": "默认路径",
-      "opencodePathReset": "重置默认",
-      "opencodePathSelect": "选择",
-      "codexTitle": "Codex 启动",
-      "codexAppPath": "Codex 启动路径",
-      "codexAppPathDesc": "留空则使用默认路径",
-      "codexAppPathPlaceholder": "默认路径",
-      "codexPathSelect": "选择",
-      "codexPathReset": "重置默认",
-      "vscodeTitle": "VS Code 启动",
-      "vscodeAppPath": "VS Code 启动路径",
-      "vscodeAppPathDesc": "留空则使用默认路径",
-      "vscodeAppPathPlaceholder": "默认路径",
-      "vscodePathSelect": "选择",
-      "vscodePathReset": "重置默认",
-      "antigravityAppPath": "Antigravity IDE 启动路径",
-      "antigravityTitle": "Antigravity IDE 启动",
-      "commonTitle": "通用",
-      "antigravitySettingsTitle": "Antigravity IDE 设置",
-      "codexSettingsTitle": "Codex 设置",
-      "githubCopilotSettingsTitle": "GitHub Copilot 设置",
-      "ghcpAutoRefresh": "GitHub Copilot 自动刷新配额",
-      "ghcpAutoRefreshDesc": "后台自动更新频率",
-      "windsurfSettingsTitle": "Windsurf 设置",
-      "windsurfAutoRefresh": "Windsurf 自动刷新配额",
-      "windsurfAutoRefreshDesc": "后台自动更新频率",
-      "windsurfAppPath": "Windsurf 启动路径",
-      "windsurfAppPathDesc": "留空则使用默认路径",
-      "windsurfAppPathPlaceholder": "默认路径",
-      "windsurfPathSelect": "选择",
-      "windsurfPathReset": "重置默认",
-      "kiroSettingsTitle": "Kiro 设置",
-      "kiroAutoRefresh": "Kiro 自动刷新配额",
-      "kiroAutoRefreshDesc": "后台自动更新频率",
-      "kiroAppPath": "Kiro 启动路径",
-      "kiroAppPathDesc": "留空则使用默认路径",
-      "kiroAppPathPlaceholder": "默认路径",
-      "kiroPathSelect": "选择",
-      "kiroPathReset": "重置默认",
-      "codebuddySettingsTitle": "CodeBuddy 设置",
-      "codebuddyAutoRefresh": "CodeBuddy 自动刷新配额",
-      "codebuddyAutoRefreshDesc": "后台自动更新频率",
-      "codebuddyAppPath": "CodeBuddy 启动路径",
-      "codebuddyAppPathDesc": "留空则使用默认路径",
-      "codebuddyAppPathPlaceholder": "默认路径",
-      "codebuddyPathSelect": "选择",
-      "codebuddyPathReset": "重置默认",
-      "cursorPathReset": "重置默认",
-      "antigravityStartupWakeup": "启动后执行 Antigravity IDE 唤醒",
-      "antigravityStartupWakeupDesc": "应用启动后按此策略触发一次已启用的 Antigravity IDE 唤醒任务",
-      "codexLaunchOnSwitch": "切换 Codex 时自动启动 Codex App",
-      "codexLaunchOnSwitchDesc": "切换账号后自动启动或重启 Codex App",
-      "codexRestartSpecifiedAppOnSwitch": "切换 Codex 时重启指定应用",
-      "codexRestartSpecifiedAppOnSwitchDesc": "开启后按下方路径重启指定应用（适用于依赖插件宿主的场景）",
-      "codexSpecifiedAppPath": "指定应用启动路径",
-      "codexSpecifiedAppPathDesc": "填写需联动重启的应用路径",
-      "codexSpecifiedAppPathPlaceholder": "例如 /Applications/Host.app",
-      "codexSpecifiedAppPathClear": "清空",
-      "codexLocalAccessEntryVisible": "显示 API 服务入口",
-      "codexLocalAccessEntryVisibleDesc": "仅控制 Codex 总览中的 API 服务入口显示，不会停止本地 API 服务；关闭后可在这里或快捷设置中重新打开。",
-      "codexLocalAccessEnabled": "启用 API 服务",
-      "codexLocalAccessEnabledDesc": "控制本地 Codex API 服务是否实际运行。",
-      "codexLocalAccessEnabledRequiresCollection": "需先把账号加入 API 服务集合，才能启用或停用服务。",
-      "autoSwitchAccountScope": "自动切号账号范围",
-      "autoSwitchAccountScopeDesc": "仅在该范围内监控并切换账号。",
-      "autoSwitchAccountScopeAll": "全部账号",
-      "autoSwitchAccountScopeSelected": "指定账号",
-      "autoSwitchAccountScopeChoose": "选择账号",
-      "autoSwitchAccountScopeManage": "管理账号",
-      "autoSwitchAccountScopeAllSummary": "当前范围：全部账号（共 {{total}} 个）",
-      "autoSwitchAccountScopeSummary": "已选择 {{selected}} / {{total}} 个账号",
-      "autoSwitchAccountScopeDialogTitle": "选择自动切号账号范围",
-      "autoSwitchAccountScopeAllHint": "当前范围为全部账号，共 {{total}} 个账号将参与自动切号。",
-      "codexAutoSwitchAccountScope": "Codex 自动切号账号范围",
-      "codexAutoSwitchAccountScopeDesc": "当前 Codex 自动切号状态：{{status}}。仅在该范围内参与切号。",
-      "codexStartupWakeup": "启动后执行 Codex 唤醒",
-      "codexStartupWakeupDesc": "应用启动后按此策略触发一次已启用的 Codex 唤醒任务",
-      "autoUpdate": "后台自动更新",
-      "autoUpdateDesc": "检测到新版本时，在后台静默更新；完成后提示重启。",
-      "autoUpdateOff": "关闭（手动更新）",
-      "autoUpdateOn": "开启（静默更新）",
-      "updateReminder": "更新提醒",
-      "updateReminderDesc": "检测到新版本时，提示更新并在侧边栏显示快捷入口。",
-      "updateReminderOff": "关闭（不提示）",
-      "updateReminderOn": "开启（提示更新）",
-      "qoderPathReset": "重置默认",
-      "zedAutoRefresh": "Zed 自动刷新配额",
-      "zedAutoRefreshDesc": "后台自动更新频率",
-      "zedAppPath": "Zed 启动路径",
-      "zedAppPathDesc": "留空则使用默认路径",
-      "zedAppPathPlaceholder": "默认路径",
-      "zedPathSelect": "选择",
-      "zedPathReset": "重置默认",
-      "traeAutoRefresh": "Trae 自动刷新配额",
-      "traeAutoRefreshDesc": "后台自动更新频率",
-      "traeAppPath": "Trae 启动路径",
-      "traeAppPathDesc": "留空则使用默认路径",
-      "traeAppPathPlaceholder": "默认路径",
-      "traePathSelect": "选择",
-      "traePathReset": "重置默认",
-      "workbuddyAppPath": "WorkBuddy 启动路径",
-      "workbuddyAppPathDesc": "留空则使用默认路径",
-      "workbuddyAppPathPlaceholder": "默认路径",
-      "workbuddyPathSelect": "选择",
-      "workbuddyPathReset": "重置默认",
-      "openclawAuthOverwrite": "切换 Codex 时覆盖 OpenClaw 登录信息",
-      "openclawAuthOverwriteDesc": "关闭后仅切换 Codex，不会改写 OpenClaw 当前登录态",
-      "ghcpOpencodeAuthOverwrite": "切换 GitHub Copilot 时覆盖 OpenCode 登录信息",
-      "ghcpOpencodeRestart": "切换 GitHub Copilot 时自动重启 OpenCode",
-      "ghcpLaunchOnSwitch": "切换 GitHub Copilot 时自动启动 GitHub Copilot App",
-      "antigravityDualSwitchNoRestart": "无感双通道切号（不重启）",
-      "antigravityDualSwitchNoRestartDesc": "切号时同时执行本地落盘与扩展无感切号，不再自动重启 Antigravity IDE。",
-      "codebuddyCnAppPath": "CodeBuddy CN 启动路径",
-      "codebuddyCnAppPathDesc": "留空则使用默认路径",
-      "codebuddyCnAppPathPlaceholder": "默认路径",
-      "codebuddyCnAutoRefresh": "CodeBuddy CN 自动刷新配额",
-      "codebuddyCnAutoRefreshDesc": "后台自动更新频率",
-      "codebuddyCnPathReset": "重置默认",
-      "codebuddyCnPathSelect": "选择",
-      "codebuddyCnSettingsTitle": "CodeBuddy CN 设置",
-      "qoderAppPath": "Qoder 启动路径",
-      "qoderAppPathDesc": "留空则使用默认路径",
-      "qoderAppPathPlaceholder": "默认路径",
-      "qoderAutoRefresh": "Qoder 自动刷新配额",
-      "qoderAutoRefreshDesc": "后台自动更新频率",
-      "qoderPathSelect": "选择",
-      "workbuddyAutoRefresh": "WorkBuddy 自动刷新配额",
-      "workbuddyAutoRefreshDesc": "后台自动更新频率",
-      "codexAppSpeed": "Codex 速度",
-      "codexAppSpeedDesc": "保存为官方 Codex 启动速度；每次从本应用启动 Codex 前都会写入。",
-      "codexAppSpeedStandard": "标准",
-      "codexAppSpeedFast": "快速",
-      "codexAppSpeedLaunch": "重启 Codex",
-      "codexAppSpeedSaveFailed": "保存 Codex 速度失败：{{error}}",
-      "codexAppSpeedLaunchFailed": "重启 Codex 失败：{{error}}"
+    "webdav": {
+      "groupTitle": "WebDAV 同步",
+      "enabledTitle": "WebDAV 备份同步",
+      "enabledDesc": "默认使用坚果云，也可改为任意 WebDAV 服务。",
+      "urlTitle": "服务地址",
+      "urlDesc": "坚果云默认地址：https://dav.jianguoyun.com/dav/",
+      "usernameTitle": "账号",
+      "usernameDesc": "坚果云使用账号邮箱。",
+      "usernamePlaceholder": "邮箱或用户名",
+      "passwordTitle": "应用密码",
+      "passwordDesc": "保存到本地配置；留空会保留已保存密码。",
+      "passwordPlaceholder": "坚果云第三方应用密码",
+      "passwordSavedPlaceholder": "已保存，留空保持不变",
+      "clearPassword": "清除",
+      "remoteDirTitle": "远端目录",
+      "remoteDirDesc": "只管理该目录下的 Cockpit 备份文件。",
+      "retentionTitle": "云端保留天数",
+      "retentionDesc": "云端超过天数的备份会在下次同步时自动清理。",
+      "retentionUnit": "天",
+      "statusTitle": "同步状态",
+      "statusDesc": "远端恢复需要手动选择备份，不会静默覆盖本地数据。",
+      "lastUpload": "最近上传：{{time}}",
+      "lastDownload": "最近恢复：{{time}}",
+      "never": "尚未同步",
+      "testAction": "测试/保存配置",
+      "uploadAction": "生成并上传",
+      "syncAction": "同步配置",
+      "syncLatestConfirm": "确认拉取最新的远端备份 {{name}} 并同步到本地？此操作将覆盖本地现有数据。",
+      "remoteListTitle": "远端备份",
+      "remoteListDesc": "仅显示匹配 Cockpit 自动/手动备份命名的 JSON 与 ZIP 文件。",
+      "emptyTitle": "暂无远端备份",
+      "emptyDesc": "保存设置后可以生成并上传一份备份。",
+      "unknownTime": "未知",
+      "restoreAction": "恢复",
+      "restoreConfirm": "确认从远端备份 {{name}} 恢复数据？",
+      "deleteConfirm": "确认删除远端备份 {{name}}？",
+      "collapseAll": "收起远端备份",
+      "expandAll": "展开全部远端备份 (还有 {{count}} 个)",
+      "feedback": {
+        "testingAndSaving": "正在保存并测试 WebDAV 连接...",
+        "saveAndTestSuccess": "配置已保存，连接测试成功！",
+        "saveSuccessTestFailed": "配置已保存，但连接测试失败：{{message}}",
+        "saveAndTestFailed": "保存并测试连接失败：{{error}}",
+        "uploading": "正在生成并上传备份...",
+        "uploadSuccess": "已上传 {{count}} 个文件，清理 {{deleted}} 个远端过期备份",
+        "uploadFailed": "WebDAV 上传失败：{{error}}",
+        "listFailed": "加载远端备份失败：{{error}}",
+        "loadSettingsFailed": "加载 WebDAV 设置失败：{{error}}",
+        "restoring": "正在读取远端备份并导入...",
+        "restoreEmpty": "远端备份未恢复任何数据",
+        "deleteSuccess": "远端备份已删除",
+        "deleteFailed": "删除远端备份失败：{{error}}",
+        "syncingLatest": "正在同步远端最新配置...",
+        "syncFailed": "同步最新配置失败：{{error}}",
+        "noRemoteBackup": "远端未发现可同步的备份文件"
+      },
+      "errors": {
+        "notEnabled": "请先启用 WebDAV 同步"
+      }
     },
     "network": {
       "apiTitle": "反重力驾驶舱 API",
@@ -966,13 +1293,27 @@
       "releaseHistoryLoading": "正在加载更新记录...",
       "releaseHistoryEmpty": "暂无更新记录",
       "releaseHistoryLoadFailed": "加载失败：{{error}}",
+      "releaseHistorySectionHighlights": "重要更新",
       "releaseHistorySectionAdded": "新增",
       "releaseHistorySectionChanged": "变更",
       "releaseHistorySectionFixed": "修复",
       "releaseHistorySectionRemoved": "移除",
       "downloadThisVersion": "下载此版本"
     },
-    "saveSettings": "保存设置"
+    "saveSettings": "保存设置",
+    "keysVault": {
+      "title": "OpenRouter / OpenCode Key",
+      "desc": "本地保存多把 API Key（明文落在应用数据目录）。外连开启时可刷新 OpenRouter 用量。非完整平台账号管理。",
+      "openRouter": "OpenRouter",
+      "openCode": "OpenCode Go / Zen",
+      "label": "备注",
+      "empty": "暂无 Key",
+      "added": "已添加",
+      "deleted": "已删除",
+      "refreshed": "已刷新用量",
+      "usage": "用量",
+      "tierOther": "其他"
+    }
   },
   "appPath": {
     "modal": {
@@ -982,7 +1323,15 @@
       "title": "未找到应用程序路径",
       "desc": "未找到 {{app}} 应用程序路径，请立即设置后继续启动。",
       "codexLaunchHint": "关闭后仅执行切号与登录覆盖，不再尝试启动 Codex App，也不会再次要求设置启动路径。",
-      "action": "立即设置"
+      "action": "立即设置",
+      "claudeMultiInstanceRequiresExe": "Claude 应用多开需要真实 Claude.exe 路径；Microsoft Store 启动目标仅适用于默认桌面端。",
+      "scanApps": "检测运行中应用",
+      "scanRoots": "扫描范围",
+      "scanRootsPlaceholder": "可选，选择一个目录或盘符；留空时按盘符扫描 WindowsApps 并补充开始菜单应用。",
+      "windowsApp": "微软商店",
+      "defaultOnly": "仅适用于默认桌面端；应用多开请选择真实 Claude.exe。",
+      "claudeScanEmpty": "未扫描到 Claude Desktop，请手动选择 Claude.exe 或调整扫描范围。",
+      "claudeTargetPlaceholder": "Claude.exe 路径或 shell:AppsFolder\\..."
     }
   },
   "accounts": {
@@ -1003,7 +1352,6 @@
       "email": "邮箱",
       "subscription": "订阅类型",
       "quota": "配额状态",
-      "fingerprint": "指纹",
       "lastUsed": "最后使用",
       "actions": "操作"
     },
@@ -1079,7 +1427,11 @@
         "tooMany": "标签数量不能超过 {{max}} 个"
       },
       "notesLabel": "备注",
-      "notesPlaceholder": "输入备注，留空表示不设置"
+      "notesPlaceholder": "输入备注，留空表示不设置",
+      "confirmGlobalDelete": "确定要从所有账号中全局删除标签 \"{{targetTag}}\" 吗？此操作不可逆。",
+      "globalDeleteHint": "全局删除此标签",
+      "globalDeleteFailed": "全局删除失败",
+      "globalRenameHint": "全局重命名此标签"
     },
     "groupByTag": "按标签分组展示",
     "untagged": "默认分组",
@@ -1089,10 +1441,8 @@
     "actions": {
       "viewDetails": "查看详情",
       "viewError": "查看错误",
-      "fingerprint": "指纹",
       "switch": "切换账号",
       "switchTo": "切换到此账号",
-      "selectFingerprint": "点击选择指纹",
       "delete": "删除",
       "deleteSelected": "删除选中",
       "export": "导出",
@@ -1188,7 +1538,9 @@
         "renameFailed": "重命名分组失败：{{error}}",
         "deleteFailed": "删除分组失败：{{error}}",
         "addFailed": "添加到分组失败：{{error}}",
-        "createAndAddFailed": "新建分组并添加失败：{{error}}"
+        "createAndAddFailed": "新建分组并添加失败：{{error}}",
+        "quotaRefreshFailed": "更新额度刷新设置失败：{{error}}",
+        "notFound": "分组不存在"
       },
       "addAccounts": "添加账号",
       "editTitle": "编辑分组",
@@ -1196,7 +1548,14 @@
       "currentGroupLabel": "当前分组",
       "accountPickerEmpty": "没有符合条件的账号",
       "filterHint": "已勾选 {{count}} 个分组做筛选",
-      "filterToggle": "勾选以筛选此分组"
+      "filterToggle": "勾选以筛选此分组",
+      "quotaRefresh": "额度刷新",
+      "quotaRefreshOffBadge": "不刷新",
+      "quotaRefreshOffHint": "本组不刷新：自动/全量会跳过组内账号",
+      "refreshForceHint": "本组自动额度策略非继承时，仍可手动刷新本组",
+      "quotaRefreshInherit": "继承平台",
+      "quotaRefreshPolicyHint": "分组额度刷新为最高优先级；可继承平台设置、自定义间隔或不刷新",
+      "quotaRefreshMinutesBadge": "{{count}} 分钟"
     },
     "clearTagFilter": "清空标签",
     "compact": {
@@ -1230,7 +1589,10 @@
     "switchSuccess": "切换成功",
     "switched": "已切换至 {{email}}",
     "tagButton": "编辑标签",
-    "tagUpdated": "标签已更新"
+    "tagUpdated": "标签已更新",
+    "plan": {
+      "personal": "个人"
+    }
   },
   "overview": {
     "title": "账号总览",
@@ -1241,106 +1603,8 @@
     "currentAccount": "当前使用中",
     "switchTo": "切换至该账号",
     "switching": "切换中...",
-    "fingerprint": "指纹",
     "bound": "已绑定",
     "brandTitle": "Antigravity IDE 账号管理"
-  },
-  "fingerprints": {
-    "title": "设备指纹",
-    "subtitle": "管理绑定到账号的设备指纹。",
-    "toolbar": {
-      "generate": "生成新指纹",
-      "capture": "捕获当前",
-      "import": "导入",
-      "deleteUnbound": "清理未绑定",
-      "folder": "目录",
-      "delete": "删除"
-    },
-    "table": {
-      "name": "指纹名称",
-      "machineId": "设备 ID",
-      "accounts": "绑定账号",
-      "actions": "操作",
-      "accountCount": "{{count}} 个账号",
-      "apply": "应用",
-      "noData": "暂无指纹数据",
-      "preview": "预览",
-      "rename": "重命名"
-    },
-    "modals": {
-      "generate": {
-        "title": "生成新指纹",
-        "btn": "生成"
-      },
-      "capture": {
-        "title": "捕获当前指纹",
-        "btn": "捕获"
-      },
-      "rename": {
-        "title": "重命名指纹",
-        "label": "指纹名称"
-      },
-      "import": {
-        "title": "导入指纹",
-        "fromTools": "导入 Antigravity Tools指纹",
-        "desc": "从 ~/.antigravity_tools/ 目录导入",
-        "fromJsonBtn": "从 JSON 导入",
-        "jsonExample": "格式示例：",
-        "jsonPlaceholder": "工作指纹",
-        "orPasteJson": "或粘贴 JSON"
-      },
-      "bound": {
-        "title": "绑定账号管理",
-        "add": "添加账号",
-        "empty": "暂无账号绑定此指纹",
-        "emptyAll": "所有账号都已绑定此指纹",
-        "select": "选择要添加的账号",
-        "from": "来自: {{name}}",
-        "back": "返回"
-      },
-      "detail": {
-        "title": "指纹详细信息",
-        "created": "创建于 {{time}}"
-      }
-    },
-    "messages": {
-      "deleteConfirm": "确定要删除这个指纹吗？绑定此指纹的账号将自动改为原始指纹。",
-      "batchDeleteConfirm": "确定要删除选中的 {{count}} 个指纹吗？绑定此指纹的账号将自动改为原始指纹。",
-      "deleteUnboundConfirm": "确定要删除 {{count}} 个未绑定账号的指纹吗？",
-      "generated": "已生成新指纹",
-      "captured": "已捕获当前指纹",
-      "renamed": "已重命名",
-      "deleted": "已删除指纹",
-      "deletedUnbound": "已删除 {{count}} 个未绑定指纹",
-      "imported": "已导入 {{count}} 个指纹",
-      "noUnboundToDelete": "没有可删除的未绑定指纹",
-      "addedAccounts": "已添加 {{count}} 个账号",
-      "enterName": "请输入指纹名称",
-      "previewNotReady": "预览未就绪，请稍后重试",
-      "duplicate": "已存在相同指纹：{{name}}，无需重复添加。",
-      "autoGeneratedSuffix": "（未找到，已自动生成）",
-      "readOnly": "只读",
-      "current": "当前",
-      "addCount": "添加 {{count}} 个账号",
-      "addFailed": "添加失败",
-      "adding": "添加中...",
-      "applyFailed": "应用失败",
-      "boundCount": "已绑定 {{count}} 个账号",
-      "captureFailed": "捕获失败",
-      "count": "{{count}} 个",
-      "deleteFailed": "删除失败",
-      "fpLabel": "指纹:",
-      "generateFailed": "生成失败",
-      "importFailed": "导入失败",
-      "importing": "导入中...",
-      "loadFailed": "加载指纹列表失败",
-      "processing": "处理中...",
-      "renameFailed": "重命名失败",
-      "serviceMachineIdEmpty": "空",
-      "importPartialFailed": "{{failCount}} 个失败: {{failList}}",
-      "refreshingQuota": "刷新配额中 {{done}}/{{total}}（可关闭此弹窗，后台继续刷新）",
-      "quotaRefreshDone": "配额刷新完成"
-    }
   },
   "modals": {
     "addAccount": {
@@ -1376,15 +1640,6 @@
       "fromFilesDesc": "选择 JSON 文件导入账号（支持多种格式）",
       "importingFiles": "正在导入 {{count}} 个文件..."
     },
-    "fingerprint": {
-      "title": "选择指纹",
-      "desc": "为账号 <1>{{email}}</1> 选择指纹",
-      "original": "原始指纹",
-      "new": "添加新指纹",
-      "bind": "确认绑定",
-      "selectLabel": "选择指纹",
-      "boundCount": "个账号"
-    },
     "quota": {
       "title": "配额详细信息",
       "noData": "无配额数据",
@@ -1409,6 +1664,12 @@
   "messages": {
     "deleteConfirm": "确定要删除这个账号吗？",
     "batchDeleteConfirm": "确定要删除选中的 {{count}} 个账号吗？",
+    "cleanErrorAccountsAction": "清理 ERROR 账号",
+    "cleanErrorAccountsConfirm": "确定要删除当前范围内的 {{count}} 条 ERROR 账号吗？",
+    "selectAllFilteredAccounts": "选择全部符合条件 {{count}} 条",
+    "selectedAllFilteredAccounts": "已选择全部符合条件 {{count}} 条",
+    "deleteFilteredAccountsConfirm": "将删除当前筛选条件下的 {{count}} 个 Codex 账号。此操作不会只删除当前页，确认继续？",
+    "clearSelection": "取消选择",
     "switched": "已切换至 {{email}}",
     "switchFailed": "切换失败：{{error}}",
     "antigravityLegacyUnsupported": "暂不支持 Antigravity 2.0.0 及以上版本，请选择小于Antigravity 2.0.0版本或者使用Antigravity IDE",
@@ -1621,7 +1882,11 @@
       "timeWindowFrom": "从",
       "timeWindowTo": "到",
       "fallbackTimes": "时段外触发时间",
-      "saveTask": "保存任务"
+      "saveTask": "保存任务",
+      "executionMode": "执行模式",
+      "executionModeAuto": "直接执行",
+      "executionModeConfirm": "需要确认",
+      "confirmTimeout": "确认超时"
     },
     "test": {
       "modelsLabel": "选择要触发的模型",
@@ -1663,7 +1928,8 @@
     "installFailed": "系统安装失败，请稍后重试或手动下载安装。",
     "restartRequiredAfterInstall": "更新已安装，请手动重启应用完成切换。",
     "stoppingApiService": "正在关闭 API 服务...",
-    "stopApiServiceFailed": "无法关闭 API 服务，请先停用后重试。"
+    "stopApiServiceFailed": "无法关闭 API 服务，请先停用后重试。",
+    "stopApiServiceFailedContinue": "API 服务未正常关闭，将继续重启..."
   },
   "closeDialog": {
     "title": "关闭窗口",
@@ -1693,14 +1959,31 @@
     "subtitle": "实时监控所有Codex账号的模型配额状态。",
     "instances": {
       "subtitle": "多实例独立配置，多账号并行运行。",
-      "comingSoon": "多开实例功能即将上线",
+      "comingSoon": "应用多开功能即将上线",
       "comingSoonDesc": "支持以不同账号同时运行多个 Codex.app 实例，敬请期待。",
       "unsupported": {
-        "desc": "Codex 多开实例仅支持 macOS 和 Windows。"
+        "desc": "Codex 应用多开仅支持 macOS 和 Windows。",
+        "title": "暂不支持当前系统"
       },
       "quota": {
         "hourly": "5小时",
         "weekly": "周"
+      },
+      "syncAllRecords": {
+        "action": "同步所有实例记录",
+        "autoAction": "自动同步所有实例记录",
+        "autoDisabled": "已关闭自动同步所有实例记录",
+        "autoEnabled": "已开启自动同步所有实例记录",
+        "autoTooltip": "自动同步所有实例记录",
+        "autoDesc": "关闭时保持多实例记录隔离；开启后仅在所有 Codex 实例已停止时，启动或关闭实例会自动合并本地记录。",
+        "closeFirst": "请先关闭所有 Codex 实例后再同步记录，避免运行中的实例把旧记录写回。",
+        "confirmMessage": "会把所有 Codex 实例中的本地会话记录做一次全量同步；同 ID 会话会进行事件级合并，写入前会备份目标实例关键文件和旧会话文件。确认继续？",
+        "needTwo": "至少需要两个实例才能同步记录",
+        "settingsSection": "同步设置",
+        "settingsSubtitle": "管理 Codex 多实例记录同步方式",
+        "settingsTitle": "实例记录设置",
+        "title": "同步所有实例记录",
+        "tooltip": "同步所有实例记录"
       },
       "restartStrategy": {
         "safe": {
@@ -1733,9 +2016,11 @@
     },
     "apiSwitchNotice": {
       "title": "Codex 会话不可见",
-      "message": "检测到 Codex 已从 {{from}} 切换到 {{to}}。由于官方机制，API 与账号直接切换后，原有会话可能不会自动显示。正在自动修复会话可见性，后续也可以通过「会话管理」里的「修复可见性」功能修复。",
+      "message": "检测到 Codex 已从 {{from}} 切换到 {{to}}。由于官方机制，这类切换后原有会话可能不会自动显示。正在自动修复会话可见性，后续也可以在「会话管理」中手动修复。",
+      "manualMessage": "修复可见性会校正官方 Codex state DB 中影响侧边栏显示的会话记录，适合账号与 API Key 切换后的会话恢复。",
       "repairing": "正在修复 Codex 会话可见性...",
-      "repairFailed": "自动修复失败。你仍可稍后在「会话管理」中使用「修复可见性」重试。",
+      "repairFailed": "修复可见性失败。你仍可稍后在「会话管理」中重试。",
+      "repairFailedWithError": "修复可见性失败：{{error}}",
       "type": {
         "api": "API 模式",
         "apiKey": "API 密钥",
@@ -1754,7 +2039,8 @@
       "title": "添加 Codex 账号",
       "oauth": "OAuth 授权",
       "token": "API Key",
-      "local": "本地导入"
+      "local": "本地导入",
+      "accessToken": "访问令牌"
     },
     "oauth": {
       "desc": "点击下方按钮，在浏览器中完成 OpenAI 账号 OAuth 授权。",
@@ -1776,19 +2062,36 @@
       "reauthEmailLabel": "重新授权账号"
     },
     "token": {
-      "desc": "粘贴 session JSON、auth.json、账号 JSON、Sub2API JSON、accessToken 或 refresh_token。",
-      "placeholder": "示例：直接粘贴 session JSON、accessToken、Sub2API 导出 JSON，或 {\"accessToken\":\"eyJ...\"}",
+      "desc": "粘贴 auth.json、Agent Identity、账号 JSON、Sub2API JSON、accessToken、个人访问令牌 at-… 或 refresh_token。",
+      "placeholder": "示例：auth_mode=agentIdentity、session JSON、accessToken、at-…、Sub2API JSON，或仅 refresh_token",
       "formatSummary": "必填字段与示例（点击展开）",
-      "formatRequired": "支持 session JSON、完整 tokens（id_token + access_token）、Sub2API 导出 JSON、仅 accessToken 或仅 refresh_token。仅 refresh_token 会先联网换取完整凭据。",
+      "formatRequired": "支持 Agent Identity auth.json、session JSON、完整 tokens、Sub2API 导出 JSON、仅 accessToken、at-… / personal_access_token 或仅 refresh_token。Agent Identity 会保存签名凭据，并由 API 服务为每次上游请求动态签名。",
       "formatSingleLabel": "完整 tokens 示例",
-      "formatRefreshOnlyLabel": "session / accessToken / refresh_token 示例",
+      "formatRefreshOnlyLabel": "session / accessToken / at- / refresh_token 示例",
       "formatBatchLabel": "批量示例"
+    },
+    "agentIdentityRegistration": {
+      "apiOnlyActionError": "Agent Identity 账号仅支持 API 服务，无法作为普通账号切换或启动。",
+      "oauthBindingUnsupported": "Agent Identity 账号仅用于 API 服务，不能作为 OAuth 绑定账号。"
+    },
+    "webSessionImport": {
+      "noticeTitle": "Web Session 导入须知",
+      "noticeMessage": "检测到 {{count}} 个 Web Session 账号。此格式不支持实际使用，仅支持查看额度。",
+      "noticeQuotaOnly": "仅支持查看额度，不能启动官方客户端或 CLI，也不能切号。",
+      "noticeNoApi": "不能加入 Codex API 服务账号池，也不能作为 OAuth 绑定账号。",
+      "noticeConfirm": "已知晓，继续导入",
+      "actionBlocked": "Web Session 账号仅支持查看额度，无法切换或启动。",
+      "apiIneligible": "Web Session 仅支持查看额度，不能加入 API 服务",
+      "oauthBindingUnsupported": "Web Session 账号仅支持查看额度，不能作为 OAuth 绑定账号。"
     },
     "exportFormat": {
       "label": "导出格式",
       "cockpitTools": "Cockpit Tools",
       "sub2api": "sub2api 格式",
       "cpa": "cpa 格式",
+      "agentIdentityCpaUnsupported": "Agent Identity 账号不支持 cpa 格式，请使用 Cockpit Tools 或 sub2api 格式导出。",
+      "agentIdentityPrivateKeyNotice": "导出内容包含 Agent Identity 私钥，可用于在其他设备恢复账号。请像密码一样妥善保管。",
+      "buildFailed": "无法生成导出内容：所选账号包含不支持的类型或认证信息不完整。",
       "downloadAll": "一键下载全部",
       "cpaCardTitle": "账号 {{index}}",
       "savedFolder": "保存目录",
@@ -1797,13 +2100,66 @@
     "accountNote": {
       "title": "账号备注",
       "label": "账号备注",
-      "desc": "给 {{account}} 填写单独展示的账号备注。",
-      "placeholder": "例如邮箱、密码、辅助邮箱或其他交付备注",
+      "desc": "给 {{account}} 填写密码、2FA、邮件地址、手机号和其他备注。",
+      "workspaceIdLabel": "ChatGPT 工作区 ID",
+      "workspaceIdPlaceholder": "输入 Team / Workspace UUID",
+      "workspaceIdHint": "仅用于 at-* 个人访问令牌；API 服务会将其作为 ChatGPT-Account-Id 发送。",
+      "twoFactorSecretLabel": "2FA 秘钥",
+      "twoFactorSecretShort": "2FA",
+      "twoFactorSecretPlaceholder": "Base32 secret 或 otpauth:// 链接",
+      "twoFactorSecretInvalid": "2FA 秘钥格式无效，请输入 Base32 secret 或 otpauth:// 链接",
+      "currentOtp": "当前验证码",
+      "otpShort": "验证码",
+      "otpRemaining": "{{seconds}}秒",
+      "passwordLabel": "账号密码",
+      "passwordShort": "密码",
+      "passwordPlaceholder": "登录密码或临时密码",
+      "phoneNumberLabel": "手机号",
+      "phoneShort": "手机",
+      "phoneNumberPlaceholder": "绑定手机号",
+      "mailUrlLabel": "邮件地址",
+      "mailUrlPlaceholder": "填写可打开的邮件查询网页地址",
+      "mailPreviewRefresh": "刷新邮件",
+      "mailPreviewOpen": "浏览器查看",
+      "mailPreviewLoading": "读取邮件中...",
+      "mailPreviewNoCode": "未匹配到连续 6 位验证码",
+      "mailPreviewFetchFailed": "读取邮件失败：{{error}}",
+      "mailPreviewUrlRequired": "请输入邮件地址",
+      "mailPreviewUrlInvalid": "邮件地址格式无效，请输入完整的 http:// 或 https:// 地址",
+      "mailPreviewUnsupportedProtocol": "邮件地址仅支持 http 或 https 协议",
+      "mailPreviewHttpFailed": "邮件地址请求失败：HTTP {{status}}",
+      "mailPreviewCode": "最近一条邮箱验证码",
+      "mailPreviewStatusInitial": "获取于 {{time}}",
+      "mailPreviewStatusChanged": "新验证码 · {{time}}",
+      "mailPreviewStatusUnchanged": "未变化 · {{time}}",
+      "mailPreviewTruncated": "内容已截断",
+      "mailOpenFailed": "打开邮件地址失败：{{error}}",
+      "otherNoteLabel": "其他备注",
+      "otherNoteShort": "备注",
+      "placeholder": "其他交付备注、辅助邮箱或账号说明",
+      "exportSensitiveNotice": "导出内容包含 2FA 秘钥、密码、手机号或邮件地址，请只保存到可信位置。",
+      "exportSensitiveIncluded": "包含敏感备注",
+      "exportSensitiveExcluded": "已排除敏感备注",
+      "exportSensitiveToggleHint": "控制导出 JSON 是否包含 2FA 秘钥、密码、手机号和邮件地址。",
+      "show": "显示",
+      "hide": "隐藏",
       "emptyTitle": "填写账号备注",
       "short": "账号备注",
       "addShort": "加备注",
       "saved": "账号备注已保存",
       "saveFailed": "保存账号备注失败：{{error}}"
+    },
+    "pendingAuth": {
+      "badge": "待授权",
+      "emailRequired": "请输入账号邮箱",
+      "saving": "正在保存待授权账号...",
+      "saved": "待授权账号已保存",
+      "saveFailed": "保存待授权账号失败：{{error}}",
+      "emailLabel": "待授权账号",
+      "emailPlaceholder": "输入 OpenAI 账号邮箱",
+      "saveDraft": "保存待授权卡片",
+      "authorizeAction": "授权添加",
+      "cardHint": "备注已保存，完成 OAuth 后即可使用"
     },
     "localAccess": {
       "title": "API 服务",
@@ -1862,25 +2218,28 @@
       "enableService": "启用服务",
       "testAction": "测试",
       "testDialogTitle": "测试 API 服务",
-      "testDialogDesc": "通过 Codex CLI 发起一次真实请求，验证本地服务、密钥和上游响应。",
+      "testDialogDesc": "像游乐场一样通过当前 API 服务发起真实对话，便于检查模型、账号路由和上游响应。",
       "testProgressTitle": "正在测试服务",
       "testProgressDesc": "正在向本地 API 服务发起真实请求，请稍候。",
       "testOutputTitle": "返回结果",
       "testResultTitle": "服务检测结果",
-      "testSuccess": "服务检测成功：本地服务、密钥和上游响应正常（{{model}}，{{latency}}）。如果 Codex 仍报 502，请检查 Codex 的 Base URL、API Key 或运行环境。",
+      "testSuccess": "服务检测成功：本地服务、密钥和上游响应正常（{{model}}，{{latency}}）。如果客户端仍报错，请检查 Base URL、API Key 或网络代理设置。",
       "testFailureStage": "定位阶段",
       "testFailureCause": "失败原因",
       "testFailureSuggestion": "处理建议",
       "testFailureStatus": "HTTP 状态",
       "testFailureModel": "检测模型",
       "testFailureDetail": "诊断详情",
-      "testFailureCliOutput": "CLI 输出",
       "testFailureGatewayOutput": "网关返回",
       "testTimeout": "真实请求检测超时，请检查本地服务、代理或上游网络。",
       "testUnavailable": "当前 API 服务地址不可用",
       "testConnectFailed": "无法连接 {{url}}。请确认 API 服务已启动、端口未被改动或被拦截。",
       "testAuthFailed": "服务可达，但鉴权失败：{{detail}}。请检查 API 服务密钥或账号登录状态。",
       "testServiceUnavailable": "服务可达，但当前不可用：{{detail}}。请检查服务是否启用、账号集合是否为空或账号是否可用。",
+      "gatewayErrors": {
+        "authUnavailable": "账号池当前没有可调度账号；账号可能正在冷却、授权失效或额度受限，请在 Cockpit Tools 的 API 服务页查看账号状态。",
+        "authNotFound": "账号池当前没有已配置的可用账号，请在 Cockpit Tools 的 API 服务页添加或启用账号。"
+      },
       "testRateLimited": "服务可达，但上游限流或额度不足：{{detail}}。",
       "testHttpFailed": "服务可达，但请求返回 HTTP {{status}}：{{detail}}。",
       "activateAction": "启动 API 服务",
@@ -1958,7 +2317,12 @@
         "label": "统计范围",
         "daily": "日",
         "weekly": "周",
-        "monthly": "月"
+        "monthly": "月",
+        "custom": "自定义",
+        "start": "开始",
+        "end": "结束",
+        "apply": "应用",
+        "invalid": "结束时间不能早于开始时间"
       },
       "quotaPool": {
         "title": "额度池",
@@ -1968,14 +2332,52 @@
         "modalTitle": "API 服务额度池",
         "empty": "暂无额度统计"
       },
+      "accountPoolHealth": {
+        "title": "账号池",
+        "allAvailable": "全部可用 {{count}}",
+        "availableRatio": "可用 {{available}}/{{total}}",
+        "issueSummary": "异常 {{abnormal}} · 冷却 {{cooldown}}",
+        "detail": "可用 {{available}}/{{total}}，异常 {{abnormal}}，冷却 {{cooldown}}，缺失 {{missing}}，鉴权 {{authError}}，额度 {{quotaLimited}}",
+        "openDetails": "查看异常账号详情",
+        "recover": "恢复账号状态",
+        "recoverSuccess": "已提交 {{count}} 个账号的恢复操作",
+        "dialog": {
+          "title": "异常账号",
+          "description": "以下状态来自 Sidecar OAuth 调度器。恢复操作会清除调度冷却并重新尝试账号。",
+          "noIssues": "当前没有异常账号",
+          "missing": "账号缺失",
+          "cooldown": "冷却中",
+          "quota": "额度受限",
+          "missingDetail": "账号已不在当前账号列表中",
+          "cooldownModel": "模型 {{model}} 处于冷却状态",
+          "cooldownUntil": "模型 {{model}} 冷却至 {{time}}",
+          "authDetail": "OAuth 授权可能已失效，请重新授权后再试",
+          "quotaDetail": "账号额度暂时不可用，请等待额度恢复或检查套餐状态",
+          "paymentDetail": "账号套餐或付款状态不可用，请检查订阅状态",
+          "modelDetail": "当前账号不支持请求的模型",
+          "upstreamDetail": "上游服务暂时异常，恢复后会重新尝试",
+          "disabledDetail": "该账号已被停用，请先启用账号",
+          "unavailableDetail": "Sidecar 当前未将该账号列为可调度账号",
+          "recover": "恢复",
+          "recovering": "恢复中…",
+          "recoverAll": "全部恢复"
+        }
+      },
       "memberTitle": "集合成员",
+      "memberPriorityLabel": "优先级",
+      "memberPriorityLowest": "最低",
+      "memberPriorityNormal": "正常",
+      "memberPriorityHighest": "最高",
+      "memberPriorityDesc": "最高优先使用，正常按当前规则调度，最低仅在其他账号不可用时使用。",
       "routingStrategy": {
         "auto": "自动（推荐）",
+        "singleAccount": "固定首个账号",
         "quotaHighFirst": "优先高配额",
         "quotaLowFirst": "优先低配额",
         "planHighFirst": "优先高订阅",
         "planLowFirst": "优先低订阅",
         "expirySoonFirst": "优先近到期",
+        "random": "随机分散",
         "custom": "自定义"
       },
       "requestKind": {
@@ -1989,6 +2391,7 @@
         "requestsDetail": "成功 {{success}} / 失败 {{failed}} / 取消 {{canceled}} / 上游失败 {{upstreamFailed}} / 流未完成 {{incomplete}}",
         "tokens": "总 Token 数",
         "tokensDetail": "输入 {{input}} / 输出 {{output}}",
+        "cached": "缓存",
         "estimatedCost": "估算价值",
         "estimatedCostDetail": "按当前请求价格快照累计",
         "specialTokens": "缓存 / 思考",
@@ -1997,6 +2400,7 @@
         "imagesDetail": "生成 {{generate}} / 编辑 {{edit}} / 权限 {{blocked}}",
         "avgLatency": "平均延迟",
         "successRate": "成功率 {{rate}}%",
+        "successRateLabel": "成功率",
         "accountRequests": "{{count}} 次请求",
         "accountTokens": "{{count}} Tokens",
         "accountTokensCompact": "{{value}}",
@@ -2006,6 +2410,10 @@
         "title": "添加至 API 服务",
         "desc": "选择要加入 API 服务集合的 Codex OAuth 账号或 API Key 账号。加入后，这些账号将从普通面板中隐藏，只在 API 服务卡片中管理。",
         "restrictFreeToggle": "限制 Free 账号使用",
+        "sessionAffinityConfirmTitle": "开启会话亲和？",
+        "sessionAffinityDescription": "开启后，同一个会话会尽量持续使用同一个账号进行对话；账号不可用时仍会按调度策略切换，超过过期时间后会重新选择账号。",
+        "chatApiKeyUnsupported": "Chat Completions 不支持加入",
+        "pendingOauthUnsupported": "待授权不可加入",
         "freeNoticeRestricted": "已限制 Free 账号，关闭后才可勾选。",
         "freeNoticeUnstable": "Free账号反代不稳定，请谨慎使用。",
         "restrictFreeDisableConfirmTitle": "确认允许 Free 账号",
@@ -2019,12 +2427,25 @@
         "save": "保存集合"
       },
       "oauthBinding": {
-        "desc": "可选绑定。只能选择带订阅时间（有效期标识）的 OAuth 账号，已过期也可绑定；未绑定时 API 服务按原 API Key 逻辑运行；绑定后登录态使用 OAuth 账号，Provider 使用当前 API 服务配置。",
-        "currentService": "API 服务：{{name}}"
+        "desc": "可选绑定。只要 OAuth 账号带 refresh_token 即可选择；未绑定时 API 服务按原 API Key 逻辑运行；绑定后登录态使用 OAuth 账号，Provider 使用当前 API 服务配置。",
+        "currentService": "API 服务：{{name}}",
+        "quotaReserveToggle": "保留 OAuth 额度",
+        "quotaReserveDesc": "API 服务仅在 5 小时和周剩余额度均高于保留值时使用该 OAuth 账号。",
+        "quotaReserveHourlyLabel": "5 小时保留",
+        "quotaReserveWeeklyLabel": "周保留",
+        "quotaReserveInvalid": "请输入 1 到 100 的整数",
+        "imageGenerationTooltip": "开启后，API 服务会在本地网关转发普通文本对话前移除 image_generation 工具声明；不会删除生图模型。",
+        "imageGenerationConfirm": {
+          "title": "禁用 image_generation 能力",
+          "message": "开启后，API 服务会在本地网关转发普通文本对话前移除 image_generation 工具声明，避免部分供应商报 “Image generation is not enabled”；不会删除 gpt-image 等生图模型。是否继续？"
+        }
       },
       "customRoutingEdit": "编辑自定义调度",
       "customRoutingTitle": "自定义调度",
-      "customRoutingDesc": "按账号设置优先级和权重，用于控制 API 服务选择账号的顺序和同级负载分配。",
+      "customRoutingDesc": "设置账号的优先级和权重，控制账号选择顺序与负载分配。",
+      "customRoutingBackupTitle": "备用账号",
+      "customRoutingBackupDesc": "仅在所有普通账号不可用时使用；普通账号恢复后，新请求会自动切回。",
+      "customRoutingBackupShort": "备用",
       "customRoutingPriorityTitle": "优先级",
       "customRoutingPriorityDesc": "数值越高越先被选中；高优先级账号不可用时，才会继续尝试低优先级账号。",
       "customRoutingWeightTitle": "权重",
@@ -2065,7 +2486,20 @@
       "debugLogsDisableConfirmMessage": "关闭后会停止输出 API 服务调试日志，减少日志噪声和额外开销；后续排查网关、代理或流式响应问题时可再次打开。确认关闭吗？",
       "debugLogsDisableConfirmAction": "关闭",
       "debugLogsEnabledSuccess": "调试日志已开启",
-      "debugLogsDisabledSuccess": "调试日志已关闭"
+      "debugLogsDisabledSuccess": "调试日志已关闭",
+      "clientBaseUrlHostLabel": "客户端地址",
+      "clientBaseUrlHostDesc": "仅影响写入 Codex Provider 和复制给客户端的 Base URL，不改变服务监听地址。",
+      "clientBaseUrlHostSaveSuccess": "客户端地址已更新",
+      "testChatModel": "模型",
+      "testChatClear": "清空对话",
+      "testChatEmpty": "输入一条消息后，会通过当前 API 服务发起真实对话。",
+      "testChatLatency": "耗时 {{latency}}",
+      "testChatSending": "正在请求 API 服务",
+      "testChatInputPlaceholder": "输入测试消息，Enter 发送",
+      "testChatSend": "发送",
+      "testChatInputRequired": "请输入测试消息",
+      "testChatModelRequired": "请选择模型 ID",
+      "testChatEmptyResponse": "响应为空"
     },
     "api": {
       "baseUrl": "基础地址",
@@ -2074,6 +2508,20 @@
       "showApiKey": "显示 API Key",
       "hideApiKey": "隐藏 API Key",
       "apiKeyHiddenHint": "API Key 已隐藏，点击显示",
+      "modelCatalog": {
+        "label": "模型列表",
+        "fetch": "从上游获取",
+        "fetching": "获取中...",
+        "count": "{{count}} 个模型",
+        "placeholder": "每行填写一个模型 ID，也可以使用逗号分隔。",
+        "editHint": "上游结果仅填入当前草稿，可在保存前删除、补充或调整模型。",
+        "syncToggle": "同步供应商模型到 Codex",
+        "syncDescription": "保存后使用当前模型列表生成 Cockpit 受管的 Codex 模型目录，不覆盖用户自定义目录。",
+        "fetchCredentialsRequired": "请先填写 API Key 和 Base URL。",
+        "fetchEmpty": "上游未返回可用模型，已保留当前列表。",
+        "fetchFailed": "获取上游模型失败：{{error}}",
+        "syncRequiresModels": "同步到 Codex 前请先获取或填写模型列表。"
+      },
       "actions": {
         "addAndSwitch": "添加并切换"
       },
@@ -2163,19 +2611,25 @@
         "action": "绑定 OAuth",
         "actionShort": "绑定",
         "title": "绑定 OAuth 账号",
-        "desc": "可选绑定。只能选择带订阅时间（有效期标识）的 OAuth 账号，已过期也可绑定；未绑定时该账号按原 API Key 逻辑切换；绑定后登录态使用 OAuth 账号，Provider 使用当前 API Key 账号配置。",
+        "desc": "可选绑定。只要 OAuth 账号带 refresh_token 即可选择；未绑定时该账号按原 API Key 逻辑切换；绑定后登录态使用 OAuth 账号，Provider 使用当前 API Key 账号配置。",
         "currentAccount": "API Key 账号：{{name}}",
         "selectLabel": "选择 OAuth 账号",
         "empty": "暂无 OAuth 账号，请先添加 OAuth 授权账号。",
-        "emptyEligible": "没有带订阅时间的 OAuth 账号，请先刷新配额或添加符合条件的 OAuth 账号。",
+        "emptyEligible": "没有带 refresh_token 的 OAuth 账号，请重新 OAuth 授权或添加符合条件的 OAuth 账号。",
         "validationRequired": "请选择 OAuth 账号",
-        "validationSubscriptionRequired": "只能绑定带订阅时间的 OAuth 账号",
+        "validationSubscriptionRequired": "只能绑定带 refresh_token 的 OAuth 账号",
         "saveSuccess": "OAuth 绑定已更新",
         "saveFailed": "OAuth 绑定失败：{{error}}",
         "switchRequiresBinding": "请先绑定 OAuth 账号",
         "clearAction": "解除绑定",
         "clearSuccess": "OAuth 绑定已解除",
-        "clearFailed": "解除 OAuth 绑定失败：{{error}}"
+        "clearFailed": "解除 OAuth 绑定失败：{{error}}",
+        "useLocalGateway": "禁用 image_generation",
+        "localGatewayTooltip": "开启后，绑定 OAuth 的 API Key 文本对话会走本地网关，并在转发前移除 image_generation 工具声明；不会删除生图模型。",
+        "localGatewayConfirm": {
+          "title": "禁用 image_generation 能力",
+          "message": "开启后，该 API Key 账号绑定 OAuth 后的普通文本对话会走本地网关，并在转发前移除 image_generation 工具声明，避免部分供应商报 “Image generation is not enabled”；不会删除 gpt-image 等生图模型。是否继续？"
+        }
       }
     },
     "cockpitApi": {
@@ -2186,7 +2640,7 @@
       "total": "总计",
       "today": "今日",
       "periods": "周期",
-      "tokens": "token",
+      "tokens": "令牌",
       "quotaUsed": "消耗",
       "modelStats": "模型统计",
       "noStats": "暂无统计",
@@ -2202,6 +2656,9 @@
       "emptyTitle": "暂无模型供应商",
       "emptyDesc": "点击右上角“新增供应商”开始维护。",
       "baseUrl": "Base URL",
+      "modelCatalog": "模型",
+      "modelCatalogEmpty": "未配置模型目录",
+      "gatewayHint": "第三方供应商启动时会使用本地网关隔离实例并完成协议转换；OpenAI 官方供应商保持直连。",
       "website": "官网",
       "apiKeyPage": "API Key 页面",
       "apiKeysCount": "API Key {{count}} 个",
@@ -2213,10 +2670,17 @@
       "fields": {
         "name": "供应商名称",
         "baseUrl": "Base URL",
+        "modelCatalog": "模型目录",
         "website": "官网（可选）",
         "apiKeyUrl": "API Key 页面（可选）",
+        "wireApi": "协议能力",
+        "enableMode": "启用策略",
         "newApiKeyName": "新增 Key 名称（可选）",
-        "newApiKey": "新增 API Key"
+        "newApiKey": "新增 API Key",
+        "visionCapability": "图片输入能力",
+        "visionModels": "支持图片的模型",
+        "visionRoutingModel": "图片请求默认模型",
+        "supportsWebsockets": "WebSocket 传输"
       },
       "validation": {
         "nameRequired": "供应商名称不能为空",
@@ -2231,6 +2695,25 @@
       "confirmDelete": "确认删除供应商「{{name}}」吗？",
       "deleteFailed": "删除供应商失败：{{error}}",
       "deleteApiKeyFailed": "删除 API Key 失败：{{error}}",
+      "enableAsBackend": "启用为 Codex 后端",
+      "enabling": "启用中...",
+      "enableSuccess": "已启用 {{name}}，并启动 {{instance}}。",
+      "enableFailed": "启用供应商失败：{{error}}",
+      "status": {
+        "active": "当前后端",
+        "available": "可启用"
+      },
+      "enableMode": {
+        "label": "接入方式",
+        "gatewayMode": "网关模式",
+        "directMode": "直连模式"
+      },
+      "wireApi": {
+        "help": "大多数供应商请选择 Responses；仅当供应商明确只支持 Chat Completions 时再切换。如果不确定，优先选 Responses。",
+        "helpAria": "查看协议说明",
+        "responses": "Responses 原生",
+        "chatCompletions": "Chat Completions 协议"
+      },
       "selectSavedProvider": "已保存供应商",
       "selectSavedApiKey": "已保存 API Key",
       "noSavedProviders": "暂无已保存供应商，可直接填写后自动保存。",
@@ -2288,7 +2771,163 @@
           "contextWindowInvalid": "上下文窗口必须是大于 0 的整数",
           "autoCompactInvalid": "自动压缩阈值必须是大于 0 的整数"
         }
-      }
+      },
+      "testing": "测试中...",
+      "testSuccess": "供应商连接正常：{{protocol}}，{{model}}，{{latency}}。",
+      "testFailed": "测试供应商失败：{{error}}",
+      "testFailure": {
+        "credential": "API Key 不可用",
+        "url": "Base URL 无效",
+        "network": "网络连接失败",
+        "models": "模型列表接口异常",
+        "parse": "响应解析失败",
+        "httpStatus": "状态 {{status}}",
+        "message": "{{title}}：{{detail}}。{{suggestion}}"
+      },
+      "testSuggestion": {
+        "addApiKey": "请先为该供应商添加 API Key，然后再测试连接。",
+        "checkBaseUrl": "请检查 Base URL 是否包含正确版本路径，例如 /v1。",
+        "checkNetwork": "请检查供应商地址、网络代理、防火墙或上游服务状态。",
+        "checkApiKey": "请检查 API Key 是否有效、权限是否包含模型列表接口。",
+        "checkProviderStatus": "请检查供应商服务状态、网络代理或供应商接口兼容性。",
+        "checkModelsApi": "请确认该供应商提供 OpenAI 兼容的模型列表响应。"
+      },
+      "batchTest": {
+        "entry": "一键测试",
+        "entryHint": "批量测试供应商真实对话能力",
+        "selectedCount": "已选 {{count}} 个",
+        "title": "一键测试模型供应商",
+        "selectTitle": "选择要测试的供应商",
+        "selectDesc": "会把选中的供应商临时接入本地网关发起对话测试，并按供应商协议能力转发到上游。",
+        "selectionSummary": "已选 {{selected}} / 可测 {{total}}",
+        "emptySelection": "请选择至少一个带 API Key 的供应商。",
+        "noApiKey": "缺少 API Key",
+        "gatewayProtocol": "Chat Completions · 网关",
+        "directProtocol": "Responses · 网关",
+        "start": "开始测试",
+        "kicker": "供应商测试",
+        "resultsTitle": "供应商对话测试结果",
+        "totalCount": "供应商 {{count}} 个",
+        "progress": "测试进度",
+        "selectVisible": "选择当前结果",
+        "resultSelectedCount": "已选 {{count}} 个",
+        "selectFailed": "选择失败",
+        "deleteConfirm": "确认删除选中的 {{providerCount}} 个供应商吗？会同时删除 {{accountCount}} 个精确关联的 Codex API Key 账号。",
+        "deleteSuccess": "已删除 {{providerCount}} 个供应商和 {{accountCount}} 个关联账号。",
+        "deleteFailed": "删除选中项失败：{{error}}",
+        "protocolSummary": "{{protocol}} · {{mode}} · {{model}}",
+        "modelUnknown": "模型待定",
+        "promptLabel": "提示词",
+        "pendingDesc": "等待开始测试。",
+        "runningDesc": "正在发送对话请求。",
+        "noReply": "上游未返回可读回复。",
+        "unknownError": "未知错误",
+        "status": {
+          "all": "全部",
+          "success": "成功",
+          "error": "失败",
+          "running": "测试中",
+          "pending": "等待中",
+          "completed": "已完成"
+        },
+        "officialClientOnlyError": "该供应商限制只允许 Codex 官方客户端请求；当前一键测试已走本地网关，但上游仍拒绝了这次测试请求。请以官方 Codex 实际启动后的表现为准。",
+        "modelAuto": "自动选择（按目录/探测）",
+        "modelCustom": "自定义模型…",
+        "modelLabel": "测试模型",
+        "modelCustomPlaceholder": "输入模型 ID，例如 gpt-4.1-mini",
+        "modelHint": "可选统一模型。留空则按各供应商目录或探测结果自动选择。"
+      },
+      "enableAndStart": "启动",
+      "instance": {
+        "label": "启动实例",
+        "default": "默认实例",
+        "running": "运行中",
+        "targetHint": "目标：{{instance}}",
+        "uninitializedHint": "目标实例尚未初始化，请先到应用多开页启动一次。",
+        "shortLabel": "实例",
+        "saveFailed": "保存实例绑定失败：{{error}}"
+      },
+      "vision": {
+        "providerDefault": "该供应商默认支持图片输入",
+        "providerDefaultHint": "关闭时，只有下方列出的模型会允许图片输入；其他模型会在本地网关直接提示不支持。",
+        "modelsHint": "每行一个模型名。适合同一供应商里只有部分视觉模型支持粘贴图片的情况。",
+        "routingModelHint": "当前模型不支持图片时，带图片请求会改用该模型；留空且只有一个视觉模型时自动使用。",
+        "allModels": "图片输入",
+        "partialModels": "部分图片",
+        "textOnly": "仅文本"
+      },
+      "sponsorRecommended": "中转站推荐",
+      "builtinProviders": "内置供应商",
+      "sponsorHint": "已按专属中转站配置自动填写兼容服务地址。输入 API Key 后，卡片会自动查询余额和用量。",
+      "integration": {
+        "sub2api": "Sub2API 兼容",
+        "newApi": "New API 兼容"
+      },
+      "usage": {
+        "title": "额度概览",
+        "remaining": "剩余额度",
+        "today": "今日用量",
+        "total": "累计用量",
+        "requests": "今日请求",
+        "loading": "正在查询额度...",
+        "failed": "额度查询失败：{{error}}",
+        "pending": "等待查询额度",
+        "noKey": "暂无可查询额度",
+        "used": "已用额度",
+        "limit": "总额度",
+        "viewDetail": "查看详情",
+        "detailTitle": "服务面板",
+        "rawFields": "服务数据",
+        "fields": {
+          "status": "状态",
+          "planName": "订阅",
+          "remaining": "剩余额度",
+          "balance": "余额",
+          "todayRequests": "今日请求",
+          "todayTokens": "今日 Token",
+          "todayCost": "今日消耗",
+          "totalRequests": "累计请求",
+          "totalTokens": "累计 Token",
+          "totalCost": "累计消耗",
+          "hardLimitUsd": "硬额度",
+          "softLimitUsd": "软额度",
+          "systemHardLimitUsd": "系统额度",
+          "accessUntil": "可用至",
+          "totalUsage": "累计消耗",
+          "quotaUnlimited": "无限额度",
+          "expiresAt": "过期时间",
+          "totalGranted": "授予额度",
+          "totalAvailable": "可用额度",
+          "modelLimitsEnabled": "模型限制"
+        },
+        "accountBalance": "账户余额",
+        "unlimitedQuota": "无限额度",
+        "booleanTrue": "是",
+        "booleanFalse": "否"
+      },
+      "oauthBinding": {
+        "desc": "可选绑定。只要 OAuth 账号带 refresh_token 即可选择；未绑定时供应商仍按原 API Key 逻辑运行。",
+        "currentProvider": "供应商：{{name}}"
+      },
+      "sort": {
+        "custom": "自定义顺序",
+        "customModalTitle": "自定义供应商排序",
+        "customModalDesc": "拖动供应商或使用上下按钮调整展示顺序。",
+        "customDragHandle": "拖拽排序",
+        "customMoveUp": "上移",
+        "customMoveDown": "下移",
+        "customReset": "重置自定义顺序"
+      },
+      "websockets": {
+        "title": "允许 Codex 使用 Responses WebSocket",
+        "help": "仅在供应商明确支持 Responses WebSocket 时开启；连接方式可通过 Codex 或代理服务日志确认。",
+        "enabled": "已启用",
+        "disabled": "已停用"
+      },
+      "renameApiKeyPrompt": "重命名 API Key",
+      "renameApiKeySuccess": "API Key 已重命名",
+      "renameApiKeyFailed": "重命名 API Key 失败：{{error}}",
+      "existingApiKeysSearch": "搜索已有 API Key…"
     },
     "quickSwitch": {
       "action": "快速切换供应商",
@@ -2319,8 +2958,31 @@
     "quota": {
       "hourly": "5小时配额",
       "weekly": "周配额",
+      "additional": "额外额度",
       "weeklyBlocksHourly": "周额度为 0，5小时额度已不可用",
-      "reset": "重置"
+      "reset": "重置",
+      "resetCredits": "重置 {{count}}",
+      "resetCreditsTitle": "可用于重置当前 5 小时窗口的剩余次数：{{count}}",
+      "resetCreditConfirm": "确认重置?",
+      "resetCreditDialogTitle": "要重置你的使用量吗？",
+      "resetCreditDialogDesc": "重置速率限制后，可以继续不间断地工作。你还有 {{count}} 次重置可用。",
+      "resetCreditDialogAction": "重置使用次数",
+      "resetCreditNoCredits": "没有可用的主动重置次数",
+      "resetCreditConsumed": "已重置 5 小时额度",
+      "resetCreditFailed": "重置失败：{{error}}",
+      "resetCreditRefreshAfterConsumeFailed": "已提交重置，但刷新配额失败：{{error}}",
+      "resetCreditsTitleWithExpiry": "可用于重置当前 5 小时窗口的剩余次数：{{count}}，最近到期：{{time}}",
+      "resetCreditTimeUnknown": "时间未知",
+      "resetCreditStatusAvailable": "可用",
+      "resetCreditStatusRedeemed": "已使用",
+      "resetCreditStatusExpired": "已过期",
+      "resetCreditStatusUnknown": "未知",
+      "resetCreditNextExpiry": "最近到期：{{time}}",
+      "resetCreditDetailsTitle": "重置次数明细",
+      "resetCreditNoRecords": "暂无重置记录",
+      "resetCreditRecordsLoadFailed": "加载重置记录失败：{{error}}",
+      "resetCreditGrantedAt": "发放",
+      "resetCreditExpiresAt": "到期"
     },
     "usage": {
       "open": "查看 OpenAI 用量",
@@ -2335,7 +2997,10 @@
       "refreshFailedBadge": "刷新失败",
       "generic": "配额刷新失败，请稍后重试",
       "deactivatedWorkspace": "工作区已停用，请切换账号或重新授权",
-      "requestFailedManualRetry": "请检查网络，未获取到最新额度。可刷新重试。"
+      "requestFailedManualRetry": "请检查网络，未获取到最新额度。可刷新重试。",
+      "httpStatusSummary": "API 返回错误 {{status}}",
+      "viewDetails": "查看详情",
+      "detailTitle": "错误详情"
     },
     "plan": {
       "free": "FREE",
@@ -2345,7 +3010,13 @@
       "enterprise": "ENTERPRISE"
     },
     "list": {
-      "showCodeReviewQuota": "显示 Code Review 配额"
+      "showCodeReviewQuota": "显示 Code Review 配额",
+      "showAdditionalQuota": "显示模型专属配额",
+      "planBadgeStyle": "套餐徽章样式",
+      "planBadgeStyleDefault": "默认",
+      "planBadgeStyleOutline": "描边",
+      "planBadgeStyleSoft": "柔和",
+      "planBadgeStyleMono": "单色"
     },
     "time": {
       "today": "今天 {{time}}",
@@ -2370,7 +3041,9 @@
       "filterWithin24h": "24小时内 ({{count}})",
       "filterWithin7d": "7天内 ({{count}})",
       "filterWithin30d": "30天内 ({{count}})",
-      "filterMissing": "未获得 ({{count}})"
+      "filterMissing": "未获得 ({{count}})",
+      "accessTokenOnlyUsable": "Token 可用",
+      "accessTokenOnlyUsableDetail": "订阅信息接口受限，但配额与 Codex 使用正常"
     },
     "view": {
       "compact": "紧凑视图"
@@ -2386,6 +3059,7 @@
       "hourlyReset": "按5小时配额重置时间",
       "subscriptionExpiry": "按订阅有效期",
       "custom": "自定义顺序",
+      "customSettingsTooltip": "配置自定义顺序",
       "customModalTitle": "自定义账号排序",
       "customModalDesc": "拖动账号或使用上下按钮调整展示顺序。",
       "customDragHandle": "拖拽排序",
@@ -2410,29 +3084,33 @@
       "subtitle": "安排 Codex 唤醒任务、测试链路并查看历史记录。",
       "heroTitle": "Codex 唤醒任务",
       "heroSubtitle": "为 OAuth Codex 账号安排定时唤醒、手动测试链路，并集中查看触发历史。",
-      "runtimeReady": "Codex CLI 已就绪",
-      "runtimeMissing": "需要安装 Codex CLI",
-      "runtimeCardTitle": "Codex CLI",
+      "runtimeReady": "官方直连已就绪",
+      "runtimeMissing": "官方直连不可用",
+      "runtimeCardTitle": "执行方式",
       "runtimeUnknownPath": "未检测到路径",
+      "officialChatRuntimeTitle": "官方直连",
+      "officialChatRuntimePath": "ChatGPT 官方 Codex 对话",
+      "officialChatRuntimeSource": "官方直连",
+      "officialChatRuntimeMessage": "OAuth 账号直接对话",
       "runtimeUnchecked": "重新检测以获取最新状态",
       "runtimeVersion": "版本 {{version}}",
-      "installTitle": "先安装 Codex CLI",
-      "installSubtitle": "开始测试或执行任务前，系统必须能找到 codex 命令。",
-      "installFootnote": "安装完成后请重新检测；也可在上方自定义 Codex CLI 与 node 路径。",
-      "runtimeConfigTitle": "自定义运行时路径",
-      "runtimeConfigHint": "可填写可执行文件或目录路径；留空时按系统 PATH 自动检测。",
-      "runtimeConfigCodexCliLabel": "Codex CLI 路径",
-      "runtimeConfigCodexCliPlaceholder": "例如：/opt/homebrew/bin/codex",
-      "runtimeConfigNodeLabel": "node 路径",
-      "runtimeConfigNodePlaceholder": "例如：/opt/homebrew/bin/node",
-      "runtimeConfigApplyHint": "修改后点击“重新检测 CLI”会保存并立即生效。",
+      "installTitle": "检查官方直连",
+      "installSubtitle": "执行唤醒前需要可连接 ChatGPT 官方 Codex 服务。",
+      "installFootnote": "请检查网络、代理和账号状态后重试。",
+      "runtimeConfigTitle": "官方直连状态",
+      "runtimeConfigHint": "唤醒任务会使用 OAuth 账号直接请求 ChatGPT 官方 Codex 对话。",
+      "runtimeConfigCodexCliLabel": "官方连接路径",
+      "runtimeConfigCodexCliPlaceholder": "ChatGPT 官方 Codex 对话",
+      "runtimeConfigNodeLabel": "网络环境",
+      "runtimeConfigNodePlaceholder": "按当前系统网络和代理连接",
+      "runtimeConfigApplyHint": "重新检测会刷新当前官方连接状态。",
       "copyCommand": "复制命令",
       "copied": "已复制",
       "addTask": "添加任务",
       "testNow": "测试唤醒",
       "enableAll": "开启所有任务",
       "disableAll": "关闭所有任务",
-      "refreshRuntime": "重新检测 CLI",
+      "refreshRuntime": "重新检测",
       "statsEnabledTasks": "启用中的任务",
       "statsHistory": "历史记录",
       "statsSuccess": "成功次数",
@@ -2500,6 +3178,16 @@
       "accountSearchPlaceholder": "搜索邮箱...",
       "accountFilterEmpty": "没有匹配的账号",
       "accountFilteredCount": "当前筛选 {{count}} 个账号",
+      "fullQuotaAction": "唤醒账号",
+      "fullQuotaActionTitle": "打开账号唤醒测试，账号默认按 5h 额度从高到低排序。",
+      "fullQuotaNoAccounts": "当前列表没有可唤醒的 OAuth 账号。",
+      "fullQuotaAccountsLabel": "选择要唤醒的账号",
+      "accountSort": {
+        "default": "默认顺序",
+        "hourly": "按5h额度",
+        "weekly": "按周额度",
+        "email": "按邮箱"
+      },
       "testTitle": "测试 Codex 唤醒",
       "testAccountsLabel": "测试账号",
       "testAccountsRequired": "请至少选择一个测试账号",
@@ -2584,33 +3272,50 @@
     },
     "sessionManager": {
       "title": "会话管理",
-      "desc": "同步、可见性修复、清理与恢复统一放在这里：顶部可一键同步会话、修复历史可见性或从废纸篓恢复，下面按项目展开查看会话并移到废纸篓。",
+      "desc": "同步、可见性修复、清理与恢复统一放在这里：顶部可一键同步会话、修复会话可见性或从废纸篓恢复，下面按项目展开查看会话并移到废纸篓。",
       "actions": {
         "moveToTrash": "移到废纸篓",
         "syncSessions": "同步会话",
         "copyToInstance": "复制到实例",
         "repairVisibility": "修复可见性",
         "restoreSessions": "恢复会话",
+        "exportSessions": "导出会话",
+        "importSessions": "导入会话",
         "copySessionId": "复制会话 ID",
+        "openLocation": "打开位置",
+        "selectAllSessions": "全选全部会话",
+        "clearSelectedSessions": "取消全选",
         "expand": "展开",
-        "collapse": "收起"
+        "collapse": "收起",
+        "trash": "废纸篓",
+        "openRollout": "打开会话文件"
       },
       "confirm": {
         "title": "移到废纸篓",
         "message": "会将所选会话从对应实例中移到废纸篓，便于后续恢复；运行中的实例可能需要重启后才会反映。确认继续？",
         "syncMessage": "会将缺失的 rollout、session_index 条目和会话文件时间同步到所有实例，并触发官方 Codex 重建会话索引；已有内容不会重复写入，写入前会先备份目标文件。确认继续？",
-        "repairVisibilityMessage": "会按各实例 config.toml 根级 model_provider（缺失时按 openai）修复 rollout 文件与 state_5.sqlite 中的 provider 元数据，写入前会先备份将要修改的文件。运行中的实例可能需要重启后显示。确认继续？"
+        "repairVisibilityMessage": "会校正官方 Codex state DB 中影响侧边栏显示的会话记录；写入前会先备份将要修改的 state DB。"
       },
       "empty": {
         "title": "还没有可管理的会话",
-        "desc": "当前实例集合中还没有发现会话记录。"
+        "desc": "当前实例集合中还没有发现会话记录。",
+        "searchTitle": "未找到匹配会话",
+        "searchDesc": "请调整标题关键词后再试。"
+      },
+      "search": {
+        "titleLabel": "标题",
+        "contentLabel": "对话内容",
+        "titlePlaceholder": "按标题搜索",
+        "contentPlaceholder": "按对话内容搜索",
+        "apply": "搜索",
+        "clear": "清空"
       },
       "messages": {
         "pickOne": "请至少选择一条会话",
         "pickRestoreOne": "请至少选择一条待恢复会话",
         "syncNeedTwo": "至少需要两个实例才能同步会话",
-        "repairVisibilitySkippedOnly": "未发现需要写入的 provider 差异；已跳过 {{count}} 个无效或损坏的 state_5.sqlite，需由 Codex 重新生成后才能修复其中的 SQLite 记录",
-        "repairVisibilitySkippedWithBase": "{{message}}；已跳过 {{count}} 个无效或损坏的 state_5.sqlite，需由 Codex 重新生成后才能修复其中的 SQLite 记录"
+        "repairVisibilitySkippedOnly": "未发现需要写入的会话索引差异；已跳过 {{count}} 个无效或损坏的 SQLite 会话库，需由 Codex 重新生成后才能修复其中的记录",
+        "repairVisibilitySkippedWithBase": "{{message}}；已跳过 {{count}} 个无效或损坏的 SQLite 会话库，需由 Codex 重新生成后才能修复其中的记录"
       },
       "groupCount": "{{count}} 条会话",
       "updatedAt": "最近更新",
@@ -2621,11 +3326,25 @@
       "locationRunning": "（运行中）",
       "untitled": "未命名会话",
       "restoreModal": {
-        "title": "恢复会话",
-        "hint": "恢复会把 rollout 文件、session_index 条目和会话文件时间放回原实例，并触发官方 Codex 重建会话索引。",
+        "title": "废纸篓",
+        "hint": "废纸篓中的会话可以恢复到原实例，也可以永久删除以释放磁盘空间。",
         "emptyTitle": "废纸篓里还没有会话",
         "emptyDesc": "已移到废纸篓的会话会显示在这里。",
-        "restoreAction": "恢复选中会话"
+        "restoreAction": "恢复选中会话",
+        "summary": "共 {{count}} 条，{{size}}",
+        "selectedSummary": "已选 {{count}} 条，{{size}}",
+        "selectAll": "全选",
+        "clearSelected": "取消选择",
+        "emptyTrash": "清空废纸篓",
+        "itemSize": "大小 {{size}}",
+        "deleteOne": "永久删除",
+        "deleteSelected": "永久删除选中",
+        "pickDeleteOne": "请至少选择一条要永久删除的会话",
+        "deleteOneConfirm": "确定要永久删除这个会话吗？删除后无法恢复，预计释放 {{size}}。",
+        "deleteSelectedConfirm": "确定要永久删除选中的 {{count}} 条会话吗？删除后无法恢复，预计释放 {{size}}。",
+        "permanentDeleteTitle": "永久删除",
+        "permanentDeleteAction": "永久删除",
+        "emptyTrashConfirm": "确定要清空废纸篓吗？其中 {{count}} 条会话将被永久删除且无法恢复，预计释放 {{size}}。"
       },
       "targetModal": {
         "title": "复制到实例",
@@ -2635,7 +3354,151 @@
         "selectedCount": "已选择 {{count}} 条会话",
         "existingCount": "目标已存在 {{count}} 条",
         "confirm": "复制会话"
-      }
+      },
+      "importModal": {
+        "title": "导入会话",
+        "hint": "会话包只导入 rollout 文件和 session_index 条目，不包含账号、Token、API Key 或应用配置；目标实例已有同 ID 会话时会跳过。",
+        "noTarget": "未发现可导入的 Codex 实例",
+        "noPackage": "请先选择会话包",
+        "pickOne": "请至少选择一条可导入会话",
+        "totalCount": "会话包 {{count}} 条",
+        "readyCount": "可导入 {{count}} 条",
+        "selectReady": "选择可导入",
+        "previewing": "正在预览会话包...",
+        "existsIn": "已存在于：{{names}}",
+        "statusReady": "可导入",
+        "statusDuplicate": "已存在",
+        "statusConflict": "冲突",
+        "statusInvalid": "无效",
+        "confirm": "导入选中会话"
+      },
+      "repairModal": {
+        "running": "正在修复...",
+        "progress": {
+          "queued": "正在启动修复任务...",
+          "collectInstances": "正在收集 Codex 实例...",
+          "scanInstances": "正在准备扫描实例...",
+          "scanInstance": "正在扫描 {{instance}}（{{current}}/{{total}}）...",
+          "backupInstance": "正在备份 {{instance}}（{{current}}/{{total}}）...",
+          "writeInstance": "正在写入 {{instance}}（{{current}}/{{total}}）...",
+          "rebuildMetadata": "正在刷新 {{instance}} 的官方会话状态...",
+          "pruneBackups": "正在清理旧备份...",
+          "done": "修复已完成",
+          "writeSqliteProvider": "正在写入 {{instance}} 的 SQLite 可见性...",
+          "writeRolloutFiles": "正在写入旧会话文件...",
+          "writeSqliteTimestamps": "正在校正 {{instance}} 的 SQLite 时间...",
+          "writeSessionIndex": "正在写入 session_index..."
+        },
+        "targetProvider": "目标 provider",
+        "defaultProvider": "默认",
+        "loadingProviders": "正在读取 provider...",
+        "noProvider": "未发现 provider",
+        "providerLoadFailed": "读取 provider 候选失败：{{error}}",
+        "modeTitle": "修复方式",
+        "modeQuick": "快速修复",
+        "modeQuickDesc": "只校正官方 state DB 和会话文件首条元数据，适合日常切号后恢复。",
+        "modeDeep": "深度修复",
+        "modeDeepDesc": "保留当前完整元数据修复，适合快速修复后仍不可见时测试。",
+        "scopeTitle": "会话范围",
+        "scopeAll": "全部会话",
+        "scopeAllDesc": "修复当前管理列表中的 {{count}} 条会话。",
+        "scopeSelected": "所选会话",
+        "scopeSelectedDesc": "只修复已勾选的 {{count}} 条会话。",
+        "scopeSelectedEmpty": "先在列表中勾选会话。",
+        "providerSource": {
+          "config": "配置",
+          "rollout": "会话",
+          "sqlite": "SQLite 库"
+        },
+        "targetInstance": "目标实例",
+        "loadingInstances": "正在读取实例...",
+        "noInstance": "未发现实例",
+        "instanceLoadFailed": "读取实例失败：{{error}}",
+        "defaultInstance": "默认实例",
+        "runningInstance": "运行中",
+        "instanceProvider": "当前 provider",
+        "instanceScopeTitle": "实例范围",
+        "instanceScopeTarget": "仅目标实例",
+        "instanceScopeTargetDesc": "只修复上方选中的实例，通常更快。",
+        "instanceScopeAll": "全部实例",
+        "instanceScopeAllDesc": "修复所有 Codex 实例，适合应用多开一起恢复。",
+        "progressTitle": "修复进度",
+        "start": "开始修复",
+        "previewing": "正在预览...",
+        "previewAgain": "重新预览",
+        "preview": "预览变更",
+        "previewFailedWithError": "预览会话修复失败：{{error}}",
+        "confirmRepair": "确认修复"
+      },
+      "transferModal": {
+        "exportTitle": "导出会话",
+        "importTitle": "导入会话",
+        "minimize": "最小化",
+        "reopen": "查看进度",
+        "clear": "清除",
+        "runningSummary": "正在处理 {{current}}/{{total}}",
+        "completedSummary": "任务已完成",
+        "failedSummary": "任务失败",
+        "current": "{{current}} / {{total}}",
+        "phase": {
+          "exportPrepare": "正在准备导出...",
+          "exportCollect": "正在收集会话...",
+          "exportHash": "正在校验会话文件...",
+          "exportWrite": "正在写入会话包...",
+          "importPrepare": "正在准备导入...",
+          "importRead": "正在读取会话包...",
+          "importWrite": "正在写入目标实例...",
+          "importRebuild": "正在刷新官方会话索引...",
+          "done": "任务已完成"
+        }
+      },
+      "exportModal": {
+        "title": "导出会话",
+        "hint": "导出前可先确认会话列表、来源实例和文件大小；会话包只包含 rollout 文件和 session_index 条目，不包含账号、Token、API Key 或应用配置。",
+        "previewing": "正在预览会话...",
+        "selectedCount": "已选择 {{count}} 条",
+        "exportableCount": "可导出 {{count}} 条",
+        "missingCount": "缺失 {{count}} 条",
+        "totalSize": "总大小 {{size}}",
+        "exportPath": "导出位置",
+        "pathUnset": "尚未选择导出位置",
+        "choosePath": "选择位置",
+        "missingNotice": "{{count}} 条会话已不在当前实例集合中，导出时会跳过。",
+        "sourceInstance": "来源：{{name}}",
+        "emptyTitle": "没有可导出的会话",
+        "noPreview": "请先完成导出预览",
+        "noExportable": "没有可导出的会话",
+        "pickPath": "请选择导出位置",
+        "confirm": "确认导出",
+        "selectedExportCount": "已选 {{selected}} / 可导出 {{total}}",
+        "selectedSize": "已选大小 {{selected}} / 总计 {{total}}",
+        "removedNotice": "已从本次导出列表移出 {{count}} 条",
+        "restoreRemoved": "恢复列表",
+        "sourceLabel": "来源",
+        "allSources": "全部来源",
+        "selectionLabel": "选择",
+        "filterAll": "全部",
+        "filterSelected": "已选",
+        "filterUnselected": "未选",
+        "visibleCount": "当前显示 {{visible}} / {{total}}",
+        "selectVisible": "选中筛选",
+        "clearVisible": "取消筛选",
+        "keepVisibleOnly": "仅保留筛选",
+        "removeVisible": "移出筛选",
+        "removeUnchecked": "移出未选",
+        "selectItem": "选择导出会话",
+        "removeItem": "移出",
+        "emptyFilteredTitle": "当前筛选无会话",
+        "emptyFilteredDesc": "调整搜索、来源或选择状态后再试。"
+      },
+      "kindFilter": "会话类型",
+      "kind": {
+        "conversation": "对话",
+        "external": "外部",
+        "subagent": "子代理",
+        "all": "全部类型"
+      },
+      "pickInstancePrompt": "该会话存在于多个实例，请输入实例 ID（可在位置列查看）："
     },
     "groups": {
       "addToGroup": "添加至分组"
@@ -2661,7 +3524,31 @@
         "models": "模型与能力",
         "logs": "统计与日志"
       },
+      "statsRange": {
+        "today": "今日",
+        "thisWeek": "本周",
+        "thisMonth": "本月"
+      },
+      "usage": {
+        "title": "用量统计",
+        "lastRecorded": "最近记录"
+      },
       "healthTitle": "服务健康",
+      "compat": {
+        "title": "协议兼容",
+        "desc": "同一个 API 服务地址支持 OpenAI Chat、Responses、Anthropic Messages、Gemini 和 Ollama 入口。",
+        "openaiTitle": "OpenAI 兼容",
+        "openaiNote": "Base URL 使用 /v1。",
+        "responsesTitle": "Responses",
+        "responsesNote": "Codex 原生 Responses 入口。",
+        "anthropicTitle": "Anthropic Messages",
+        "anthropicNote": "使用同一个服务 Key。",
+        "geminiTitle": "Gemini",
+        "geminiNote": "Base URL 使用 /v1beta。",
+        "ollamaTitle": "Ollama Bridge",
+        "ollamaNote": "使用 Authorization: Bearer。",
+        "modelCatalogLabel": "模型目录"
+      },
       "health": {
         "availableAccounts": "可用账号",
         "cooldowns": "冷却",
@@ -2670,7 +3557,21 @@
       },
       "accountHealth": {
         "failures": "连续失败 {{count}}",
-        "image": "图片 {{status}}"
+        "image": "图片 {{status}}",
+        "unavailable": "暂不可用",
+        "authError": "鉴权异常"
+      },
+      "accountModelRules": {
+        "action": "禁用模型",
+        "title": "账号禁用模型",
+        "desc": "命中规则的账号不会参与该模型请求；每行一个模型或通配符。",
+        "bulkLabel": "批量规则",
+        "placeholder": "示例：\ngpt-5.4-mini\ngpt-5.3-*",
+        "applySelected": "应用到已选",
+        "selectAll": "全选账号",
+        "clearSelection": "清除选择",
+        "saveSuccess": "账号模型禁用规则已保存",
+        "cardCount": "禁用 {{count}}"
       },
       "models": {
         "availableTitle": "可用模型",
@@ -2692,17 +3593,64 @@
         "pricingOutput": "输出",
         "pricingSource": "来源",
         "pricingActions": "操作",
-        "pricingCachePlaceholder": "同输入",
+        "pricingCachePlaceholder": "-",
         "pricingCustom": "自定义",
         "pricingPreset": "预设",
         "pricingUnset": "未设置",
         "pricingReset": "重置",
         "pricingSaved": "价格设置已保存",
-        "pricingInvalid": "价格必须是大于或等于 0 的数字"
+        "pricingInvalid": "价格必须是大于或等于 0 的数字，Token 阈值必须是正整数",
+        "pricingReprice": "重算历史估值",
+        "pricingRepriced": "历史估值已按当前价格重算",
+        "pricingLongThreshold": "长上下文阶梯阈值（tokens）",
+        "pricingStandard": "标准",
+        "pricingStandardLong": "标准（长上下文）",
+        "pricingPriority": "快速",
+        "pricingOfficialMissing": "-",
+        "pricingStandardLongInput": "标准（长上下文）输入",
+        "pricingStandardLongCache": "标准（长上下文）缓存输入",
+        "pricingStandardLongOutput": "标准（长上下文）输出",
+        "pricingPriorityInput": "快速输入",
+        "pricingPriorityCache": "快速缓存输入",
+        "pricingPriorityOutput": "快速输出",
+        "pricingRepriceDone": "历史估算价值已更新，变更 {{updated}} 条",
+        "pricingRepriceFailedWithMessage": "历史估算价值更新失败：{{message}}",
+        "pricingRepriceFailed": "历史估算价值更新失败",
+        "pricingRepriceSuperseded": "已收到新的价格配置，正在切换到最新重算任务",
+        "pricingRepriceRunning": "正在更新历史估算价值 {{processed}} / {{total}}，已更新 {{updated}} 条",
+        "pricingRepriceCompleted": "历史估算价值已更新",
+        "pricingRepriceSaveBlocked": "历史估算价值更新中，完成后再保存"
       },
       "keys": {
-        "policyTitle": "模型策略",
-        "advancedPolicyTitle": "高级功能：模型策略",
+        "lastUsed": "最近使用",
+        "routingAccounts": "路由账号",
+        "policyTitle": "账号池与模型策略",
+        "advancedPolicyTitle": "账号池、模型与 Token 限额",
+        "accountScope": "账号轮转范围",
+        "accountScopeInherit": "随服务账号池自动更新",
+        "accountScopeFixed": "此 Key 已固定绑定账号，不能继承服务池",
+        "accountScopeSelected": "已选择 {{count}} 个账号",
+        "accountScopeInheritedCount": "账号池：继承 {{count}} 个",
+        "accountScopeUnavailable": "账号池：无可用账号",
+        "accountScopeCount": "账号池：{{selected}}/{{total}}",
+        "accountScopeRequired": "自定义账号池至少需要选择 1 个账号",
+        "accountScopeModeInherit": "继承服务池",
+        "accountScopeModeCustom": "自定义账号池",
+        "accountPrioritySet": "置顶账号优先调用",
+        "accountPriorityPromote": "提升为最高优先级",
+        "accountPriorityClear": "取消置顶账号",
+        "accountPrioritySaved": "已置顶账号",
+        "accountPriorityCleared": "已取消置顶账号",
+        "usageRange": "Key 用量统计周期",
+        "tokenLimit": "Token 总上限",
+        "tokenLimitPlaceholder": "例如：10m",
+        "tokenLimitHint": "留空表示不限额；所有模型的输入与输出 Token 合并累计。",
+        "tokenLimitInvalid": "请输入有效的 Token 上限，例如 10m 或 10000000",
+        "tokenLimitUsage": "Token 限额",
+        "tokenLimitCurrentUsage": "已用：{{used}} Token",
+        "tokenLimitUnlimited": "不限额",
+        "unsaved": "未保存",
+        "resetPolicy": "撤销修改",
         "modelPrefix": "模型前缀",
         "modelPrefixPlaceholder": "例如 codex",
         "allowedModels": "允许模型",
@@ -2710,16 +3658,19 @@
         "excludedModels": "排除模型",
         "excludedModelsPlaceholder": "每行一个模型或通配符",
         "savePolicy": "保存策略",
-        "policySaved": "Key 模型策略已保存"
+        "policySaved": "Key 策略已保存"
       },
       "routing": {
         "optionsTitle": "调度选项",
         "sessionAffinity": "会话亲和",
-        "sessionAffinityTtl": "亲和 TTL",
+        "sessionAffinityTtl": "过期时间（秒）",
+        "responsesWebsockets": "WebSocket 响应传输",
         "maxRetryCredentials": "重试账号数",
         "maxRetryInterval": "重试等待",
         "disableCooling": "禁用冷却",
         "saveOptions": "保存选项",
+        "immediateSseResponse": "SSE 立即返回 200",
+        "maxConcurrentImageRequests": "每个账户的图片请求数",
         "optionsSaved": "调度选项已保存"
       },
       "timeouts": {
@@ -2777,6 +3728,9 @@
         "allKinds": "全部类型",
         "allStatuses": "全部状态",
         "allGatewayModes": "全部模式",
+        "allInstances": "全部实例",
+        "instanceFilter": "实例",
+        "instanceUnknown": "实例 -",
         "modelFilter": "模型",
         "modelPlaceholder": "模型 ID",
         "accountFilter": "账号",
@@ -2792,8 +3746,199 @@
         "httpStatus": "HTTP {{status}}",
         "clearFilters": "清除筛选",
         "loading": "正在加载请求日志",
-        "gatewayModeUnknown": "模式未知"
+        "gatewayModeUnknown": "模式未知",
+        "reasoningEffort": "思考强度",
+        "reasoningEffortValue": "思考 {{effort}}",
+        "serviceTier": "服务等级",
+        "serviceTierValue": "等级 {{tier}}"
       }
+    },
+    "apiKey": {
+      "renameSuccess": "已重命名",
+      "renameFailed": "重命名失败"
+    },
+    "importApiService": {
+      "toggle": "同步加入 API 服务",
+      "description": "导入成功后，将符合条件的账号加入 API 服务账号池。",
+      "syncFailed": "账号已导入，但加入 API 服务失败：{{error}}",
+      "guideTitle": "账号已加入 API 服务",
+      "guideDescription": "已将 {{count}} 个账号加入 API 服务。点击“启动 API 服务”即可切换并使用。",
+      "later": "稍后",
+      "startAction": "启动 API 服务"
+    },
+    "batchImport": {
+      "title": "Codex 批量导入",
+      "resultSubtitle": "导入结果",
+      "previewSubtitle": "选择要写入的账号",
+      "scanSubtitle": "正在逐条解析并检查账号",
+      "parseSubtitle": "正在解析账号文件",
+      "importSubtitle": "正在写入选中的账号",
+      "finalizing": "正在完成导入",
+      "finalizingSubtitle": "正在更新账号列表和关联设置",
+      "cancelImport": "取消导入",
+      "importCancelledSummary": "导入已取消，已处理 {{processed}}/{{total}} 个账号。",
+      "importChecked": "导入已检测账号",
+      "directImport": "不检测，直接导入",
+      "importCheckedAndAddToApiService": "导入已检测账号并添加到 API 服务",
+      "directImportAndAddToApiService": "直接导入并添加到 API 服务",
+      "viewAllTasks": "查看全部 {{count}} 个任务",
+      "collapseTasks": "收起任务",
+      "cancelling": "正在取消...",
+      "scanDone": "扫描完成",
+      "scanCompleteReview": "扫描完成，请查看",
+      "parseDone": "解析完成",
+      "scanning": "扫描中",
+      "parsing": "解析中",
+      "current": "当前",
+      "imported": "已导入",
+      "failed": "失败",
+      "quotaOk": "账号正常",
+      "quotaFailed": "异常",
+      "checkQuotaToggle": "导入前检测账号",
+      "preparing": "正在准备导入任务...",
+      "importSelected": "导入选中账号",
+      "noSelection": "请先选择要导入的账号",
+      "groups": {
+        "ready": "可导入",
+        "quotaFailed": "异常",
+        "existing": "已存在",
+        "invalid": "无效账号"
+      },
+      "cancelScan": "取消扫描",
+      "cancelParse": "取消解析",
+      "cancelled": "已取消",
+      "resumeScan": "继续扫描",
+      "resumeParse": "继续解析",
+      "selectedCount": "已选 {{count}}/{{total}}",
+      "selectAllAccounts": "选择全部账号",
+      "selectReady": "选择正常账号",
+      "clearSelection": "取消选择",
+      "hiddenTask": "Codex 批量导入任务",
+      "taskRunning": "正在处理 {{current}} / {{total}}",
+      "taskPreview": "已生成 {{total}} 条预览",
+      "reopen": "查看任务",
+      "dismissTask": "丢弃",
+      "cancelAndDismiss": "取消并丢弃任务",
+      "queueCount": "队列中 {{count}} 个任务",
+      "queued": "排队中",
+      "batchLabel": "批次 {{index}}",
+      "runInBackground": "后台执行",
+      "cancelQueued": "取消排队",
+      "importing": "导入中",
+      "checkAccounts": "检测账号",
+      "importAndAddToApiService": "导入并添加 API",
+      "importAndAddToApiServiceSuccess": "已导入并添加到 API 服务",
+      "addToApiServiceFailed": "账号已导入，但添加到 API 服务失败: {{error}}",
+      "bulkTagsLabel": "导入后批量打标",
+      "bulkTagsPlaceholder": "可选，多个标签用逗号或空格分隔"
+    },
+    "autoRepairMode": {
+      "label": "自动修复逻辑",
+      "tooltip": "切换时使用哪套会话可见性自动修复逻辑",
+      "legacyBefore4eb75d96": "4eb75d96 前逻辑",
+      "legacy4eb75d96": "4eb75d96 逻辑",
+      "current": "当前逻辑"
+    },
+    "batchDelete": {
+      "title": "Codex 批量删除",
+      "running": "删除中",
+      "paused": "已暂停",
+      "failed": "部分失败",
+      "completed": "删除完成",
+      "preparing": "正在准备删除任务...",
+      "retryFailed": "重试失败项",
+      "pause": "暂停",
+      "resume": "继续",
+      "clear": "清理",
+      "summary": "已处理 {{completed}} / {{total}}，失败 {{failed}}",
+      "started": "已开始删除 {{count}} 个 Codex 账号",
+      "pollFailed": "刷新批量删除进度失败：{{error}}",
+      "actionFailed": "批量删除操作失败：{{error}}"
+    },
+    "filters": {
+      "allPlans": "全部套餐 ({{count}})",
+      "visibleOfTotal": "显示 {{visible}} / 共 {{total}}",
+      "activeBanner": "当前筛选仅显示 {{visible}}/{{total}} 个账号",
+      "clearAll": "清除筛选",
+      "chipGroup": "分组",
+      "chipTags": "标签",
+      "chipSearch": "搜索",
+      "chipPlan": "套餐",
+      "chipFolder": "分组目录",
+      "authError": "授权失败",
+      "zeroQuota": "0% 额度",
+      "expired": "已过期"
+    },
+    "accessTokenImport": {
+      "nameRequired": "请输入账户名",
+      "tokenRequired": "请输入 Codex access token",
+      "desc": "输入账号名和 Codex access token，按 OAuth 账号保存；无 refresh 时落盘使用 personal_access_token 形态。",
+      "nameLabel": "账户名",
+      "namePlaceholder": "用于列表展示的名称",
+      "tokenLabel": "Codex access token",
+      "hideToken": "隐藏",
+      "showToken": "显示",
+      "submit": "导入访问令牌",
+      "success": "访问令牌账号已导入: {{name}}"
+    },
+    "ssh": {
+      "syncSwitch": "切号同步 SSH",
+      "syncSwitchDesc": "开启后配置 SSH 主机；Codex 切号时把当前账号同步到远端。",
+      "configure": "配置",
+      "modalTitle": "SSH 同步配置",
+      "modalHint": "添加并选中一台 SSH 服务器，开启「切号后自动同步」后，Codex 切号会把当前账号同步到远端。",
+      "title": "SSH 服务器",
+      "subtitle": "选中的服务器会在 Codex 切号后接收当前账号鉴权包。",
+      "addServer": "添加服务器",
+      "editServer": "编辑服务器",
+      "name": "名称",
+      "host": "主机",
+      "port": "端口",
+      "username": "用户名",
+      "codexHome": "远端 Codex 目录",
+      "authMethod": "认证方式",
+      "agentAuth": "SSH Agent",
+      "privateKeyAuth": "私钥文件",
+      "privateKeyPath": "私钥路径",
+      "syncOnSwitch": "切号后自动同步",
+      "emptyTitle": "暂无 SSH 服务器",
+      "emptyBody": "在左侧填写主机信息并保存，即可作为切号同步目标。",
+      "selected": "已选中",
+      "select": "选中",
+      "testConnection": "测连",
+      "syncNow": "立即同步",
+      "connectionOk": "连接成功",
+      "syncVerified": "SSH 已校验同步成功",
+      "syncFailed": "SSH 同步失败",
+      "syncedAs": "已同步 {{email}} · {{time}}",
+      "neverSynced": "尚未同步",
+      "latestVerified": "最近一次 SSH 同步已校验通过",
+      "tab": "SSH 同步",
+      "desc": "保存远程主机，测连后将当前鉴权同步到远端。切号成功后若已选中主机将自动同步。",
+      "new": "新建",
+      "empty": "暂无 SSH 主机",
+      "test": "测连",
+      "sync": "同步",
+      "saved": "SSH 服务器已保存",
+      "deleted": "已删除",
+      "user": "用户",
+      "remoteDir": "远端 Codex 目录",
+      "syncSwitchActive": "已启用 · {{name}}（{{user}}@{{host}}）",
+      "footerHint": "保存后开关会点亮；关闭开关可随时停用自动同步。",
+      "formLead": "填写远端主机信息",
+      "namePlaceholder": "例如：家里 NAS",
+      "syncOnSwitchHint": "保存并选中后，Codex 切号会推送鉴权到这台主机",
+      "addAndSave": "添加并保存",
+      "serverList": "服务器列表",
+      "serverListLead": "选择同步目标",
+      "serverCount": "{{count}} 台",
+      "autoSyncBadge": "自动同步"
+    },
+    "exportAuthFailed": "导出失败账号",
+    "exportAuthFailedTitle": "导出全部授权失败账号",
+    "accounts": {
+      "showRelayQuota": "显示中转额度",
+      "hideRelayQuota": "隐藏中转额度"
     }
   },
   "codebuddy": {
@@ -2894,13 +4039,19 @@
     "oauthSuccessCloseNowLabel": "关闭 WebView",
     "oauthSuccessCloseLaterLabel": "稍后再说",
     "oauthSuccessCloseNowStatus": "✅ 账号添加完成，窗口即将关闭…",
-    "oauthSuccessCloseLaterStatus": "✅ 账号添加完成，已保持当前页面打开。"
+    "oauthSuccessCloseLaterStatus": "✅ 账号添加完成，已保持当前页面打开。",
+    "sessions": {
+      "title": "本机会话文件",
+      "desc": "扫描本机 CodeBuddy 数据目录中的会话相关 JSON/JSONL 文件，可打开所在位置。",
+      "empty": "未找到会话文件",
+      "open": "打开位置"
+    }
   },
   "githubCopilot": {
     "title": "GitHub Copilot 账号管理",
     "instances": {
       "unsupported": {
-        "desc": "GitHub Copilot 多开实例仅支持 macOS。"
+        "desc": "GitHub Copilot 应用多开仅支持 macOS。"
       }
     },
     "empty": {
@@ -2956,6 +4107,13 @@
   },
   "dashboard": {
     "title": "账号仪表盘",
+    "apiRelay": {
+      "localConfig": "本地配置",
+      "localConfigDesc": "管理本地中转站配置、API Key 查询和一键写入客户端入口。",
+      "status": "配置状态",
+      "enabledByConfig": "远端配置已开启",
+      "openLocalConfig": "打开本地配置页"
+    },
     "summary": {
       "label": "概览",
       "title": "账号快照",
@@ -3108,8 +4266,8 @@
     "inputPercent": "输入百分比",
     "inputCredits": "输入 Credits",
     "windsurf": {
-      "title": "Windsurf 设置",
-      "appPath": "Windsurf 路径"
+      "title": "Devin 设置",
+      "appPath": "Devin 路径"
     },
     "windsurfRefreshInterval": "配额自动刷新",
     "kiro": {
@@ -3126,13 +4284,16 @@
       "title": "CodeBuddy 设置",
       "appPath": "CodeBuddy 路径"
     },
-    "gemini": {
-      "title": "Gemini Cli 设置",
-      "appPath": "Gemini Cli 路径",
-      "syncWsl": "同步 WSL 配置",
-      "syncWslDesc": "切换账号时自动覆盖 WSL 下的 .gemini 配置"
+    "grok": {
+      "title": "Grok CLI 设置",
+      "appPath": "Grok CLI 路径",
+      "cliPath": "CLI 路径",
+      "cliDetected": "已检测 {{version}} · {{path}}",
+      "cliMissing": "未检测到 Grok CLI，可填写自定义路径",
+      "syncOfficialAuthOnSwitch": "切号同步官方登录",
+      "syncOfficialAuthOnSwitchDesc": "开启后，默认实例切换 OAuth 账号会写入官方 ~/.grok/auth.json；关闭时使用独立 GROK_HOME。API Key 和多开实例不改写官方登录。"
     },
-    "geminiRefreshInterval": "配额自动刷新",
+    "grokRefreshInterval": "配额自动刷新",
     "error": {
       "loadFailed": "加载配置失败：{{error}}",
       "saveFailed": "保存配置失败：{{error}}",
@@ -3143,6 +4304,10 @@
     "qoder": {
       "title": "Qoder 设置",
       "appPath": "Qoder 路径"
+    },
+    "zcode": {
+      "title": "ZCode 设置",
+      "appPath": "ZCode 路径"
     },
     "zed": {
       "title": "Zed 设置",
@@ -3158,6 +4323,23 @@
     "workbuddy": {
       "title": "WorkBuddy 设置",
       "appPath": "WorkBuddy 路径"
+    },
+    "claudeRefreshInterval": "配额自动刷新",
+    "claude": {
+      "appPath": "Claude 路径",
+      "appTargetPlaceholder": "Claude.exe 路径或 shell:AppsFolder\\..."
+    },
+    "traeSolo": {
+      "title": "TRAE SOLO 设置",
+      "appPath": "TRAE SOLO 路径"
+    },
+    "traeCn": {
+      "title": "Trae CN 设置",
+      "appPath": "Trae CN 路径"
+    },
+    "traeSoloCn": {
+      "title": "TRAE SOLO CN 设置",
+      "appPath": "TRAE SOLO CN 路径"
     }
   },
   "quotaAlert": {
@@ -3184,24 +4366,24 @@
     }
   },
   "windsurf": {
-    "title": "Windsurf 账号管理",
+    "title": "Devin 账号管理",
     "instances": {
       "unsupported": {
-        "desc": "Windsurf 多开实例仅支持 macOS。"
+        "desc": "Devin 应用多开仅支持 macOS。"
       }
     },
     "empty": {
-      "description": "点击\"添加账号\"开始管理您的 Windsurf 账号"
+      "description": "点击\"添加账号\"开始管理您的 Devin 账号"
     },
     "addModal": {
-      "title": "添加 Windsurf 账号",
+      "title": "添加 Devin 账号",
       "password": "邮箱密码"
     },
     "oauth": {
-      "desc": "点击下方按钮，在浏览器中完成 Windsurf OAuth 授权。"
+      "desc": "点击下方按钮，在浏览器中完成 Devin OAuth 授权。"
     },
     "password": {
-      "desc": "使用 Windsurf 账号邮箱和密码登录，自动获取 API Key 与账号信息。",
+      "desc": "使用 Devin 账号邮箱和密码登录，自动获取 API Key 与账号信息。",
       "emailPlaceholder": "邮箱地址",
       "passwordPlaceholder": "密码",
       "empty": "请输入邮箱和密码",
@@ -3248,11 +4430,11 @@
       "batchFailureMore": "还有 {{count}} 项失败"
     },
     "token": {
-      "desc": "粘贴您的 Windsurf Access Token 或导出的 JSON 数据。"
+      "desc": "粘贴您的 Devin Access Token 或导出的 JSON 数据。"
     },
     "import": {
-      "localDesc": "从 JSON 文件导入 Windsurf 账号数据。",
-      "localClient": "从本机 Windsurf 导入"
+      "localDesc": "从 JSON 文件导入 Devin 账号数据。",
+      "localClient": "从本机 Devin 导入"
     },
     "credits": {
       "title": "计划",
@@ -3276,15 +4458,15 @@
       "autoRecharge": "自动充值",
       "remaining": "剩余 {{value}}"
     },
-    "injectToVSCode": "切换到 Windsurf",
-    "injectSuccess": "已完成切换，Windsurf 正在启动。",
-    "injectRequireClose": "请先关闭 Windsurf 再进行切换。",
+    "injectToVSCode": "切换到 Devin",
+    "injectSuccess": "已完成切换，Devin 正在启动。",
+    "injectRequireClose": "请先关闭 Devin 再进行切换。",
     "flowNotice": {
-      "title": "Windsurf 账号管理说明（点击展开/收起）",
-      "desc": "切换账号时需要读取 Windsurf 本地认证存储，并按客户端兼容规则调用系统凭据能力完成会话解密与写回；数据仅在本机处理。",
-      "inject": "一键切号：本工具读取本机 Windsurf 加密材料（DPAPI/Keychain/Secret Service），处理 state.vscdb 中的认证会话并写回 Windsurf 令牌 —— 全部在本机完成。",
-      "reason": "权限需求：读取 Windsurf 认证数据库（state.vscdb），并使用系统加密能力（Windows DPAPI / macOS Keychain / Linux Secret Service）处理登录会话的解密与写回。",
-      "storage": "读取范围：仅处理 Windsurf 登录会话相关数据，所有流程均在本地执行。"
+      "title": "Devin 账号管理说明（点击展开/收起）",
+      "desc": "切换账号时需要读取 Devin 本地认证存储，并按客户端兼容规则调用系统凭据能力完成会话解密与写回；数据仅在本机处理。",
+      "inject": "一键切号：本工具读取本机 Devin 加密材料（DPAPI/Keychain/Secret Service），处理 state.vscdb 中的认证会话并写回 Devin 令牌 —— 全部在本机完成。",
+      "reason": "权限需求：读取 Devin 认证数据库（state.vscdb），并使用系统加密能力（Windows DPAPI / macOS Keychain / Linux Secret Service）处理登录会话的解密与写回。",
+      "storage": "读取范围：仅处理 Devin 登录会话相关数据，所有流程均在本地执行。"
     }
   },
   "kiro": {
@@ -3326,17 +4508,28 @@
     "title": "Kiro 账号管理",
     "instances": {
       "unsupported": {
-        "descPlatform": "Kiro 多开实例仅支持 macOS、Windows 和 Linux。"
+        "descPlatform": "Kiro 应用多开仅支持 macOS、Windows 和 Linux。"
       }
     },
     "empty": {
       "description": "点击\"添加账号\"开始管理您的 Kiro 账号"
     },
     "addModal": {
-      "title": "添加 Kiro 账号"
+      "title": "添加 Kiro 账号",
+      "idc": "AWS 单点登录"
     },
     "oauth": {
       "desc": "点击下方按钮，在浏览器中完成 Kiro OAuth 授权。"
+    },
+    "idc": {
+      "builderId": "AWS Builder ID 账号",
+      "enterprise": "企业账号",
+      "desc": "在浏览器中完成 AWS IAM Identity Center 授权，授权完成后账号会自动保存。",
+      "region": "AWS Region",
+      "startUrl": "IAM Identity Center Start URL",
+      "start": "开始企业登录",
+      "regionRequired": "请填写 AWS Region",
+      "startUrlRequired": "请填写 IAM Identity Center Start URL"
     },
     "token": {
       "desc": "粘贴您的 Kiro Access Token 或导出的 JSON 数据。"
@@ -3356,7 +4549,7 @@
     "title": "Cursor 账号管理",
     "instances": {
       "unsupported": {
-        "descPlatform": "Cursor 多开实例仅支持 macOS、Windows 和 Linux。"
+        "descPlatform": "Cursor 应用多开仅支持 macOS、Windows 和 Linux。"
       }
     },
     "empty": {
@@ -3384,95 +4577,6 @@
       "desc": "支持从本地 Cursor 安装导入、粘贴 JWT 令牌或 OAuth 授权登录来管理 Cursor 账号。",
       "reason": "权限范围：读取并写入 Cursor 本地认证存储（state.vscdb），用于账号导入与令牌注入（切号）。",
       "storage": "网络请求范围：刷新配额时携带 JWT 向 cursor.com 官方接口请求使用量、用户信息及订阅信息；不向任何第三方服务器上传数据。"
-    }
-  },
-  "gemini": {
-    "injectToGemini": "切换到 Gemini Cli",
-    "identity": {
-      "authMethod": "认证方式",
-      "tier": "套餐",
-      "signedInWithGoogle": "使用 Google 登录",
-      "signedInWithGoogleEmail": "使用 Google 登录（{{email}}）"
-    },
-    "updated": {
-      "label": "更新于 {{relative}}前"
-    },
-    "quota": {
-      "pro": "Pro",
-      "flash": "Flash",
-      "left": "{{value}}% 剩余",
-      "resetsIn": "{{relative}} 后重置",
-      "resetsSoon": "即将重置",
-      "resetsUnknown": "重置时间未知",
-      "onDemand": "按需使用"
-    },
-    "quotaTable": {
-      "model": "模型",
-      "leftOfTotal": "剩余 / 总量",
-      "usage": "已用",
-      "usageResets": "重置时间",
-      "usedPercent": "{{value}}%",
-      "remainingOfTotal": "{{remaining}} / {{total}}",
-      "resetAtWithRelative": "{{absolute}}（{{relative}}）"
-    },
-    "tierText": {
-      "pro": "Google One AI Pro 的 Gemini Code Assist",
-      "ultra": "Google AI Ultra 的 Gemini Code Assist",
-      "free": "Gemini Code Assist（免费版）"
-    },
-    "title": "Gemini Cli 账号管理",
-    "instances": {
-      "unsupported": "Gemini Cli 暂不支持多开实例管理。",
-      "unsupportedDescPlatform": "Gemini Cli 多开实例仅支持 macOS、Windows 和 Linux。",
-      "launchDialogTitle": "启动实例",
-      "launchHint": "可复制命令手动执行，或点击下方按钮直接在终端执行。",
-      "runInTerminal": "终端执行",
-      "workingDir": "工作目录",
-      "workingDirPlaceholder": "默认当前路径",
-      "workingDirDesc": "启动时将首先切换到此目录",
-      "pickWorkingDir": "选择工作目录"
-    },
-    "switch": {
-      "success": "切号成功"
-    },
-    "empty": {
-      "description": "点击\"添加账号\"开始管理您的 Gemini Cli 账号"
-    },
-    "addModal": {
-      "title": "添加 Gemini Cli 账号"
-    },
-    "oauth": {
-      "desc": "点击下方按钮，在浏览器中完成 Gemini Cli OAuth 授权登录。"
-    },
-    "token": {
-      "desc": "粘贴您的 Gemini Cli Access Token（JWT）或导出的 JSON 数据。",
-      "formatHint": "必填字段与示例（点击展开）",
-      "formatRequired": "单条 Token 直接粘贴 JWT；批量导入使用 JSON 数组格式",
-      "singleExample": "单条示例（JWT）",
-      "batchExample": "批量示例（JSON）"
-    },
-    "import": {
-      "localDesc": "支持从本机 Gemini Cli 配置目录（~/.gemini）或 JSON 文件导入账号数据。",
-      "localClient": "从本机 Gemini Cli 导入"
-    },
-    "projectConfig": {
-      "button": "设置 GCP 项目",
-      "title": "设置 GCP 项目",
-      "selectLabel": "选择项目",
-      "loading": "正在加载项目列表...",
-      "auto": "自动选择（不手动指定）",
-      "empty": "未获取到可用项目，请确认该账号具备 GCP 项目权限。",
-      "hint": "保存后将优先使用该项目请求配额，并在启动命令中注入 GOOGLE_CLOUD_PROJECT。",
-      "current": "项目：{{projectId}}",
-      "saved": "项目已保存：{{projectId}}",
-      "cleared": "已恢复为自动项目识别",
-      "savedWithRefreshError": "项目已保存，但刷新配额失败：{{error}}"
-    },
-    "flowNotice": {
-      "title": "Gemini Cli 账号管理说明（点击展开/收起）",
-      "desc": "支持从本机 Gemini Cli 配置目录导入、粘贴 JWT 令牌或 OAuth 授权登录来管理 Gemini Cli 账号。",
-      "reason": "权限范围：读取并写入默认 ~/.gemini 或实例目录（GEMINI_CLI_HOME/.gemini）下的 oauth_creds.json、google_accounts.json、settings.json，用于账号导入与本地凭证注入（切号）。",
-      "storage": "网络请求范围：OAuth 与刷新会调用 Google/Gemini 官方接口（如 oauth2.googleapis.com、googleapis.com）；仅发送认证与配额所需字段，不向第三方服务器上传账号文件。"
     }
   },
   "breakout": {
@@ -3545,14 +4649,13 @@
       "goAntigravity": "前往 Antigravity IDE",
       "goCodex": "前往 Codex",
       "goDashboard": "前往仪表盘",
-      "goFingerprints": "前往设备指纹",
       "goGitHubCopilot": "前往 GitHub Copilot",
-      "goInstances": "前往多开实例",
+      "goInstances": "前往应用多开",
       "goKiro": "前往 Kiro",
       "goSettings": "前往设置",
       "goVerification": "前往唤醒验证",
       "goWakeup": "前往唤醒任务",
-      "goWindsurf": "前往 Windsurf",
+      "goWindsurf": "前往 Devin",
       "openLayout": "打开平台布局"
     },
     "antigravity": {
@@ -3641,28 +4744,6 @@
       "desc": "尝试更换关键词，例如“实例”“切换”“设置”“导出”。",
       "title": "没有匹配内容"
     },
-    "fingerprints": {
-      "cautions": {
-        "0": "删除指纹前先看绑定账号数量，避免误操作影响生产账号。"
-      },
-      "keywords": {
-        "0": "指纹",
-        "1": "绑定",
-        "2": "导入",
-        "3": "采集"
-      },
-      "outcomes": {
-        "0": "生成/捕获新指纹并维护元数据。",
-        "1": "查看某指纹已绑定账号并增删绑定关系。"
-      },
-      "steps": {
-        "0": "先创建或导入指纹。",
-        "1": "进入详情确认指纹信息是否正确。",
-        "2": "在绑定管理中将账号关联到目标指纹。"
-      },
-      "summary": "管理指纹模板与账号绑定关系，支持生成、捕获、导入和绑定账号维护。",
-      "title": "设备指纹"
-    },
     "instances": {
       "cautions": {
         "0": "复制来源实例前，建议先关闭来源实例，避免数据不一致。",
@@ -3686,7 +4767,7 @@
         "2": "绑定账号后，通过“启动/定位窗口/停止”管理生命周期。"
       },
       "summary": "用于账号隔离和并行运行。每个实例有独立目录、独立状态，可避免互相污染。",
-      "title": "多开实例（重点）"
+      "title": "应用多开（重点）"
     },
     "navTitle": "功能使用手册",
     "providers": {
@@ -3695,16 +4776,16 @@
         "1": "部分平台或能力受系统限制，请按页面提示处理。"
       },
       "keywords": {
-        "0": "Codex / GitHub Copilot / Windsurf / Kiro 平台",
+        "0": "Codex / GitHub Copilot / Devin / Kiro 平台",
         "1": "GitHub Copilot 平台",
-        "2": "Windsurf 平台",
+        "2": "Devin 平台",
         "3": "Kiro 平台",
         "4": "注入",
         "5": "切号"
       },
       "outcomes": {
         "0": "Codex：账号切换 + 配额刷新。",
-        "1": "GitHub Copilot/Windsurf/Kiro：支持注入到 VS Code 链路。",
+        "1": "GitHub Copilot/Devin/Kiro：支持注入到 VS Code 链路。",
         "2": "每个平台都可独立做筛选、分组、导入导出。"
       },
       "steps": {
@@ -3712,8 +4793,8 @@
         "1": "确认账号列表中能看到计划/配额和重置时间。",
         "2": "执行“切换/注入”并在客户端验证生效。"
       },
-      "summary": "四个平台页结构一致：账号总览 + 多开实例，支持 OAuth、Token/JSON 导入与切换。",
-      "title": "Codex / GitHub Copilot / Windsurf / Kiro 平台"
+      "summary": "四个平台页结构一致：账号总览 + 应用多开，支持 OAuth、Token/JSON 导入与切换。",
+      "title": "Codex / GitHub Copilot / Devin / Kiro 平台"
     },
     "quickStart": {
       "cautions": {
@@ -3729,20 +4810,20 @@
       "outcomes": {
         "0": "先在仪表盘看全局状态，再进入具体平台页操作。",
         "1": "先完成一个平台的完整闭环，再扩展到其他平台。",
-        "2": "理解“账号管理”和“多开实例”是两条不同工作流。"
+        "2": "理解“账号管理”和“应用多开”是两条不同工作流。"
       },
       "steps": {
         "0": "打开“仪表盘”，确认你需要管理的平台已经可见。",
         "1": "进入目标平台页（如 Codex / GitHub Copilot），先添加 1 个账号。",
         "2": "使用“切换/注入”按钮验证切号生效。",
-        "3": "再进入“多开实例”创建 1 个实例，验证隔离和并行运行。"
+        "3": "再进入“应用多开”创建 1 个实例，验证隔离和并行运行。"
       },
       "summary": "按“看状态 -> 加账号 -> 切账号 -> 开多实例”的顺序完成首轮上手，避免迷路。",
       "title": "快速开始（5 分钟）"
     },
     "resultCount": "共 {{count}} 个章节",
     "searchAria": "搜索手册",
-    "searchPlaceholder": "搜索功能、场景或关键词（如：多开、注入、唤醒、指纹）",
+    "searchPlaceholder": "搜索功能、场景或关键词（如：多开、注入、唤醒）",
     "settings": {
       "cautions": {
         "0": "路径探测失败时，手动选择可执行文件路径最稳妥。",
@@ -3800,7 +4881,7 @@
     "title": "Qoder 账号管理",
     "flowNotice": {
       "title": "Qoder 账号接入说明（点击展开/收起）",
-      "desc": "当前支持官方 CLI device login 授权、本地导入、JSON 导入、切号注入、多开实例绑定与配额概览。浏览器授权无需保持 Qoder 运行；切号注入按 Qoder 客户端真实落盘规则写回。",
+      "desc": "当前支持官方 CLI device login 授权、本地导入、JSON 导入、切号注入、应用多开绑定与配额概览。浏览器授权无需保持 Qoder 运行；切号注入按 Qoder 客户端真实落盘规则写回。",
       "permission": "权限范围：读取 Qoder 本地认证存储、用户信息与机器标识缓存（如 machine_token.json、cache/id），用于官方授权登录、本地导入、账号切换与会话注入；所有数据仅在本机处理。",
       "network": "网络范围：OAuth 授权登录会在浏览器中打开 Qoder 官方 device login 页面，并轮询 Qoder 官方 OpenAPI 完成授权；配额查询通过 Qoder API 获取用量数据。不上传本地密钥、凭证或原始存储内容。"
     },
@@ -3819,11 +4900,11 @@
     },
     "comingSoon": {
       "title": "Qoder 账号接入准备中",
-      "desc": "当前版本已支持 Qoder 多开实例、平台管理与菜单栏入口，账号登录与配额面板将在后续版本开放。"
+      "desc": "当前版本已支持 Qoder 应用多开、平台管理与菜单栏入口，账号登录与配额面板将在后续版本开放。"
     },
     "instances": {
       "unsupported": {
-        "descPlatform": "Qoder 多开实例仅支持 macOS、Windows 和 Linux。"
+        "descPlatform": "Qoder 应用多开仅支持 macOS、Windows 和 Linux。"
       }
     },
     "addModal": {
@@ -3836,6 +4917,62 @@
     },
     "empty": {
       "desc": "点击“添加账号”，可使用授权登录、本机导入或 JSON 导入。"
+    }
+  },
+  "zcode": {
+    "search": "搜索 ZCode 账号...",
+    "flowNotice": {
+      "title": "ZCode 账号管理说明",
+      "desc": "Cockpit 按 ZCode 官方格式管理 OAuth 凭据与 API Key，用于真实切号与实例绑定。",
+      "permission": "本地范围：~/.zcode/v2/credentials.json、config.json、setting.json 与受管实例目录。",
+      "network": "网络范围：OAuth、用户信息、订阅与配额接口；不会将账号上传到 Cockpit 服务。"
+    },
+    "empty": "暂无 ZCode 账号",
+    "addAccount": "添加 ZCode 账号",
+    "oauth": {
+      "desc": "关闭 ZCode 后，在 Cockpit 授权窗口完成登录；回调将由 Cockpit 直接接收。",
+      "title": "ZCode 授权登录",
+      "item1": "支持 Z.ai 与 BigModel 官方登录。",
+      "item2": "授权后自动保存账号并刷新套餐与模型额度。",
+      "item3": "账号可用于默认客户端切号和多开实例绑定。",
+      "urlPlaceholder": "ZCode OAuth 授权地址",
+      "waiting": "等待 ZCode OAuth 回调...",
+      "openWindow": "打开授权窗口",
+      "provider": "登录服务",
+      "success": "ZCode OAuth 登录成功"
+    },
+    "token": {
+      "desc": "粘贴由 Cockpit 导出的 ZCode 账号 JSON。"
+    },
+    "apiKey": {
+      "tab": "API 密钥",
+      "desc": "添加 ZCode 官方支持的 Z.ai 或 BigModel API Key。切号和多开实例会写入各自的 config.json。",
+      "placeholder": "粘贴 API Key",
+      "add": "添加 API Key",
+      "provider": "API Key 服务"
+    },
+    "import": {
+      "localDesc": "从本机 ZCode 加密凭据或 JSON 文件导入账号。",
+      "localClient": "从本机 ZCode 导入"
+    },
+    "usageNormal": "正常",
+    "usageAbnormal": "异常",
+    "usageViewDetail": "查看详情",
+    "usageDetailTitle": "用量状态详情",
+    "usage": "用量状态",
+    "quota": {
+      "models": "模型额度",
+      "usedOfTotal": "{{used}} / {{total}}",
+      "updatedAt": "更新：{{time}}",
+      "expireAt": "到期：{{time}}"
+    },
+    "quotaQuery": {
+      "failedRefreshCompact": "配额查询失败",
+      "empty": "暂无配额数据",
+      "sectionTitle": "配额"
+    },
+    "instances": {
+      "unsupported": "ZCode 多开仅支持 macOS、Windows 和 Linux。"
     }
   },
   "zed": {
@@ -3913,17 +5050,21 @@
   "trae": {
     "title": "Trae 账号管理",
     "empty": {
-      "description": "点击“添加账号”开始管理您的 Trae 账号，也可以从本机 Trae 数据或 JSON 文件导入。"
+      "description": "点击“添加账号”开始管理您的 Trae 账号，也可以从本机 Trae 数据或 JSON 文件导入。",
+      "descriptionWithPlatform": "点击“添加账号”开始管理您的 {{platform}} 账号，也可以从本机 {{platform}} 数据或 JSON 文件导入。"
     },
     "addModal": {
-      "title": "添加 Trae 账号"
+      "title": "添加 Trae 账号",
+      "titleWithPlatform": "添加 {{platform}} 账号"
     },
     "oauth": {
-      "desc": "点击下方按钮，在浏览器中完成 Trae OAuth 授权登录。"
+      "desc": "点击下方按钮，在浏览器中完成 Trae OAuth 授权登录。",
+      "descWithPlatform": "点击下方按钮，在浏览器中完成 {{platform}} OAuth 授权登录。"
     },
     "import": {
       "localDesc": "支持从本机 Trae 配置目录读取当前登录账号、套餐信息和配额缓存数据。",
-      "jsonTab": "JSON 文件"
+      "jsonTab": "JSON 文件",
+      "localDescWithPlatform": "支持从本机 {{platform}} 配置目录读取当前登录账号、套餐信息和配额缓存数据。"
     },
     "quota": {
       "usedOfTotal": "${{used}} / ${{total}}",
@@ -3932,6 +5073,8 @@
       "resetUnknown": "订阅重置：--",
       "statusUnknown": "状态：--",
       "statusNormal": "状态：正常",
+      "statusSynced": "状态：已同步",
+      "statusSyncedPending": "状态：已同步，剩余额待确认",
       "statusExhaustedFree": "状态：用量已耗尽，建议升级方案",
       "statusExhaustedPro": "状态：用量已耗尽，建议升级方案或开启超额自动扣费",
       "bonusUsed": "Bonus：+{{amount}}",
@@ -3943,13 +5086,31 @@
       "payAsYouGoLabel": "超额自动扣费",
       "payAsYouGoConsuming": "超额自动扣费：消耗中",
       "payAsYouGoEnabled": "超额自动扣费：已开启",
-      "payAsYouGoEmpty": "超额自动扣费：--"
+      "payAsYouGoEmpty": "超额自动扣费：--",
+      "fastAvailable": "速通可用 {{times}}",
+      "fastTimes": "{{count}} 次",
+      "fastUnlimited": "无限次",
+      "fastPerMonth": "快请求/月：{{count}}",
+      "fastChannelPerMonth": "快通道: {{count}}/月",
+      "fastChannelStatus": "快通道: {{status}}",
+      "freeRemainingUnknown": "免费剩余：--",
+      "timesRemainingUnknown": "剩余次数：--",
+      "soloParallel": "权益包: Solo 并发 {{count}}"
+    },
+    "token": {
+      "jsonOnlyDesc": "粘贴完整 Trae CN 账号 JSON。暂不支持裸 Token，避免导入后无法稳定识别账号或写入不可用登录态。",
+      "jsonOnlyPlaceholder": "粘贴完整 Trae CN JSON..."
     },
     "flowNotice": {
       "title": "Trae 账号接入说明（点击展开/收起）",
       "desc": "支持官方 OAuth 授权、本机导入、JSON 导入与本地注入切号；切号过程按 Trae 客户端真实落盘规则写回。",
       "permission": "权限范围：读取并写入本机 Trae 配置目录中的 storage.json 登录相关字段，用于账号导入、切号注入与套餐信息展示；所有数据仅在本机处理。",
-      "network": "网络范围：OAuth 登录、令牌刷新和套餐查询会请求 Trae 官方接口；不会向第三方服务上传本地账号文件或原始存储内容。"
+      "network": "网络范围：OAuth 登录、令牌刷新和套餐查询会请求 Trae 官方接口；不会向第三方服务上传本地账号文件或原始存储内容。",
+      "titleWithPlatform": "{{platform}} 账号接入说明（点击展开/收起）",
+      "descWithPlatform": "支持 {{platform}} 官方 OAuth 授权、本机导入、JSON 导入与本地注入切号；切号过程按 {{platform}} 客户端真实落盘规则写回。",
+      "permissionWithPlatform": "权限范围：读取并写入本机 {{platform}} 配置目录中的 storage.json 登录相关字段，用于账号导入、切号注入与套餐信息展示；所有数据仅在本机处理。",
+      "networkGlobal": "网络范围：{{platform}} OAuth 登录、令牌刷新和套餐查询会请求 trae.ai / traeapi.us 官方接口；不会向第三方服务上传本地账号文件或原始存储内容。",
+      "networkCn": "网络范围：{{platform}} OAuth 登录、令牌刷新和套餐查询会请求 trae.cn / trae.com.cn 官方接口；不会向第三方服务上传本地账号文件或原始存储内容。"
     }
   },
   "codebuddyCn": {
@@ -3971,7 +5132,7 @@
     },
     "instances": {
       "unsupported": {
-        "descPlatform": "CodeBuddy CN 多开实例仅支持 macOS、Windows 和 Linux。"
+        "descPlatform": "CodeBuddy CN 应用多开仅支持 macOS、Windows 和 Linux。"
       }
     },
     "syncFailed": "同步失败: {{error}}",
@@ -3991,6 +5152,7 @@
       "button": "签到",
       "button.loading": "签到中...",
       "done": "已完成",
+      "claimed": "已领取",
       "success": "签到成功！连续签到 {{days}} 天",
       "failure": "签到失败：{{message}}",
       "failure.network": "网络异常，请稍后重试",
@@ -4001,10 +5163,26 @@
       "checkAll": "一键签到",
       "noAccounts": "暂无账号",
       "querying": "查询中...",
+      "queryFailed": "状态查询失败",
+      "retry": "重试",
+      "inactive": "不可用",
+      "inactiveHint": "签到活动未开启或不适用当前账号",
       "streakDays": "{{days}} 天",
       "streakRewardCountdown": "再签 {{days}} 天获大礼包",
       "streakRewardToday": "今日可获得大礼包!",
-      "recentDates": "近期签到："
+      "recentDates": "近期签到：",
+      "autoCheckinSettings": "自动签到设置",
+      "autoCheckinLabel": "自动签到",
+      "autoCheckinOff": "自动签到未开启",
+      "autoCheckinEnabledHint": "自动签到已开启：将在 {{start}} 至 {{end}} 随机签到",
+      "autoCheckinDisabledHint": "自动签到未开启",
+      "enableAutoCheckin": "开启自动签到",
+      "enableAutoCheckinDesc": "每天在指定时间段内随机选取一个时间完成自动签到",
+      "randomTimeRange": "随机签到时间段",
+      "startTime": "开始时间",
+      "endTime": "结束时间",
+      "timeRangeHint": "应用保持运行时，会在这个时间段内随机选取一个时间点完成后台自动签到。",
+      "timeRangeError": "开始时间不能晚于结束时间"
     },
     "flowNotice": {
       "title": "WorkBuddy 账号管理说明（点击展开/收起）",
@@ -4102,7 +5280,7 @@
     "oauthSuccessCloseLaterStatus": "✅ 账号添加完成，已保持当前页面打开。",
     "instances": {
       "unsupported": {
-        "descPlatform": "WorkBuddy 多开实例仅支持 macOS、Windows 和 Linux。"
+        "descPlatform": "WorkBuddy 应用多开仅支持 macOS、Windows 和 Linux。"
       }
     }
   },
@@ -4129,7 +5307,13 @@
     "confirmDeleteTitle": "删除确认",
     "importErrorMsg": "导入失败，请检查文件内容格式 (必须是包含 secret 的有效 JSON 数组，accountName 可选)。",
     "inputOtpAuthPlaceholder": "otpauth://totp/... 或 Base32 Secret",
-    "otpauthInputHint": "支持 otpauth://totp/... 和 Base32 Secret，两种格式都可查询并保存到列表。",
+    "otpauthInputHint": "支持 otpauth://totp/...、Base32 Secret 和 Google Authenticator 导出的 otpauth-migration:// 迁移二维码；迁移二维码点击“保存到列表”可批量导入其中的 TOTP 账号。",
+    "migrationBatchProgress": "Google Authenticator 迁移批次：已识别 {{scanned}}/{{total}} 张二维码。",
+    "migrationBatchIncomplete": "批次未完成，仍可保存已扫描账号。",
+    "continueMigrationScan": "继续扫描",
+    "savePartialMigrationBatch": "保存已扫描账号",
+    "saveCompleteMigrationBatch": "保存完整批次",
+    "clearMigrationBatch": "清空批次",
     "pasteQrImageHint": "也支持在输入框内直接粘贴二维码图片识别。",
     "uploadQrImage": "上传二维码图片",
     "uploadQrImageTitle": "选择二维码图片并自动识别",
@@ -4202,5 +5386,365 @@
     "importErrorMsg": "导入失败，请检查文件格式是否为您之前导出的格式 (JSON Array)。",
     "btnImportTitle": "导入本地的 JSON 文件",
     "btnExportTitle": "导出已保存为 JSON"
+  },
+  "grok": {
+    "search": "搜索 Grok CLI 账号...",
+    "flowNotice": {
+      "title": "Grok CLI 账号管理说明",
+      "desc": "默认使用独立 GROK_HOME；开启“切号同步官方登录”后，默认实例切换 OAuth 账号会写入官方 ~/.grok/auth.json，多开实例仍保持隔离。",
+      "permission": "本地范围：可读取默认 ~/.grok/auth.json 用于导入；仅在开关开启且默认实例切换 OAuth 账号时写入该文件，API Key 不会覆盖官方登录。",
+      "network": "网络范围：OAuth 授权、凭据刷新及账号用量查询；不会上传凭据到 Cockpit 服务。"
+    },
+    "empty": "暂无 Grok CLI 账号",
+    "addAccount": "添加 Grok CLI 账号",
+    "oauth": {
+      "desc": "打开 xAI 授权页并输入设备验证码，完成后账号会自动保存。",
+      "title": "Grok 设备 OAuth",
+      "item1": "使用 Grok CLI 官方 device flow，不占用本地回调端口。",
+      "item2": "授权成功后保存独立 GROK_HOME，并维护凭据有效状态。",
+      "item3": "账号可用于默认 CLI 切号和相互隔离的多开实例。",
+      "urlPlaceholder": "Grok OAuth 授权地址",
+      "waiting": "等待 Grok OAuth 授权...",
+      "openWindow": "打开授权页",
+      "success": "Grok OAuth 登录成功"
+    },
+    "import": {
+      "pasteTab": "粘贴 JSON",
+      "pasteDesc": "粘贴官方 Grok CLI auth.json，或本应用导出的完整账号 JSON（含凭据，可再导入恢复）。凭据仅在本机处理。",
+      "pastePlaceholder": "粘贴 Grok 账号 JSON",
+      "pasteAction": "导入 JSON",
+      "localDesc": "从默认 ~/.grok/auth.json 导入；也可选择官方 auth.json 或本应用导出的完整账号 JSON 文件。",
+      "localClient": "从本机 Grok CLI 导入",
+      "apiKeyTab": "API 密钥",
+      "apiKeyDesc": "粘贴 xAI API Key（官方 XAI_API_KEY / xai-…）。启动 CLI 时通过账号专属 GROK_HOME 注入，不会覆盖官方 OAuth 登录。",
+      "apiKeyPlaceholder": "粘贴 xai- 开头的密钥",
+      "apiKeyAction": "添加 API Key",
+      "apiMode": "API 类型",
+      "apiModeOfficial": "xAI 官方",
+      "apiModeCustom": "第三方兼容",
+      "customApiDesc": "配置 OpenAI 兼容的 Base URL、模型 ID 与 API Key。启动时写入账号专属 config.toml，并仅向该 CLI 进程注入密钥。",
+      "customApiKeyPlaceholder": "粘贴第三方 API Key",
+      "apiBaseUrl": "接口地址",
+      "apiBaseUrlPlaceholder": "例如 https://api.example.com/v1",
+      "apiModel": "模型 ID",
+      "apiModelPlaceholder": "例如 grok-4.1-fast",
+      "apiFieldRequired": "请填写{{field}}",
+      "apiBaseUrlInvalid": "请输入完整的 http:// 或 https:// 地址，且不要包含用户名、查询参数或片段"
+    },
+    "instances": {
+      "unsupported": "Grok CLI 多开仅支持 macOS、Windows 和 Linux。",
+      "launchDialogTitle": "启动实例",
+      "launchHint": "可复制命令手动执行，或点击下方按钮直接在终端执行。",
+      "runInTerminal": "终端执行",
+      "cliReady": "已检测",
+      "cliMissingShort": "未检测",
+      "cliPathInvalid": "配置的 Grok CLI 路径无效：{{path}}",
+      "saveAndRetry": "保存并重试",
+      "installCommand": "官方安装命令",
+      "installHint": "可在终端运行以下官方命令，安装完成后点击刷新。",
+      "selectWorkingDir": "选择 Grok CLI 工作目录",
+      "workingDirAccountHint": "工作目录与当前账号绑定，下次切号启动会自动回填。",
+      "launchCommandPlaceholder": "选择或确认工作目录后生成启动命令",
+      "reauthLaunchHint": "账号授权已失效，请重新授权后再用 CLI；下方启动命令仍可查看/复制。"
+    },
+    "switch": {
+      "success": "切号成功"
+    },
+    "usageNormal": "正常",
+    "usageAbnormal": "异常",
+    "usageViewDetail": "查看详情",
+    "usageDetailTitle": "用量状态详情",
+    "usage": "用量状态",
+    "quotaQuery": {
+      "failedRefreshCompact": "配额查询失败",
+      "empty": "暂无可用配额数据",
+      "sectionTitle": "配额查询"
+    },
+    "quota": {
+      "weekly": "每周用量",
+      "onDemand": "按量用量",
+      "balance": "余额与积分",
+      "included": "套餐用量",
+      "promotional": "活动额度",
+      "frequent": "高频任务",
+      "occasional": "普通任务",
+      "resetAt": "{{label}} 重置：{{time}}",
+      "empty": "暂无额度",
+      "apiKeyUnsupported": "API Key 账号无套餐配额"
+    },
+    "quotaAlert": {
+      "hint": "当当前账号任意配额项低于阈值时，发送原生通知并在页面提示快捷切号。",
+      "thresholdDesc": "任意配额项低于此百分比时触发预警",
+      "items": "触发配额项",
+      "unknownItem": "未知配额项"
+    }
+  },
+  "claude": {
+    "import": {
+      "localSuccess": "已导入本机 Claude 登录态：{{count}} 个",
+      "localClient": "导入当前 Claude",
+      "jsonLabel": "JSON 数据",
+      "jsonPlaceholder": "粘贴导出的 Claude 账号 JSON",
+      "desktopJsonPlaceholder": "粘贴导出的 Claude Gateway 账号 JSON",
+      "cliJsonPlaceholder": "粘贴导出的 Claude CLI 账号 JSON",
+      "localDesc": "读取本机官方 Claude 当前登录态，复制为本工具本地账号快照。"
+    },
+    "subPlatform": {
+      "label": "Claude 子平台",
+      "desktop": "Claude",
+      "cli": "Claude CLI"
+    },
+    "deleteCurrentDisabled": "当前账号不可删除",
+    "flowNotice": {
+      "title": "Claude 账号管理说明（点击展开/收起）",
+      "desc": "本工具可管理 Claude 登录态与 Anthropic API Key。Claude 登录会在平台授权窗口完成并先保存到本地账号库；切号时才写入官方 Claude。",
+      "permission": "权限范围：读取/写入官方 Claude 应用数据目录；API Key 与 Claude 快照保存于本工具本地账号数据。",
+      "network": "网络范围：Claude 登录窗口访问 claude.ai；刷新账号会请求 Claude Web 相关接口；API Key 导入本身不联网。",
+      "desktopDesc": "本工具可管理 Claude 登录态。登录会先保存到本地账号库；切号时才写入官方 Claude。",
+      "cliDesc": "本工具可管理 Claude Code OAuth 与多供应商 API Key。OAuth 切号会写入本机 Claude Code 配置；API Key 会写入 Claude Code settings.json 的 env。",
+      "desktopPermission": "权限范围：读取/写入官方 Claude 应用数据目录；Claude 快照保存于本工具本地账号数据。",
+      "cliPermission": "权限范围：读取/写入本机 Claude Code 配置目录与 macOS Keychain 中的 Claude Code 凭据；API Key 账号保存于本工具本地账号数据，并在切换或启动 CLI 时明文写入 settings.json 的 env。",
+      "desktopNetwork": "网络范围：Claude 登录窗口访问 claude.ai；刷新账号会请求 Claude Web 相关接口。",
+      "cliNetwork": "网络范围：OAuth 授权访问 Claude 官方授权页和 token/profile/usage 接口；API Key 导入不联网，启动后由 Claude CLI 访问所选供应商。"
+    },
+    "search": "搜索 Claude 账号...",
+    "searchDesktop": "搜索 Claude 账号...",
+    "searchCli": "搜索 Claude CLI 账号...",
+    "noAccounts": "暂无 Claude 账号",
+    "noDesktopAccounts": "暂无 Claude 账号",
+    "noCliAccounts": "暂无 Claude CLI 账号",
+    "addAccount": {
+      "title": "添加 Claude 账号",
+      "desktopTitle": "添加 Claude 账号",
+      "cliTitle": "添加 Claude CLI 账号"
+    },
+    "deleteConfirm": "确定删除 Claude 账号 {{email}} 吗？",
+    "switch": {
+      "success": "切号成功"
+    },
+    "instances": {
+      "unsupportedDescPlatform": "Claude 应用多开仅支持 macOS、Windows 和 Linux。",
+      "launchDialogTitle": "启动实例",
+      "launchCommand": "启动命令",
+      "executeInTerminal": "在终端运行",
+      "startSuccess": "Claude 已启动"
+    },
+    "quota": {
+      "title": "额度",
+      "fiveHour": "Current session",
+      "sevenDay": "Current week (all models)",
+      "sonnet": "Sonnet额",
+      "extra": "额外用量",
+      "empty": "暂无额度",
+      "unsupported": "不可刷新",
+      "updatedAt": "更新：{{time}}",
+      "resetAt": "{{label}} 重置：{{time}}",
+      "refreshSuccess": "额度已刷新",
+      "refreshAllDone": "额度刷新完成",
+      "refreshFailed": "额度刷新失败：{{error}}",
+      "refreshWithWarning": "额度刷新失败：{{error}}",
+      "notUpdated": "额度未刷新",
+      "updated": "已更新",
+      "notUpdatedShort": "未刷新",
+      "openVerification": "打开验证窗口",
+      "openingVerification": "正在打开...",
+      "verificationWindowOpened": "已打开 Claude 验证窗口，完成验证后请重新刷新额度。",
+      "verificationWindowFailed": "打开 Claude 验证窗口失败：{{error}}"
+    },
+    "addTabs": {
+      "desktop": "桌面",
+      "oauth": "OAuth",
+      "apiKey": "API 密钥",
+      "import": "本地/JSON",
+      "desktopGateway": "网关"
+    },
+    "authMode": {
+      "oauth": "OAuth 模式",
+      "setup_token": "设置 Token",
+      "api_key": "API Key 模式",
+      "desktop_oauth": "Claude 登录"
+    },
+    "apiKey": {
+      "desc": "保存 Claude CLI API Key 作为独立凭证；切换或启动 CLI 时会写入 Claude Code settings.json 的 env，不会写入 Claude 登录态。",
+      "nameLabel": "账号名称",
+      "namePlaceholder": "可选，例如 APIKEY.FUN",
+      "keyLabel": "API 密钥",
+      "placeholder": "粘贴供应商 API Key",
+      "hide": "隐藏 API Key",
+      "show": "显示 API Key",
+      "hint": "API Key 账号仅用于 Claude CLI；会以明文 env 写入 Claude Code settings.json，不会写入 Claude 登录态，也不支持订阅额度刷新。",
+      "importAction": "导入 API Key",
+      "required": "请输入 API Key",
+      "templateRequired": "请填写 {{label}}",
+      "importSuccess": "Claude API Key 账号已导入：{{name}}",
+      "quotaUnsupported": "API Key 账号不支持刷新",
+      "switchDisabled": "API Key 账号不能切换到 Claude",
+      "cliUnsupported": "API Key 账号不能启动 Claude CLI",
+      "providerLabel": "供应商",
+      "customProvider": "自定义",
+      "endpointLabel": "供应商端点",
+      "officialEndpoint": "官方默认",
+      "baseUrlLabel": "基础 URL",
+      "baseUrlPlaceholder": "留空使用 Anthropic 官方默认地址",
+      "keyFieldLabel": "认证字段",
+      "baseUrlInvalid": "Base URL 不是有效 URL"
+    },
+    "desktopOAuth": {
+      "title": "Claude 登录",
+      "desc": "在本工具打开 Claude 登录窗口，支持 Google、Apple、邮箱和 free 账号。",
+      "start": "打开登录",
+      "preparingRuntime": "准备登录组件...",
+      "hint": "登录态会先保存到本工具本地账号库，不会立刻写入官方 Claude；切号时才写回 Claude。",
+      "runtimeHint": "首次使用时会下载并校验 Electron 登录组件到本地应用数据目录；安装包不内置，之后复用本地缓存。",
+      "nameLabel": "账号名称",
+      "namePlaceholder": "可选，例如 Claude Free",
+      "waiting": "请在已打开的 Claude 授权窗口完成登录。看到聊天页后回到这里点击完成导入。",
+      "profileDir": "隔离 profile 目录",
+      "complete": "完成导入",
+      "localTitle": "导入当前 Claude",
+      "localDesc": "读取本机官方 Claude 当前登录态，复制为本工具本地账号快照。",
+      "localAction": "导入",
+      "localSuccess": "已导入本机 Claude 登录态：{{name}}",
+      "importSuccess": "Claude 登录态已导入：{{name}}",
+      "switchHint": "切换到官方 Claude",
+      "planUnknown": "订阅未知",
+      "progress": {
+        "start": "准备登录任务",
+        "profile": "创建隔离 profile",
+        "resolveRuntime": "查找登录组件",
+        "checkCache": "检查本地组件缓存",
+        "cached": "使用本地组件缓存",
+        "downloadStart": "开始下载登录组件",
+        "downloading": "下载登录组件",
+        "downloaded": "登录组件下载完成",
+        "verify": "校验组件完整性",
+        "extract": "解压登录组件",
+        "runtimeReady": "登录组件已准备",
+        "launch": "启动 Claude 登录窗口",
+        "ready": "登录窗口已打开",
+        "default": "准备登录组件",
+        "bytesWithTotal": "已下载 {{downloaded}}，共 {{total}}",
+        "bytesOnly": "已下载 {{downloaded}}",
+        "hint": "首次准备完成后，后续会直接复用本地缓存。"
+      }
+    },
+    "oauth": {
+      "title": "Claude OAuth 授权",
+      "desc": "打开 Claude 官方 OAuth 授权页，完成后粘贴回调链接或 code 导入账号。",
+      "start": "OAuth 授权",
+      "proRequiredHint": "Claude 官方 OAuth 通常用于 Claude Code 授权；如果页面停在升级或无权限页面，可改用 Claude 登录。",
+      "openInstruction": "点击下方按钮，在浏览器中完成 Claude OAuth 授权。",
+      "waiting": "完成授权后，将最终页面地址或页面显示的 code 粘贴到下方。",
+      "authUrl": "授权链接",
+      "preparing": "正在生成授权链接...",
+      "openInBrowser": "在浏览器中打开",
+      "openFailed": "打开授权链接失败：{{error}}",
+      "callbackPlaceholder": "粘贴回调链接或授权 code",
+      "callbackRequired": "请粘贴授权完成后的回调链接或 code",
+      "authorizeUrlNotCallback": "这里粘贴的是上方授权入口链接，不是授权完成后的 code。请先在浏览器完成授权，然后复制最终页面地址或页面显示的 code。",
+      "complete": "完成导入",
+      "emailPlaceholder": "邮箱（无法自动识别时填写）",
+      "importSuccess": "Claude OAuth 授权导入成功：{{name}}"
+    },
+    "plan": {
+      "label": "订阅标识",
+      "selectPlaceholder": "待选择",
+      "updateFailed": "更新订阅标识失败：{{error}}"
+    },
+    "legacyOAuth": {
+      "switchDisabled": "旧 OAuth 账号不能切换到 Claude",
+      "quotaUnsupported": "旧 OAuth 账号不再支持刷新",
+      "cliUnsupported": "旧 OAuth 账号不能启动 Claude CLI"
+    },
+    "cli": {
+      "quickLaunch": "CLI 启动",
+      "selectWorkingDir": "选择 Claude CLI 工作目录",
+      "launchSuccess": "已启动 Claude CLI",
+      "prepared": "Claude CLI 已准备",
+      "launchFailed": "启动 Claude CLI 失败：{{error}}",
+      "localTitle": "导入当前 Claude Code",
+      "localDesc": "读取本机 Claude Code 当前 OAuth 登录态，复制为本工具本地账号快照。",
+      "localSuccess": "已导入本机 Claude Code 登录态：{{name}}"
+    },
+    "accountNote": {
+      "title": "账号备注",
+      "desc": "为 {{email}} 添加本地备注，方便切换账号时识别。",
+      "label": "账号备注",
+      "placeholder": "例如：Free 主号、Max 20x、团队账号",
+      "saved": "账号备注已保存",
+      "saveFailed": "保存账号备注失败：{{error}}",
+      "emptyTitle": "填写账号备注",
+      "short": "账号备注",
+      "addShort": "加备注"
+    },
+    "selection": {
+      "selected": "已选 {{count}}"
+    },
+    "deleteSelectedLabel": "{{count}} 个账号",
+    "account": {
+      "signedInWith": "使用 {{provider}} 登录",
+      "userId": "用户 ID",
+      "nickname": "昵称"
+    },
+    "desktopGateway": {
+      "label": "网关",
+      "authScheme": "认证方式",
+      "importAction": "导入 Gateway",
+      "importSuccess": "Claude Gateway 账号已导入：{{name}}",
+      "baseUrlRequired": "请输入 Gateway Base URL",
+      "noQuota": "Gateway 账号不显示 Claude 订阅额度",
+      "desc": "保存 Gateway API Key 作为 Claude 3P 配置；切换时写入官方 Claude 配置并启动 Claude。",
+      "hint": "Gateway 账号不会读取 Claude 订阅信息；API Key 会按官方 3P 配置写入本机 Claude。",
+      "modelsLabel": "模型目录",
+      "modelsEmpty": "当前 Gateway 未返回模型列表。",
+      "modelsLoaded": "已获取 {{count}} 个模型，可按需修改。",
+      "modelsLoadFailed": "模型列表获取失败：{{error}}。",
+      "usingPresetMappings": "已使用预设映射，可按需修改。",
+      "manualModels": "手动模型",
+      "modelsPlaceholder": "每行一个模型 ID",
+      "modelsLoading": "正在获取模型目录...",
+      "modelsRequired": "请填写模型目录",
+      "editTitle": "编辑 Claude Gateway",
+      "updateAction": "保存 Gateway",
+      "updateSuccess": "Claude Gateway 账号已更新：{{name}}",
+      "connectionMode": "连接方式",
+      "modeDirect": "直连",
+      "modeLocalMapping": "本地网关映射",
+      "mappingsRequired": "请配置模型映射",
+      "mappingsIncomplete": "请补全模型映射",
+      "mappingDesktopModelDuplicated": "Claude 模型名不能重复：{{model}}",
+      "mappingDesktopModelInvalid": "映射的 Claude 模型名必须能被 Claude 识别",
+      "directModelsInvalid": "直连模式只支持 Claude 可识别的 Claude 模型名",
+      "desktopModelPlaceholder": "Claude 模型名",
+      "upstreamModelPlaceholder": "上游真实模型名",
+      "addMapping": "添加映射",
+      "mappingSummary": "已配置 {{count}} 个映射",
+      "mappingSummaryHint": "保存前可展开检查或修改。",
+      "editMappings": "编辑映射",
+      "moreMappings": "还有 {{count}} 个",
+      "mappingEditorTitle": "模型映射",
+      "hideMappings": "收起",
+      "labelOverridePlaceholder": "菜单显示名",
+      "supports1mLabel": "声明支持 1M",
+      "supports1mShort": "1M上下文"
+    }
+  },
+  "openrouter": {
+    "title": "OpenRouter",
+    "desc": "管理 OpenRouter API Key、查看用量，并浏览可用模型列表。",
+    "tabKeys": "密钥与用量",
+    "tabModels": "模型浏览",
+    "modelsLoaded": "已加载 {{count}} 个模型",
+    "noUsageYet": "尚未刷新用量",
+    "loadModels": "加载模型",
+    "searchModels": "搜索模型",
+    "freeOnly": "仅免费",
+    "noModels": "暂无模型数据，请先添加 Key 并加载",
+    "free": "免费",
+    "noCtx": "无上下文长度"
+  },
+  "opencode": {
+    "title": "OpenCode",
+    "desc": "管理 OpenCode Go / Zen 档 API Key，并按档位筛选列表。密钥保存在本机应用数据目录。"
   }
 }

@@ -13,6 +13,7 @@ import {
 } from '../types/codebuddy';
 import { useProviderAccountsPage } from '../hooks/useProviderAccountsPage';
 import { CodebuddySuiteAccountsSharedView, type CodebuddySuiteAccountsPlatformConfig } from '../components/codebuddy-suite/CodebuddySuiteAccountsSharedView';
+import { CodebuddySessionManager } from '../components/codebuddy/CodebuddySessionManager';
 import { compareCurrentAccountFirst } from '../utils/currentAccountSort';
 
 const CB_FLOW_NOTICE_COLLAPSED_KEY = 'agtools.codebuddycn.flow_notice_collapsed';
@@ -133,9 +134,12 @@ export function CodebuddyCnAccountsPage() {
         platform="codebuddy_cn"
         active={activeTab}
         onTabChange={setActiveTab}
+        tabs={['overview', 'sessions', 'instances']}
       />
       {activeTab === 'instances' ? (
         <CodebuddyCnInstancesContent accountsForSelect={accountsForInstances} />
+      ) : activeTab === 'sessions' ? (
+        <CodebuddySessionManager platform="cn" accounts={store.accounts as any} />
       ) : (
         <CodebuddySuiteAccountsSharedView
           accounts={store.accounts}

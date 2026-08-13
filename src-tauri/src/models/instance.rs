@@ -68,6 +68,8 @@ pub struct DefaultInstanceSettings {
     #[serde(default = "default_follow_local_account")]
     pub follow_local_account: bool,
     #[serde(default)]
+    pub auto_sync_threads: bool,
+    #[serde(default)]
     pub last_pid: Option<u32>,
 }
 
@@ -84,6 +86,7 @@ impl Default for DefaultInstanceSettings {
             launch_mode: InstanceLaunchMode::App,
             app_speed: CodexAppSpeed::Standard,
             follow_local_account: true,
+            auto_sync_threads: false,
             last_pid: None,
         }
     }

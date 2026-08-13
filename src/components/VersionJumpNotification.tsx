@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react';
 import { X, Sparkles, PartyPopper } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useEscClose } from '../hooks/useEscClose';
+import { prependUpdaterReleaseHighlights } from '../utils/updaterReleaseNotes';
 import './UpdateNotification.css';
 
 interface VersionJumpInfo {
@@ -42,9 +43,14 @@ export const VersionJumpNotification: React.FC<VersionJumpNotificationProps> = (
 
   const releaseNotes = useMemo(() => {
     const isZh = i18n.language.startsWith('zh');
-    return isZh && info.release_notes_zh
+    const notes = isZh && info.release_notes_zh
       ? info.release_notes_zh
       : info.release_notes;
+    return prependUpdaterReleaseHighlights(
+      info.current_version,
+      notes,
+      i18n.language,
+    );
   }, [info, i18n.language]);
 
   const formattedNotes = useMemo(() => {
@@ -89,7 +95,7 @@ export const VersionJumpNotification: React.FC<VersionJumpNotificationProps> = (
   }, [releaseNotes]);
 
   return (
-    <div className="modal-overlay update-overlay" onClick={onClose}>
+    <div className="modal-overlay update-overlay">
       <div className="modal update-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2 className="update-modal-title">

@@ -71,7 +71,7 @@ func TestWriteErrorResponse_AddonHeadersEnabled(t *testing.T) {
 
 func TestEnrichAuthSelectionError_DefaultsTo503WithContext(t *testing.T) {
 	in := &coreauth.Error{Code: "auth_not_found", Message: "no auth available"}
-	out := enrichAuthSelectionError(in, []string{"claude"}, "claude-sonnet-4-6")
+	out := enrichAuthSelectionError(in, []string{"claude"}, "claude-sonnet-4-6", nil, "")
 
 	var got *coreauth.Error
 	if !errors.As(out, &got) || got == nil {
@@ -93,7 +93,7 @@ func TestEnrichAuthSelectionError_DefaultsTo503WithContext(t *testing.T) {
 
 func TestEnrichAuthSelectionError_PreservesExplicitStatus(t *testing.T) {
 	in := &coreauth.Error{Code: "auth_unavailable", Message: "no auth available", HTTPStatus: http.StatusTooManyRequests}
-	out := enrichAuthSelectionError(in, []string{"gemini"}, "gemini-2.5-pro")
+	out := enrichAuthSelectionError(in, []string{"gemini"}, "gemini-2.5-pro", nil, "")
 
 	var got *coreauth.Error
 	if !errors.As(out, &got) || got == nil {
@@ -106,8 +106,28 @@ func TestEnrichAuthSelectionError_PreservesExplicitStatus(t *testing.T) {
 
 func TestEnrichAuthSelectionError_IgnoresOtherErrors(t *testing.T) {
 	in := errors.New("boom")
-	out := enrichAuthSelectionError(in, []string{"claude"}, "claude-sonnet-4-6")
+	out := enrichAuthSelectionError(in, []string{"claude"}, "claude-sonnet-4-6", nil, "")
 	if out != in {
 		t.Fatalf("expected original error to be returned unchanged")
+	}
+}
+
+func TestEnrichAuthSelectionError_UsesRequestedLocale(t *testing.T) {
+	in := &coreauth.Error{Code: "auth_unavailable", Message: "no auth available"}
+	cfg := &sdkconfig.SDKConfig{AuthErrorLocalization: sdkconfig.AuthErrorLocalizationConfig{
+		DefaultLocale: "en",
+		AuthUnavailable: map[string]string{
+			"en":    "No account is currently schedulable.",
+			"zh-cn": "账号池当前没有可调度账号。",
+		},
+	}}
+	out := enrichAuthSelectionError(in, []string{"codex"}, "gpt-5.5", cfg, "zh-CN,zh;q=0.9")
+
+	var got *coreauth.Error
+	if !errors.As(out, &got) || got == nil {
+		t.Fatalf("expected coreauth.Error, got %T", out)
+	}
+	if !strings.Contains(got.Message, "账号池当前没有可调度账号。") {
+		t.Fatalf("message did not use zh-CN localization: %q", got.Message)
 	}
 }

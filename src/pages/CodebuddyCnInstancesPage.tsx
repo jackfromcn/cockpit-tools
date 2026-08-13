@@ -61,7 +61,7 @@ export function CodebuddyCnInstancesContent({
       unsupportedTitleKey="common.shared.instances.unsupported.title"
       unsupportedTitleDefault="暂不支持当前系统"
       unsupportedDescKey="codebuddyCn.instances.unsupported.descPlatform"
-      unsupportedDescDefault="CodeBuddy CN 多开实例仅支持 macOS、Windows 和 Linux。"
+      unsupportedDescDefault="CodeBuddy CN 应用多开仅支持 macOS、Windows 和 Linux。"
     />
   );
 }

@@ -32,10 +32,12 @@ import { ExportJsonModal } from '../components/ExportJsonModal';
 import { ModalErrorMessage, useModalErrorState } from '../components/ModalErrorMessage';
 import { MfaQuickCodeSelect } from '../components/MfaQuickCodeSelect';
 import { PaginationControls } from '../components/PaginationControls';
+import { AccountSelectionToolbar } from '../components/AccountSelectionToolbar';
 import { QuickSettingsPopover } from '../components/QuickSettingsPopover';
 import { MultiSelectFilterDropdown, type MultiSelectFilterOption } from '../components/MultiSelectFilterDropdown';
 import { SingleSelectFilterDropdown } from '../components/SingleSelectFilterDropdown';
 import { useEscClose } from '../hooks/useEscClose';
+import { useEnterConfirm } from '../hooks/useEnterConfirm';
 import {
   PlatformOverviewTab,
   PlatformOverviewTabsHeader,
@@ -991,6 +993,14 @@ export function QoderAccountsPage() {
     }
   }, [accounts, deletingTag, store, t, tagDeleteConfirm]);
 
+  useEscClose(Boolean(tagDeleteConfirm) && !deletingTag, () => {
+    setTagDeleteConfirm(null);
+    setTagDeleteConfirmError(null);
+  });
+  useEnterConfirm(Boolean(tagDeleteConfirm) && !deletingTag, () => {
+    void confirmDeleteTag();
+  });
+
   const handleImportLocal = useCallback(async () => {
     if (addStatus === 'loading') return;
     setAddStatus('loading');
@@ -1785,14 +1795,6 @@ export function QoderAccountsPage() {
     if (viewMode === 'grid') {
       return (
         <div className="grid-view-container">
-          {paginatedAccounts.length > 0 && (
-            <div className="grid-view-header" style={{ marginBottom: '12px', paddingLeft: '4px' }}>
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: 'var(--text-color)' }}>
-                <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} />
-                {t('common.selectAll', '全选')}
-              </label>
-            </div>
-          )}
           {!groupByTag ? (
             <div className="ghcp-accounts-grid">
               {localAccessCard}
@@ -1915,7 +1917,7 @@ export function QoderAccountsPage() {
                 <div className="ghcp-flow-notice-desc">
                   {t(
                     'qoder.flowNotice.desc',
-                    '当前支持官方授权登录（回调）、本地导入、JSON 导入、切号注入、多开实例绑定与配额概览。登录流程沿用 Qoder 客户端真实落盘数据。',
+                    '当前支持官方授权登录（回调）、本地导入、JSON 导入、切号注入、应用多开绑定与配额概览。登录流程沿用 Qoder 客户端真实落盘数据。',
                   )}
                 </div>
                 <ul className="ghcp-flow-notice-list">
@@ -2107,19 +2109,30 @@ export function QoderAccountsPage() {
               >
                 <Upload size={14} />
               </button>
-              {selected.size > 0 && (
+              <QuickSettingsPopover type="qoder" />
+            </div>
+          </div>
+
+          {filteredAccounts.length > 0 && (
+            <AccountSelectionToolbar
+              selectedCount={selected.size}
+              allSelected={allSelected}
+              disabled={paginatedIds.length === 0}
+              onToggleSelectAll={toggleSelectAll}
+              onClearSelection={() => setSelected(new Set())}
+              actions={(
                 <button
                   className="btn btn-danger icon-only"
                   onClick={() => void handleDeleteAccounts(Array.from(selected))}
                   disabled={deleting}
-                  title={t('accounts.actions.deleteSelected', '删除选中')}
+                  title={`${t('common.delete', '删除')} (${selected.size})`}
+                  aria-label={`${t('common.delete', '删除')} (${selected.size})`}
                 >
                   <Trash2 size={14} />
                 </button>
               )}
-              <QuickSettingsPopover type="qoder" />
-            </div>
-          </div>
+            />
+          )}
 
           {loading && accounts.length === 0 ? (
             <div className="loading-container">
@@ -2166,7 +2179,7 @@ export function QoderAccountsPage() {
       )}
 
       {showAddModal && (
-        <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
+        <div className="modal-overlay">
           <div className="modal-content codex-add-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header">
               <button className="btn btn-secondary icon-only" onClick={() => setShowAddModal(false)} title={t('common.back', '返回')} aria-label={t('common.back', '返回')}><ChevronLeft size={14} /></button>
@@ -2307,11 +2320,7 @@ export function QoderAccountsPage() {
       )}
 
       {tagDeleteConfirm && (
-        <div className="modal-overlay" onClick={() => {
-          if (deletingTag) return;
-          setTagDeleteConfirm(null);
-          setTagDeleteConfirmError(null);
-        }}>
+        <div className="modal-overlay">
           <div className="modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header">
               <h2>{t('common.confirm')}</h2>

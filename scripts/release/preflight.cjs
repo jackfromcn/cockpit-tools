@@ -26,7 +26,10 @@ function runStep(step) {
     cwd,
     stdio: 'inherit',
     shell: process.platform === 'win32',
-    env: process.env,
+    env: {
+      ...process.env,
+      ...(step.env || {}),
+    },
   });
 
   if (typeof result.status === 'number' && result.status !== 0) {
@@ -87,6 +90,9 @@ if (!hasFlag('--skip-cargo-test')) {
     command: 'cargo',
     args: ['test', '--lib'],
     cwd: path.join(process.cwd(), 'src-tauri'),
+    env: {
+      RUST_TEST_THREADS: '1',
+    },
   });
 }
 

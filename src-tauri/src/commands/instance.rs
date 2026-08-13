@@ -223,6 +223,8 @@ pub async fn start_instance(instance_id: String) -> Result<InstanceProfileView, 
             modules::process::close_pid(pid, 20)?;
             let _ = modules::instance::update_default_pid(None)?;
         }
+        modules::process::close_antigravity_instances(&[default_dir_str.clone()], 20)?;
+        let _ = modules::instance::update_default_pid(None)?;
         if let Some(ref account_id) = default_bind_account_id {
             let _ = modules::prepare_account_for_injection(account_id).await?;
             modules::instance::inject_account_to_profile(&default_dir, account_id)?;
@@ -261,6 +263,8 @@ pub async fn start_instance(instance_id: String) -> Result<InstanceProfileView, 
         modules::process::close_pid(pid, 20)?;
         let _ = modules::instance::update_instance_pid(&instance.id, None)?;
     }
+    modules::process::close_antigravity_instances(&[instance.user_data_dir.clone()], 20)?;
+    let _ = modules::instance::update_instance_pid(&instance.id, None)?;
 
     if let Some(ref account_id) = instance.bind_account_id {
         let _ = modules::prepare_account_for_injection(account_id).await?;
@@ -291,6 +295,7 @@ pub async fn stop_instance(instance_id: String) -> Result<InstanceProfileView, S
         {
             modules::process::close_pid(pid, 20)?;
         }
+        modules::process::close_antigravity_instances(&[default_dir_str.clone()], 20)?;
         let _ = modules::instance::update_default_pid(None)?;
         let running = false;
         let default_bind_account_id = resolve_default_account_id(&default_settings);
@@ -323,6 +328,7 @@ pub async fn stop_instance(instance_id: String) -> Result<InstanceProfileView, S
     {
         modules::process::close_pid(pid, 20)?;
     }
+    modules::process::close_antigravity_instances(&[instance.user_data_dir.clone()], 20)?;
     let updated = modules::instance::update_instance_pid(&instance.id, None)?;
     let initialized = is_profile_initialized(&updated.user_data_dir);
     Ok(InstanceProfileView::from_profile(

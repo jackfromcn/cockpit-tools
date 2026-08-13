@@ -22,6 +22,13 @@ mod imp {
     unsafe extern "C" {
         fn macos_native_menu_toggle(snapshot_json: *const c_char, status_item_ptr: *mut c_void);
         fn macos_native_menu_update_snapshot(snapshot_json: *const c_char);
+        fn macos_native_menu_update_status_item(
+            account_prefix: *const c_char,
+            value_text: *const c_char,
+            remaining_percent: i32,
+            enabled: i32,
+            status_item_ptr: *mut c_void,
+        );
     }
 
     #[derive(Debug, Clone, Serialize)]
@@ -44,6 +51,9 @@ mod imp {
         strings: MenuStrings,
         platforms: Vec<PlatformSnapshot>,
         selected_platform_id: String,
+        /// 为 true 时右键打开菜单应强制选中 selected_platform_id（菜单栏额度配置的平台）并展示当前账号。
+        #[serde(default)]
+        prefer_selected_platform: bool,
     }
 
     #[derive(Debug, Clone, Serialize)]
@@ -65,6 +75,7 @@ mod imp {
         plan: Option<String>,
         updated_at: Option<i64>,
         quota_rows: Vec<QuotaRow>,
+        remaining_percent: Option<i32>,
     }
 
     #[derive(Debug, Clone, Serialize)]
@@ -145,13 +156,6 @@ mod imp {
         on_demand_percent: Option<i32>,
     }
 
-    #[derive(Debug, Clone)]
-    struct GeminiBucketRemaining {
-        model_id: String,
-        remaining_percent: i32,
-        reset_at: Option<i64>,
-    }
-
     #[derive(Debug, Clone, Default)]
     struct ResourceQuotaEntry {
         package_code: Option<String>,
@@ -195,6 +199,256 @@ mod imp {
         reset_at: Option<i64>,
         pay_as_you_go_open: Option<bool>,
         pay_as_you_go_usd: Option<f64>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct MenuBarStatus {
+        /// 前缀：邮箱前 4 位 / "API" / 空
+        account_prefix: String,
+        /// 主数值文案：如 "45%" / "$12.50" / "--"
+        value_text: String,
+        /// 用于着色的剩余百分比；无则灰色
+        remaining_percent: Option<i32>,
+    }
+
+    fn menu_bar_account_prefix(label: &str) -> String {
+        let local_part = label.trim().split('@').next().unwrap_or_default().trim();
+        local_part.chars().take(4).collect()
+    }
+
+    fn menu_bar_value_from_remaining(remaining_percent: Option<i32>) -> String {
+        remaining_percent
+            .map(|value| format!("{}%", value.clamp(0, i32::MAX)))
+            .unwrap_or_else(|| "--".to_string())
+    }
+
+    fn is_codex_api_service_current() -> bool {
+        let index = modules::codex_account::load_account_index();
+        if index
+            .current_account_id
+            .as_deref()
+            .map(modules::codex_instance::is_api_service_bind_account_id)
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        // 激活 API 服务时会清空 current_account_id，实际当前态看默认实例 bind。
+        if modules::codex_account::get_current_account().is_some() {
+            return false;
+        }
+        modules::codex_instance::load_default_settings()
+            .ok()
+            .and_then(|settings| settings.bind_account_id)
+            .as_deref()
+            .map(modules::codex_instance::is_api_service_bind_account_id)
+            .unwrap_or(false)
+    }
+
+    /// Codex API Key / 模型供应商账号：展示剩余额度金额或数量，前缀固定为 API。
+    fn build_codex_api_key_menu_bar_status(
+        account: &crate::models::codex::CodexAccount,
+    ) -> MenuBarStatus {
+        // 「API」是类型标签，不是邮箱前缀，不受「显示邮箱前 4 位」开关影响。
+        let prefix = "API".to_string();
+        let Some(summary) = codex_api_key_provider_usage(account) else {
+            return MenuBarStatus {
+                account_prefix: prefix,
+                value_text: "--".to_string(),
+                remaining_percent: None,
+            };
+        };
+        let mode = json_path(Some(summary), &["mode"])
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        let unit = json_path(Some(summary), &["unit"]).and_then(Value::as_str);
+        let has_new_api_fields = codex_api_key_usage_detail(summary, "totalGranted").is_some()
+            || codex_api_key_usage_detail(summary, "totalAvailable").is_some()
+            || codex_api_key_usage_detail(summary, "expiresAt").is_some();
+
+        if mode == "new_api" || has_new_api_fields {
+            let total_granted = codex_api_key_usage_detail_number(summary, "totalGranted");
+            let total_available = codex_api_key_usage_detail_number(summary, "totalAvailable");
+            let remaining_percent = match (total_granted, total_available) {
+                (Some(granted), Some(available)) if granted > 0.0 => {
+                    Some(clamp_percent((available.max(0.0) / granted) * 100.0))
+                }
+                _ => None,
+            };
+            return MenuBarStatus {
+                account_prefix: prefix,
+                value_text: total_available
+                    .map(format_provider_usage_count)
+                    .unwrap_or_else(|| "--".to_string()),
+                remaining_percent,
+            };
+        }
+
+        let remaining = json_path(Some(summary), &["quotaRemaining"])
+            .or_else(|| json_path(Some(summary), &["remaining"]))
+            .or_else(|| json_path(Some(summary), &["balance"]))
+            .and_then(parse_json_number);
+        let used = json_path(Some(summary), &["quotaUsed"])
+            .or_else(|| json_path(Some(summary), &["totalCost"]))
+            .and_then(parse_json_number);
+        let limit = json_path(Some(summary), &["quotaLimit"]).and_then(parse_json_number);
+        let quota_unlimited = json_path(Some(summary), &["quotaUnlimited"])
+            .and_then(json_bool)
+            .unwrap_or(false);
+
+        let remaining_percent = match (used, limit) {
+            (Some(used), Some(limit)) if limit > 0.0 => {
+                Some(clamp_percent(((limit - used).max(0.0) / limit) * 100.0))
+            }
+            _ => None,
+        };
+
+        if quota_unlimited {
+            return MenuBarStatus {
+                account_prefix: prefix,
+                value_text: "∞".to_string(),
+                remaining_percent: Some(100),
+            };
+        }
+
+        let value_text = remaining
+            .or(limit)
+            .map(|value| {
+                if mode == "sub2api"
+                    || unit.is_some()
+                    || json_path(Some(summary), &["balance"]).is_some()
+                {
+                    format_provider_usage_money(value, unit)
+                } else {
+                    format_provider_usage_count(value)
+                }
+            })
+            .unwrap_or_else(|| "--".to_string());
+
+        MenuBarStatus {
+            account_prefix: prefix,
+            value_text,
+            remaining_percent,
+        }
+    }
+
+    fn build_codex_api_service_menu_bar_status() -> MenuBarStatus {
+        let quota = modules::codex_local_access::menu_bar_api_service_quota();
+        MenuBarStatus {
+            // 「API」是类型标签，不受邮箱前缀开关影响。
+            account_prefix: "API".to_string(),
+            value_text: menu_bar_value_from_remaining(quota.remaining_percent),
+            remaining_percent: quota.remaining_percent,
+        }
+    }
+
+    fn build_menu_bar_status() -> Option<MenuBarStatus> {
+        let config = modules::config::get_user_config();
+        if !config.menu_bar_quota_enabled {
+            return None;
+        }
+
+        let platform = PlatformId::from_str(config.menu_bar_quota_platform.trim())
+            .unwrap_or(PlatformId::Codex);
+        let show_prefix = config.menu_bar_show_account_prefix;
+
+        // Codex：当前为 API 服务时，固定展示「API + 池剩余额度」，不回落到普通账号卡片。
+        if matches!(platform, PlatformId::Codex) && is_codex_api_service_current() {
+            return Some(build_codex_api_service_menu_bar_status());
+        }
+
+        // Codex：当前为 API Key 账号时，展示「API + 供应商剩余额度」。
+        if matches!(platform, PlatformId::Codex) {
+            if let Some(account) = modules::codex_account::get_current_account() {
+                if account.is_api_key_auth() {
+                    return Some(build_codex_api_key_menu_bar_status(&account));
+                }
+            }
+        }
+
+        let lang = normalize_lang(&config.language);
+        let (cards, current_account_id, _) = build_platform_cards(platform, &lang);
+        let card = current_account_id
+            .as_deref()
+            .and_then(|id| cards.iter().find(|card| card.id == id))
+            .or_else(|| cards.first());
+
+        let remaining_percent = card.and_then(|card| card.remaining_percent);
+        Some(MenuBarStatus {
+            account_prefix: if show_prefix {
+                card.map(|card| menu_bar_account_prefix(&card.title))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            },
+            value_text: menu_bar_value_from_remaining(remaining_percent),
+            remaining_percent,
+        })
+    }
+
+    pub(crate) fn update_status_item<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+        let status = build_menu_bar_status();
+        let enabled = status.is_some();
+        let account_prefix_raw = status
+            .as_ref()
+            .map(|value| value.account_prefix.clone())
+            .unwrap_or_default();
+        let account_prefix = to_cstring(&account_prefix_raw);
+        let value_text_raw = status
+            .as_ref()
+            .map(|value| value.value_text.clone())
+            .unwrap_or_else(|| "--".to_string());
+        let value_text = to_cstring(&value_text_raw);
+        let remaining_percent = status
+            .as_ref()
+            .and_then(|value| value.remaining_percent)
+            .unwrap_or(-1);
+        // 先通过 tray-icon 官方 set_title 同步 TaoTrayTarget 点击层尺寸；
+        // 再由 Swift 写入带颜色的 attributedTitle，并再次对齐 frame。
+        let plain_title = if enabled {
+            if account_prefix_raw.is_empty() {
+                value_text_raw.clone()
+            } else {
+                format!("{} {}", account_prefix_raw, value_text_raw)
+            }
+        } else {
+            String::new()
+        };
+        let app = app.clone();
+
+        app.clone()
+            .run_on_main_thread(move || {
+                let Some(tray) = app.tray_by_id(TRAY_ID) else {
+                    return;
+                };
+
+                if let Err(err) = tray.set_title(Some(plain_title)) {
+                    modules::logger::log_warn(&format!("[Tray] 同步菜单栏额度标题失败: {}", err));
+                }
+
+                let status_item_ptr = tray
+                    .with_inner_tray_icon(|tray_icon| {
+                        tray_icon
+                            .ns_status_item()
+                            .map(|status_item| Retained::as_ptr(&status_item) as usize)
+                    })
+                    .ok()
+                    .flatten();
+                let Some(status_item_ptr) = status_item_ptr else {
+                    return;
+                };
+
+                unsafe {
+                    macos_native_menu_update_status_item(
+                        account_prefix.as_ptr(),
+                        value_text.as_ptr(),
+                        remaining_percent,
+                        i32::from(enabled),
+                        status_item_ptr as *mut c_void,
+                    );
+                }
+            })
+            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn toggle_tray_menu<R: Runtime>(app: &AppHandle<R>, _rect: Rect) {
@@ -328,15 +582,31 @@ mod imp {
             .into_iter()
             .map(|platform| build_platform_snapshot(platform, &lang))
             .collect::<Vec<_>>();
-        let selected_platform_id = platforms
-            .first()
-            .map(|item| item.id.clone())
-            .unwrap_or_default();
+
+        // 开启菜单栏额度时：右键默认选中配置的平台，并展示该平台当前账号/额度。
+        let preferred_platform = if config.menu_bar_quota_enabled {
+            PlatformId::from_str(config.menu_bar_quota_platform.trim())
+        } else {
+            None
+        };
+        let prefer_selected_platform = preferred_platform
+            .is_some_and(|platform| platforms.iter().any(|item| item.id == platform.as_str()));
+        let selected_platform_id = if prefer_selected_platform {
+            preferred_platform
+                .map(|platform| platform.as_str().to_string())
+                .unwrap_or_default()
+        } else {
+            platforms
+                .first()
+                .map(|item| item.id.clone())
+                .unwrap_or_default()
+        };
 
         Some(MenuSnapshot {
             strings: build_strings(&lang),
             platforms,
             selected_platform_id,
+            prefer_selected_platform,
         })
     }
 
@@ -411,16 +681,21 @@ mod imp {
         match platform {
             PlatformId::Antigravity => "#67c27b",
             PlatformId::Codex => "#1976ff",
+            PlatformId::Claude => "#d97745",
             PlatformId::Zed => "#8b92a1",
             PlatformId::GitHubCopilot => "#8b92a1",
             PlatformId::Windsurf => "#21c7b7",
             PlatformId::Kiro => "#8b92a1",
             PlatformId::Cursor => "#21c7b7",
-            PlatformId::Gemini => "#a972ff",
+            PlatformId::Grok => "#6b7280",
             PlatformId::Codebuddy => "#4b74ff",
             PlatformId::CodebuddyCn => "#4b74ff",
             PlatformId::Qoder => "#5664ff",
-            PlatformId::Trae => "#4f46e5",
+            PlatformId::Zcode => "#2f9f7f",
+            PlatformId::Trae
+            | PlatformId::TraeSolo
+            | PlatformId::TraeCn
+            | PlatformId::TraeSoloCn => "#4f46e5",
             PlatformId::Workbuddy => "#2fa36a",
         }
     }
@@ -646,6 +921,23 @@ mod imp {
         format!("${:.2}", value.max(0.0))
     }
 
+    fn format_provider_usage_money(value: f64, unit: Option<&str>) -> String {
+        let normalized_unit = unit
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("USD");
+        let amount = if value >= 100.0 {
+            format!("{:.0}", value)
+        } else {
+            format!("{:.2}", value)
+        };
+        if normalized_unit.eq_ignore_ascii_case("USD") {
+            format!("${amount}")
+        } else {
+            format!("{amount} {normalized_unit}")
+        }
+    }
+
     fn format_currency_cents(value: f64) -> String {
         format!("${:.2}", (value / 100.0).max(0.0))
     }
@@ -760,6 +1052,226 @@ mod imp {
             progress_tone: None,
             subtext,
         }
+    }
+
+    fn min_quota_progress(rows: &[QuotaRow], progress_is_remaining: bool) -> Option<i32> {
+        rows.iter()
+            .filter_map(|row| row.progress)
+            .map(|value| {
+                if progress_is_remaining {
+                    value.clamp(0, 100)
+                } else {
+                    (100 - value).clamp(0, 100)
+                }
+            })
+            .min()
+    }
+
+    fn codex_api_key_provider_usage(
+        account: &crate::models::codex::CodexAccount,
+    ) -> Option<&Value> {
+        account
+            .quota
+            .as_ref()
+            .and_then(|quota| quota.raw_data.as_ref())
+            .and_then(|raw| json_path(Some(raw), &["provider_usage"]))
+    }
+
+    fn codex_api_key_usage_detail<'a>(summary: &'a Value, key: &str) -> Option<&'a Value> {
+        summary
+            .get("details")
+            .and_then(Value::as_array)?
+            .iter()
+            .find(|item| item.get("key").and_then(Value::as_str).map(str::trim) == Some(key))
+    }
+
+    fn codex_api_key_usage_detail_number(summary: &Value, key: &str) -> Option<f64> {
+        codex_api_key_usage_detail(summary, key)?
+            .get("value")
+            .and_then(parse_json_number)
+    }
+
+    fn format_provider_usage_count(value: f64) -> String {
+        format_quota_number(value.max(0.0))
+    }
+
+    fn format_provider_usage_count_opt(value: Option<f64>) -> String {
+        value
+            .map(format_provider_usage_count)
+            .unwrap_or_else(|| "-".to_string())
+    }
+
+    fn build_codex_api_key_usage_rows(
+        lang: &str,
+        account: &crate::models::codex::CodexAccount,
+    ) -> Vec<QuotaRow> {
+        let Some(summary) = codex_api_key_provider_usage(account) else {
+            return vec![make_text_row(
+                translate_or(lang, "common.shared.quota.noData", "No quota data", &[]),
+                "-".to_string(),
+                Some(modules::i18n::translate(lang, "common.refresh", &[])),
+            )];
+        };
+        let mode = json_path(Some(summary), &["mode"])
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        let unit = json_path(Some(summary), &["unit"]).and_then(Value::as_str);
+        let has_new_api_fields = codex_api_key_usage_detail(summary, "totalGranted").is_some()
+            || codex_api_key_usage_detail(summary, "totalAvailable").is_some()
+            || codex_api_key_usage_detail(summary, "expiresAt").is_some();
+        if mode == "new_api" || has_new_api_fields {
+            let total_granted = codex_api_key_usage_detail_number(summary, "totalGranted");
+            let total_available = codex_api_key_usage_detail_number(summary, "totalAvailable");
+            let expires_at = codex_api_key_usage_detail(summary, "expiresAt")
+                .and_then(|item| item.get("value"))
+                .and_then(parse_timestamp_like);
+            let mut rows = Vec::new();
+            rows.push(make_text_row(
+                translate_or(lang, "codex.modelProviders.usage.limit", "Total", &[]),
+                format_provider_usage_count_opt(total_granted),
+                None,
+            ));
+            let used_percent = match (total_granted, total_available) {
+                (Some(granted), Some(available)) if granted > 0.0 => {
+                    clamp_percent(((granted - available).max(0.0) / granted) * 100.0)
+                }
+                _ => 0,
+            };
+            rows.push(QuotaRow {
+                label: translate_or(
+                    lang,
+                    "codex.modelProviders.usage.remaining",
+                    "Remaining",
+                    &[],
+                ),
+                value: format_provider_usage_count_opt(total_available),
+                progress: Some(used_percent),
+                progress_tone: Some(usage_warning_tone(used_percent)),
+                subtext: None,
+            });
+            rows.push(make_text_row(
+                translate_or(
+                    lang,
+                    "codex.modelProviders.usage.fields.expiresAt",
+                    "Expires At",
+                    &[],
+                ),
+                expires_at
+                    .and_then(|value| format_reset_subtext(lang, Some(value)))
+                    .unwrap_or_else(|| "-".to_string()),
+                None,
+            ));
+            return rows;
+        }
+        let sub2api_remaining = json_path(Some(summary), &["quotaRemaining"])
+            .or_else(|| json_path(Some(summary), &["remaining"]))
+            .or_else(|| json_path(Some(summary), &["balance"]))
+            .and_then(parse_json_number);
+        let sub2api_today_requests =
+            json_path(Some(summary), &["todayRequests"]).and_then(parse_json_number);
+        let sub2api_today_tokens =
+            json_path(Some(summary), &["todayTotalTokens"]).and_then(parse_json_number);
+        let has_sub2api_fields = sub2api_remaining.is_some()
+            || sub2api_today_requests.is_some()
+            || sub2api_today_tokens.is_some();
+        if mode == "sub2api" || has_sub2api_fields {
+            return vec![
+                make_text_row(
+                    translate_or(
+                        lang,
+                        "codex.modelProviders.usage.remaining",
+                        "Remaining",
+                        &[],
+                    ),
+                    sub2api_remaining
+                        .map(|value| format_provider_usage_money(value, unit))
+                        .unwrap_or_else(|| "-".to_string()),
+                    None,
+                ),
+                make_text_row(
+                    translate_or(
+                        lang,
+                        "codex.modelProviders.usage.fields.todayRequests",
+                        "Today Requests",
+                        &[],
+                    ),
+                    format_provider_usage_count_opt(sub2api_today_requests),
+                    None,
+                ),
+                make_text_row(
+                    translate_or(
+                        lang,
+                        "codex.modelProviders.usage.fields.todayTokens",
+                        "Today Tokens",
+                        &[],
+                    ),
+                    format_provider_usage_count_opt(sub2api_today_tokens),
+                    None,
+                ),
+            ];
+        }
+        let quota_unlimited = json_path(Some(summary), &["quotaUnlimited"])
+            .and_then(json_bool)
+            .unwrap_or(false);
+        let remaining = json_path(Some(summary), &["quotaRemaining"])
+            .or_else(|| json_path(Some(summary), &["remaining"]))
+            .or_else(|| json_path(Some(summary), &["balance"]))
+            .and_then(parse_json_number);
+        let balance = json_path(Some(summary), &["balance"]).and_then(parse_json_number);
+        let used = json_path(Some(summary), &["quotaUsed"])
+            .or_else(|| json_path(Some(summary), &["totalCost"]))
+            .and_then(parse_json_number);
+        let limit = json_path(Some(summary), &["quotaLimit"]).and_then(parse_json_number);
+        let percent = match (used, limit) {
+            (Some(used), Some(limit)) if limit > 0.0 => Some(clamp_percent((used / limit) * 100.0)),
+            _ => None,
+        };
+        let mut rows = Vec::new();
+        if quota_unlimited || remaining.is_some() || limit.is_some() || used.is_some() {
+            let value = if quota_unlimited {
+                translate_or(
+                    lang,
+                    "codex.modelProviders.usage.unlimitedQuota",
+                    "Unlimited",
+                    &[],
+                )
+            } else {
+                remaining
+                    .or(limit)
+                    .map(|value| format_provider_usage_money(value, unit))
+                    .unwrap_or_else(|| "-".to_string())
+            };
+            let subtext = used.map(|value| {
+                let used_label = translate_or(lang, "codex.modelProviders.usage.used", "Used", &[]);
+                format!("{used_label}: {}", format_provider_usage_money(value, unit))
+            });
+            rows.push(QuotaRow {
+                label: translate_or(
+                    lang,
+                    "codex.modelProviders.usage.remaining",
+                    "Remaining",
+                    &[],
+                ),
+                value,
+                progress: Some(percent.unwrap_or(0)),
+                progress_tone: Some(usage_warning_tone(percent.unwrap_or(0))),
+                subtext,
+            });
+        }
+        if let Some(balance) = balance {
+            rows.push(make_text_row(
+                translate_or(
+                    lang,
+                    "codex.modelProviders.usage.accountBalance",
+                    "Account Balance",
+                    &[],
+                ),
+                format_provider_usage_money(balance, unit),
+                None,
+            ));
+        }
+        rows
     }
 
     fn json_path<'a>(root: Option<&'a Value>, path: &[&str]) -> Option<&'a Value> {
@@ -1325,16 +1837,34 @@ mod imp {
         key: &str,
     ) -> Option<&'a serde_json::Map<String, Value>> {
         let snapshots = quota_snapshots.and_then(|value| value.as_object())?;
-        let primary = snapshots.get(key).and_then(|snapshot| snapshot.as_object());
-        if primary.is_some() {
-            return primary;
-        }
-        if key == "premium_interactions" {
+        if matches!(key, "premium_models" | "premium_interactions") {
             return snapshots
                 .get("premium_models")
+                .or_else(|| snapshots.get("premium_interactions"))
                 .and_then(|snapshot| snapshot.as_object());
         }
-        None
+        snapshots.get(key).and_then(|snapshot| snapshot.as_object())
+    }
+
+    fn snapshot_without_displayable_quota(
+        snapshot: Option<&serde_json::Map<String, Value>>,
+    ) -> bool {
+        let Some(data) = snapshot else {
+            return false;
+        };
+        if data.get("unlimited").and_then(|value| value.as_bool()) == Some(true) {
+            return false;
+        }
+
+        let entitlement = data.get("entitlement").and_then(parse_json_number);
+        if entitlement.map(|value| value < 0.0).unwrap_or(false) {
+            return false;
+        }
+        if let Some(value) = entitlement {
+            return value <= 0.0;
+        }
+
+        data.get("has_quota").and_then(|value| value.as_bool()) == Some(false)
     }
 
     fn entitlement_from_snapshot(snapshot: Option<&serde_json::Map<String, Value>>) -> Option<f64> {
@@ -1345,6 +1875,10 @@ mod imp {
     }
 
     fn remaining_from_snapshot(snapshot: Option<&serde_json::Map<String, Value>>) -> Option<f64> {
+        if snapshot_without_displayable_quota(snapshot) {
+            return None;
+        }
+
         if let Some(remaining) = snapshot
             .and_then(|data| data.get("remaining"))
             .and_then(parse_json_number)
@@ -1389,6 +1923,9 @@ mod imp {
             == Some(true)
         {
             return Some(0);
+        }
+        if snapshot_without_displayable_quota(snapshot) {
+            return None;
         }
 
         let entitlement = snapshot
@@ -1899,69 +2436,6 @@ mod imp {
             on_demand_text,
             on_demand_percent,
         }
-    }
-
-    fn collect_gemini_bucket_remaining(
-        account: &crate::models::gemini::GeminiAccount,
-    ) -> Vec<GeminiBucketRemaining> {
-        let Some(raw_usage) = account.gemini_usage_raw.as_ref() else {
-            return Vec::new();
-        };
-        let Some(buckets) = raw_usage.get("buckets").and_then(|value| value.as_array()) else {
-            return Vec::new();
-        };
-
-        let mut values = Vec::new();
-        for bucket in buckets {
-            let model_id = bucket
-                .get("modelId")
-                .and_then(|value| value.as_str())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string);
-            let remaining = bucket
-                .get("remainingFraction")
-                .and_then(parse_json_number)
-                .map(|value| clamp_percent(value * 100.0));
-            let reset_at = bucket.get("resetTime").and_then(parse_timestamp_like);
-            let (Some(model_id), Some(remaining_percent)) = (model_id, remaining) else {
-                continue;
-            };
-            values.push(GeminiBucketRemaining {
-                model_id,
-                remaining_percent,
-                reset_at,
-            });
-        }
-
-        values.sort_by(|left, right| left.model_id.cmp(&right.model_id));
-        values
-    }
-
-    fn pick_lowest_gemini_bucket<'a, F>(
-        buckets: &'a [GeminiBucketRemaining],
-        matcher: F,
-    ) -> Option<&'a GeminiBucketRemaining>
-    where
-        F: Fn(&str) -> bool,
-    {
-        let mut matched = buckets.iter().filter(|bucket| matcher(&bucket.model_id));
-        let mut best = matched.next()?;
-        for current in matched {
-            if current.remaining_percent < best.remaining_percent {
-                best = current;
-                continue;
-            }
-            if current.remaining_percent > best.remaining_percent {
-                continue;
-            }
-            match (best.reset_at, current.reset_at) {
-                (None, Some(_)) => best = current,
-                (Some(best_ts), Some(current_ts)) if current_ts < best_ts => best = current,
-                _ => {}
-            }
-        }
-        Some(best)
     }
 
     fn resource_account_roots<'a>(
@@ -2637,13 +3111,18 @@ mod imp {
         match platform {
             PlatformId::Antigravity => build_antigravity_cards(lang),
             PlatformId::Codex => build_codex_cards(lang),
+            PlatformId::Claude => build_claude_cards(lang, true),
             PlatformId::GitHubCopilot => build_ghcp_cards(lang),
             PlatformId::Windsurf => build_windsurf_cards(lang),
             PlatformId::Kiro => build_kiro_cards(lang),
             PlatformId::Cursor => build_cursor_cards(lang),
-            PlatformId::Gemini => build_gemini_cards(lang),
+            PlatformId::Grok => build_grok_cards(lang),
             PlatformId::Qoder => build_qoder_cards(lang),
-            PlatformId::Trae => build_trae_cards(lang),
+            PlatformId::Zcode => build_zcode_cards(lang),
+            PlatformId::Trae
+            | PlatformId::TraeSolo
+            | PlatformId::TraeCn
+            | PlatformId::TraeSoloCn => build_trae_cards(lang, platform),
             PlatformId::Codebuddy => build_codebuddy_cards(lang),
             PlatformId::CodebuddyCn => build_codebuddy_cn_cards(lang),
             PlatformId::Workbuddy => build_workbuddy_cards(lang),
@@ -2670,6 +3149,7 @@ mod imp {
             .into_iter()
             .map(|account| {
                 let quota = account.quota.as_ref();
+                let quota_rows = build_antigravity_quota_rows(lang, quota);
                 AccountCard {
                     id: account.id,
                     title: account.email,
@@ -2679,7 +3159,8 @@ mod imp {
                         account.last_used,
                         account.created_at,
                     ),
-                    quota_rows: build_antigravity_quota_rows(lang, quota),
+                    remaining_percent: min_quota_progress(&quota_rows, true),
+                    quota_rows,
                 }
             })
             .collect();
@@ -2687,13 +3168,75 @@ mod imp {
         (cards, current_id, recommended)
     }
 
+    fn localize_codex_pool_window_label(lang: &str, label: &str) -> String {
+        // 与前端 formatCodexQuotaPoolWindowLabel 对齐：Weekly → 周。
+        if label.eq_ignore_ascii_case("Weekly") {
+            return translate_or(lang, "codex.localAccess.quotaPool.weeklyShort", "周", &[]);
+        }
+        label.to_string()
+    }
+
+    fn build_codex_api_service_card(lang: &str) -> AccountCard {
+        let pool = modules::codex_local_access::menu_bar_api_service_quota();
+        let mut rows = Vec::new();
+
+        for window in &pool.windows {
+            let tone_pct = window.percentage.clamp(0, 100);
+            rows.push(make_progress_row(
+                localize_codex_pool_window_label(lang, &window.label),
+                format!("{}%", window.percentage),
+                tone_pct,
+                None,
+                codex_remaining_tone(tone_pct),
+            ));
+        }
+        if rows.is_empty() {
+            rows.push(make_text_row(
+                translate_or(lang, "common.shared.quota.noData", "No quota data", &[]),
+                "-".to_string(),
+                Some(modules::i18n::translate(lang, "common.refresh", &[])),
+            ));
+        } else {
+            rows.insert(
+                0,
+                make_text_row(
+                    translate_or(
+                        lang,
+                        "settings.general.codexAppUiInjectionPoolLabel",
+                        "Accounts",
+                        &[],
+                    ),
+                    pool.account_count.to_string(),
+                    None,
+                ),
+            );
+        }
+
+        AccountCard {
+            id: modules::codex_instance::CODEX_API_SERVICE_BIND_ACCOUNT_ID.to_string(),
+            title: translate_or(lang, "codex.localAccess.title", "API Service", &[]),
+            plan: Some("API".to_string()),
+            updated_at: Some(chrono::Utc::now().timestamp()),
+            quota_rows: rows,
+            remaining_percent: pool.remaining_percent,
+        }
+    }
+
     fn build_codex_cards(lang: &str) -> (Vec<AccountCard>, Option<String>, Option<String>) {
         let mut accounts = modules::codex_account::list_accounts();
-        let current_id = modules::codex_account::resolve_current_account_id(&accounts);
+        let api_service_current = is_codex_api_service_current();
+        let current_id = if api_service_current {
+            Some(modules::codex_instance::CODEX_API_SERVICE_BIND_ACCOUNT_ID.to_string())
+        } else {
+            modules::codex_account::resolve_current_account_id(&accounts)
+        };
         accounts
             .sort_by_key(|account| std::cmp::Reverse(account.last_used.max(account.created_at)));
 
         let recommended = current_id.as_deref().and_then(|id| {
+            if modules::codex_instance::is_api_service_bind_account_id(id) {
+                return None;
+            }
             accounts
                 .iter()
                 .filter(|account| account.id != id && account.quota.is_some())
@@ -2713,11 +3256,13 @@ mod imp {
                 .map(|account| account.id.clone())
         });
 
-        let cards = accounts
+        let mut cards: Vec<AccountCard> = accounts
             .into_iter()
             .map(|account| {
                 let mut rows = Vec::new();
-                if let Some(quota) = account.quota.as_ref() {
+                if account.is_api_key_auth() {
+                    rows = build_codex_api_key_usage_rows(lang, &account);
+                } else if let Some(quota) = account.quota.as_ref() {
                     let has_presence_flags = quota.hourly_window_present.is_some()
                         || quota.weekly_window_present.is_some();
                     if !has_presence_flags || quota.hourly_window_present == Some(true) {
@@ -2770,6 +3315,7 @@ mod imp {
                         rows.push(code_review);
                     }
                 }
+                let remaining_percent = min_quota_progress(&rows, !account.is_api_key_auth());
                 AccountCard {
                     id: account.id,
                     title: if matches!(
@@ -2793,6 +3339,137 @@ mod imp {
                         account.created_at,
                     ),
                     quota_rows: rows,
+                    remaining_percent,
+                }
+            })
+            .collect();
+
+        // 有 API 服务账号池或当前正是 API 服务时，插入虚拟卡片展示池额度。
+        if api_service_current || modules::codex_local_access::api_service_collection_has_accounts()
+        {
+            cards.insert(0, build_codex_api_service_card(lang));
+        }
+
+        (cards, current_id, recommended)
+    }
+
+    fn is_claude_desktop_account(account: &crate::models::claude::ClaudeAccount) -> bool {
+        matches!(
+            account.auth_mode,
+            crate::models::claude::ClaudeAuthMode::DesktopOAuth
+                | crate::models::claude::ClaudeAuthMode::DesktopGateway
+        )
+    }
+
+    fn build_claude_cards(
+        lang: &str,
+        desktop: bool,
+    ) -> (Vec<AccountCard>, Option<String>, Option<String>) {
+        let fallback_title = if desktop { "Claude" } else { "Claude CLI" };
+        let mut accounts = modules::claude_account::list_accounts()
+            .into_iter()
+            .filter(|account| is_claude_desktop_account(account) == desktop)
+            .collect::<Vec<_>>();
+        let current_platform = if desktop {
+            "claude_desktop_account"
+        } else {
+            "claude_code_account"
+        };
+        let current_id = modules::claude_account::resolve_current_account_for_platform(
+            current_platform,
+            &accounts,
+        )
+        .map(|account| account.id);
+        accounts
+            .sort_by_key(|account| std::cmp::Reverse(account.last_used.max(account.created_at)));
+
+        let recommended = current_id.as_deref().and_then(|id| {
+            accounts
+                .iter()
+                .filter(|account| account.id != id)
+                .filter_map(|account| {
+                    let quota = account.quota.as_ref()?;
+                    let values = [quota.five_hour_percentage, quota.seven_day_percentage];
+                    let avg = values.iter().copied().sum::<i32>() as f64 / values.len() as f64;
+                    Some((account.id.clone(), avg, account.last_used))
+                })
+                .min_by(|left, right| {
+                    left.1
+                        .partial_cmp(&right.1)
+                        .unwrap_or(Ordering::Equal)
+                        .then_with(|| right.2.cmp(&left.2))
+                })
+                .map(|item| item.0)
+        });
+
+        let cards = accounts
+            .into_iter()
+            .map(|account| {
+                let mut rows = Vec::new();
+                if let Some(quota) = account.quota.as_ref() {
+                    let show_remaining =
+                        crate::modules::config::get_user_config().claude_quota_display_remaining;
+                    let five_hour_used = quota.five_hour_percentage.clamp(0, 100);
+                    let five_hour_display = if show_remaining {
+                        (100 - five_hour_used).clamp(0, 100)
+                    } else {
+                        five_hour_used
+                    };
+                    rows.push(make_progress_row(
+                        translate_or(lang, "claude.quota.fiveHour", "Current session", &[]),
+                        format!("{five_hour_display}%"),
+                        five_hour_display,
+                        format_reset_subtext(lang, quota.five_hour_reset_time),
+                        usage_warning_tone(five_hour_used),
+                    ));
+
+                    let seven_day_used = quota.seven_day_percentage.clamp(0, 100);
+                    let seven_day_display = if show_remaining {
+                        (100 - seven_day_used).clamp(0, 100)
+                    } else {
+                        seven_day_used
+                    };
+                    rows.push(make_progress_row(
+                        translate_or(
+                            lang,
+                            "claude.quota.sevenDay",
+                            "Current week (all models)",
+                            &[],
+                        ),
+                        format!("{seven_day_display}%"),
+                        seven_day_display,
+                        format_reset_subtext(lang, quota.seven_day_reset_time),
+                        usage_warning_tone(seven_day_used),
+                    ));
+                } else if let Some(error) = account.quota_error.as_ref() {
+                    rows.push(make_text_row(
+                        translate_or(lang, "common.shared.columns.status", "Status", &[]),
+                        error.message.clone(),
+                        None,
+                    ));
+                }
+
+                let remaining_percent = min_quota_progress(&rows, false);
+                AccountCard {
+                    id: account.id,
+                    title: first_non_empty(&[
+                        Some(account.email.as_str()),
+                        account.organization_name.as_deref(),
+                    ])
+                    .unwrap_or(fallback_title)
+                    .to_string(),
+                    plan: first_non_empty(&[
+                        account.plan_type.as_deref(),
+                        account.organization_name.as_deref(),
+                    ])
+                    .map(str::to_string),
+                    updated_at: display_updated_at(
+                        account.usage_updated_at,
+                        account.last_used,
+                        account.created_at,
+                    ),
+                    quota_rows: rows,
+                    remaining_percent,
                 }
             })
             .collect();
@@ -2872,6 +3549,7 @@ mod imp {
                         None,
                     ),
                 ];
+                let remaining_percent = min_quota_progress(&rows, false);
                 AccountCard {
                     id: account.id,
                     title: account
@@ -2886,6 +3564,7 @@ mod imp {
                         account.created_at,
                     ),
                     quota_rows: rows,
+                    remaining_percent,
                 }
             })
             .collect();
@@ -3067,6 +3746,7 @@ mod imp {
                         rows
                     }
                 };
+                let remaining_percent = min_quota_progress(&rows, false);
                 AccountCard {
                     id: account.id,
                     title: account
@@ -3081,6 +3761,7 @@ mod imp {
                         account.created_at,
                     ),
                     quota_rows: rows,
+                    remaining_percent,
                 }
             })
             .collect();
@@ -3157,6 +3838,7 @@ mod imp {
                     }
                 }
                 let account_id = account.id.clone();
+                let remaining_percent = min_quota_progress(&rows, false);
                 AccountCard {
                     id: account_id.clone(),
                     title: if account.email.trim().is_empty() {
@@ -3171,6 +3853,7 @@ mod imp {
                         account.created_at,
                     ),
                     quota_rows: rows,
+                    remaining_percent,
                 }
             })
             .collect();
@@ -3257,6 +3940,7 @@ mod imp {
                     });
                 }
                 let account_id = account.id.clone();
+                let remaining_percent = min_quota_progress(&rows, false);
                 AccountCard {
                     id: account_id.clone(),
                     title: if account.email.trim().is_empty() {
@@ -3271,79 +3955,148 @@ mod imp {
                         account.created_at,
                     ),
                     quota_rows: rows,
+                    remaining_percent,
                 }
             })
             .collect();
         (cards, current_id, recommended)
     }
 
-    fn build_gemini_cards(lang: &str) -> (Vec<AccountCard>, Option<String>, Option<String>) {
-        let mut accounts = modules::gemini_account::list_accounts();
-        let current = modules::gemini_account::resolve_current_account(&accounts);
-        let current_id = current.map(|account| account.id);
+    fn build_grok_cards(lang: &str) -> (Vec<AccountCard>, Option<String>, Option<String>) {
+        let mut accounts = modules::grok_account::list_accounts_checked().unwrap_or_default();
+        let current_id = modules::grok_account::current_account_id().ok().flatten();
         accounts
             .sort_by_key(|account| std::cmp::Reverse(account.last_used.max(account.created_at)));
+
+        let remaining_metrics = |account: &crate::models::grok::GrokAccountView| {
+            let Some(quota) = account.quota.as_ref() else {
+                return Vec::new();
+            };
+            let mut values = Vec::new();
+            if let Some(used) = quota.weekly_limit_percent {
+                values.push((100 - clamp_percent(used)).clamp(0, 100));
+            }
+            values.extend(quota.products.iter().filter_map(|product| {
+                product
+                    .usage_percent
+                    .map(|used| (100 - clamp_percent(used)).clamp(0, 100))
+            }));
+            if let (Some(used), Some(cap)) = (quota.on_demand_used, quota.on_demand_cap) {
+                if cap > 0.0 {
+                    values.push((100 - clamp_percent(used / cap * 100.0)).clamp(0, 100));
+                }
+            }
+            values
+        };
+
         let recommended = current_id.as_deref().and_then(|id| {
             accounts
                 .iter()
                 .filter(|account| account.id != id)
-                .filter_map(|account| {
-                    let metrics = modules::gemini_account::extract_account_model_remaining(account);
-                    let lowest = metrics.iter().map(|(_, pct)| *pct).min()?;
-                    Some((account.id.clone(), lowest))
+                .filter(|account| {
+                    account.quota_query_last_error.is_none()
+                        && account
+                            .status
+                            .as_deref()
+                            .map(|status| matches!(status, "normal" | "ok"))
+                            .unwrap_or(true)
                 })
-                .max_by_key(|item| item.1)
+                .filter_map(|account| {
+                    let minimum = remaining_metrics(account).into_iter().min()?;
+                    if minimum <= 0 {
+                        return None;
+                    }
+                    Some((account.id.clone(), minimum, account.last_used))
+                })
+                .max_by_key(|item| (item.1, item.2))
                 .map(|item| item.0)
         });
+
         let cards = accounts
             .into_iter()
             .map(|account| {
-                let buckets = collect_gemini_bucket_remaining(&account);
                 let mut rows = Vec::new();
-                if let Some(pro_bucket) =
-                    pick_lowest_gemini_bucket(&buckets, |model_id| model_id.contains("pro"))
-                {
-                    let value = translate_or(
-                        lang,
-                        "gemini.quota.left",
-                        "{{value}}% left",
-                        &[("value", &pro_bucket.remaining_percent.to_string())],
-                    );
-                    rows.push(make_progress_row(
-                        translate_or(lang, "gemini.quota.pro", "Pro", &[]),
-                        value,
-                        pro_bucket.remaining_percent,
-                        format_reset_subtext(lang, pro_bucket.reset_at),
-                        cursor_usage_tone((100 - pro_bucket.remaining_percent).clamp(0, 100)),
-                    ));
+                if let Some(quota) = account.quota.as_ref() {
+                    let reset_at = quota
+                        .period_end
+                        .as_ref()
+                        .and_then(|value| parse_timestamp_like(&Value::String(value.clone())));
+                    let reset_subtext = format_reset_subtext(lang, reset_at);
+                    let left_value = |remaining: i32| {
+                        translate_or(
+                            lang,
+                            "common.shared.quota.leftPercent",
+                            "{{value}}% left",
+                            &[("value", &remaining.to_string())],
+                        )
+                    };
+
+                    if let Some(used) = quota.weekly_limit_percent {
+                        let remaining = (100 - clamp_percent(used)).clamp(0, 100);
+                        rows.push(make_progress_row(
+                            translate_or(lang, "grok.quota.weekly", "Weekly usage", &[]),
+                            left_value(remaining),
+                            remaining,
+                            reset_subtext.clone(),
+                            remaining_balance_tone(remaining),
+                        ));
+                    }
+                    for product in &quota.products {
+                        if let Some(used) = product.usage_percent {
+                            let remaining = (100 - clamp_percent(used)).clamp(0, 100);
+                            rows.push(make_progress_row(
+                                product.product.clone(),
+                                left_value(remaining),
+                                remaining,
+                                reset_subtext.clone(),
+                                remaining_balance_tone(remaining),
+                            ));
+                        }
+                    }
+                    if let (Some(used), Some(cap)) = (quota.on_demand_used, quota.on_demand_cap) {
+                        let remaining = if cap > 0.0 {
+                            (100 - clamp_percent(used / cap * 100.0)).clamp(0, 100)
+                        } else {
+                            0
+                        };
+                        rows.push(make_progress_row(
+                            translate_or(lang, "grok.quota.onDemand", "On-demand", &[]),
+                            format!(
+                                "{} / {}",
+                                format_quota_number(used),
+                                format_quota_number(cap)
+                            ),
+                            remaining,
+                            reset_subtext,
+                            remaining_balance_tone(remaining),
+                        ));
+                    }
+                    if let Some(balance) = quota.prepaid_balance {
+                        rows.push(make_text_row(
+                            translate_or(lang, "grok.quota.balance", "Balance", &[]),
+                            format_quota_number(balance),
+                            None,
+                        ));
+                    }
                 }
-                if let Some(flash_bucket) =
-                    pick_lowest_gemini_bucket(&buckets, |model_id| model_id.contains("flash"))
-                {
-                    let value = translate_or(
-                        lang,
-                        "gemini.quota.left",
-                        "{{value}}% left",
-                        &[("value", &flash_bucket.remaining_percent.to_string())],
-                    );
-                    rows.push(make_progress_row(
-                        translate_or(lang, "gemini.quota.flash", "Flash", &[]),
-                        value,
-                        flash_bucket.remaining_percent,
-                        format_reset_subtext(lang, flash_bucket.reset_at),
-                        cursor_usage_tone((100 - flash_bucket.remaining_percent).clamp(0, 100)),
-                    ));
-                }
+
+                let remaining_percent = min_quota_progress(&rows, true);
                 AccountCard {
                     id: account.id,
                     title: account.email,
-                    plan: account.plan_name.or(account.tier_id),
+                    plan: account.plan_type.or_else(|| {
+                        account
+                            .quota
+                            .as_ref()
+                            .and_then(|quota| quota.subscription_tier.clone())
+                    }),
                     updated_at: display_updated_at(
                         account.usage_updated_at,
                         account.last_used,
                         account.created_at,
                     ),
                     quota_rows: rows,
+                    remaining_percent,
                 }
             })
             .collect();
@@ -3439,7 +4192,7 @@ mod imp {
                                 ("total", total_text.as_str()),
                             ],
                         ),
-                        remaining_percent,
+                        (100 - remaining_percent).clamp(0, 100),
                         None,
                         cursor_usage_tone((100 - remaining_percent).clamp(0, 100)),
                     ));
@@ -3457,6 +4210,7 @@ mod imp {
                         None,
                     ));
                 }
+                let remaining_percent = min_quota_progress(&rows, false);
                 AccountCard {
                     id: account.id.clone(),
                     title: account
@@ -3471,15 +4225,124 @@ mod imp {
                         account.created_at,
                     ),
                     quota_rows: rows,
+                    remaining_percent,
                 }
             })
             .collect();
         (cards, current_id, None)
     }
 
-    fn build_trae_cards(lang: &str) -> (Vec<AccountCard>, Option<String>, Option<String>) {
+    fn build_zcode_cards(lang: &str) -> (Vec<AccountCard>, Option<String>, Option<String>) {
+        let mut accounts = modules::zcode_account::list_accounts_checked().unwrap_or_default();
+        let current_id = modules::zcode_account::current_account_id().ok().flatten();
+        accounts
+            .sort_by_key(|account| std::cmp::Reverse(account.last_used.max(account.created_at)));
+        let cards = accounts
+            .into_iter()
+            .map(|account| {
+                let mut rows = Vec::new();
+                if let Some(balances) = account.quota_raw.as_ref().and_then(Value::as_array) {
+                    for balance in balances {
+                        let total = balance
+                            .get("total_units")
+                            .and_then(parse_json_number)
+                            .unwrap_or(0.0)
+                            .max(0.0);
+                        let used = balance
+                            .get("used_units")
+                            .and_then(parse_json_number)
+                            .unwrap_or(0.0)
+                            .max(0.0);
+                        let remaining = balance
+                            .get("remaining_units")
+                            .or_else(|| balance.get("available_units"))
+                            .and_then(parse_json_number)
+                            .unwrap_or_else(|| (total - used).max(0.0));
+                        let used_percent = if total > 0.0 {
+                            clamp_percent((used / total) * 100.0)
+                        } else {
+                            0
+                        };
+                        let remaining_percent = if total > 0.0 {
+                            clamp_percent((remaining / total) * 100.0)
+                        } else {
+                            0
+                        };
+                        let remaining_text = format!("{remaining_percent}%");
+                        let reset_at = balance
+                            .get("period_end")
+                            .or_else(|| balance.get("expires_at"))
+                            .and_then(parse_json_number)
+                            .map(|value| value as i64);
+                        rows.push(make_progress_row(
+                            balance
+                                .get("show_name")
+                                .and_then(Value::as_str)
+                                .unwrap_or("ZCode")
+                                .to_string(),
+                            translate_or(
+                                lang,
+                                "common.shared.remaining",
+                                "剩余 {{value}}",
+                                &[("value", remaining_text.as_str())],
+                            ),
+                            used_percent,
+                            Some(format!(
+                                "{} / {}",
+                                format_quota_number(used),
+                                format_quota_number(total)
+                            )),
+                            cursor_usage_tone(used_percent),
+                        ));
+                        if let Some(subtext) = format_reset_subtext(lang, reset_at) {
+                            if let Some(row) = rows.last_mut() {
+                                row.subtext = Some(match row.subtext.take() {
+                                    Some(usage) => format!("{} · {}", usage, subtext),
+                                    None => subtext,
+                                });
+                            }
+                        }
+                    }
+                }
+                let title = if account.email.trim().is_empty()
+                    || account.email.eq_ignore_ascii_case("unknown@zcode.local")
+                {
+                    account
+                        .display_name
+                        .clone()
+                        .or(account.user_id.clone())
+                        .unwrap_or_else(|| account.id.clone())
+                } else {
+                    account.email.clone()
+                };
+                let remaining_percent = min_quota_progress(&rows, false);
+                AccountCard {
+                    id: account.id,
+                    title,
+                    plan: account.plan_type,
+                    updated_at: display_updated_at(
+                        account.usage_updated_at,
+                        account.last_used,
+                        account.created_at,
+                    ),
+                    quota_rows: rows,
+                    remaining_percent,
+                }
+            })
+            .collect();
+        (cards, current_id, None)
+    }
+
+    fn build_trae_cards(
+        lang: &str,
+        platform: PlatformId,
+    ) -> (Vec<AccountCard>, Option<String>, Option<String>) {
         let mut accounts = modules::trae_account::list_accounts();
-        let current_id = modules::trae_account::resolve_current_account_id(&accounts);
+        let current_id = modules::trae_account::TraePlatformKind::parse(Some(platform.as_str()))
+            .ok()
+            .and_then(|kind| {
+                modules::trae_account::resolve_current_account_id_for_platform(&accounts, kind)
+            });
         accounts
             .sort_by_key(|account| std::cmp::Reverse(account.last_used.max(account.created_at)));
         let cards = accounts
@@ -3540,6 +4403,7 @@ mod imp {
                         None,
                     ));
                 }
+                let remaining_percent = min_quota_progress(&rows, false);
                 AccountCard {
                     id: account.id.clone(),
                     title: account
@@ -3554,6 +4418,7 @@ mod imp {
                         account.created_at,
                     ),
                     quota_rows: rows,
+                    remaining_percent,
                 }
             })
             .collect();
@@ -3576,7 +4441,7 @@ mod imp {
                 if model.extra.total > 0.0 || model.extra.remain > 0.0 || model.extra.used > 0.0 {
                     resources.push(model.extra);
                 }
-                let rows = resources
+                let rows: Vec<QuotaRow> = resources
                     .into_iter()
                     .filter(|resource| resource.total > 0.0 || resource.remain > 0.0)
                     .map(|resource| {
@@ -3606,6 +4471,7 @@ mod imp {
                     .clone()
                     .filter(|text| !text.trim().is_empty())
                     .unwrap_or_else(|| account.email.clone());
+                let remaining_percent = min_quota_progress(&rows, false);
                 AccountCard {
                     id: account.id.clone(),
                     title,
@@ -3616,6 +4482,7 @@ mod imp {
                         account.created_at,
                     ),
                     quota_rows: rows,
+                    remaining_percent,
                 }
             })
             .collect();
@@ -3638,7 +4505,7 @@ mod imp {
                 if model.extra.total > 0.0 || model.extra.remain > 0.0 || model.extra.used > 0.0 {
                     resources.push(model.extra);
                 }
-                let rows = resources
+                let rows: Vec<QuotaRow> = resources
                     .into_iter()
                     .filter(|resource| resource.total > 0.0 || resource.remain > 0.0)
                     .map(|resource| {
@@ -3668,6 +4535,7 @@ mod imp {
                     .clone()
                     .filter(|text| !text.trim().is_empty())
                     .unwrap_or_else(|| account.email.clone());
+                let remaining_percent = min_quota_progress(&rows, false);
                 AccountCard {
                     id: account.id.clone(),
                     title,
@@ -3678,6 +4546,7 @@ mod imp {
                         account.created_at,
                     ),
                     quota_rows: rows,
+                    remaining_percent,
                 }
             })
             .collect();
@@ -3700,7 +4569,7 @@ mod imp {
                 if model.extra.total > 0.0 || model.extra.remain > 0.0 || model.extra.used > 0.0 {
                     resources.push(model.extra);
                 }
-                let rows = resources
+                let rows: Vec<QuotaRow> = resources
                     .into_iter()
                     .filter(|resource| resource.total > 0.0 || resource.remain > 0.0)
                     .map(|resource| {
@@ -3730,6 +4599,7 @@ mod imp {
                     .clone()
                     .filter(|text| !text.trim().is_empty())
                     .unwrap_or_else(|| account.email.clone());
+                let remaining_percent = min_quota_progress(&rows, false);
                 AccountCard {
                     id: account.id.clone(),
                     title,
@@ -3740,6 +4610,7 @@ mod imp {
                         account.created_at,
                     ),
                     quota_rows: rows,
+                    remaining_percent,
                 }
             })
             .collect();
@@ -3815,6 +4686,7 @@ mod imp {
                         None,
                     ));
                 }
+                let remaining_percent = min_quota_progress(&rows, false);
                 AccountCard {
                     id: account.id.clone(),
                     title: account
@@ -3833,10 +4705,232 @@ mod imp {
                         account.created_at,
                     ),
                     quota_rows: rows,
+                    remaining_percent,
                 }
             })
             .collect();
         (cards, current_id, recommended)
+    }
+
+    fn normalize_provider_base_url(value: &str) -> String {
+        value.trim().trim_end_matches('/').to_ascii_lowercase()
+    }
+
+    fn find_codex_provider_for_account(
+        providers: &[Value],
+        account: &crate::models::codex::CodexAccount,
+    ) -> Option<Value> {
+        let provider_id = account
+            .api_provider_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(provider_id) = provider_id {
+            if let Some(provider) = providers.iter().find(|provider| {
+                json_path(Some(provider), &["id"])
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    == Some(provider_id)
+            }) {
+                return Some(provider.clone());
+            }
+        }
+        let account_base = account
+            .api_base_url
+            .as_deref()
+            .map(normalize_provider_base_url)
+            .filter(|value| !value.is_empty())?;
+        providers
+            .iter()
+            .find(|provider| {
+                json_path(Some(provider), &["baseUrl"])
+                    .and_then(Value::as_str)
+                    .map(normalize_provider_base_url)
+                    == Some(account_base.clone())
+            })
+            .cloned()
+    }
+
+    async fn save_detected_codex_provider_integration_type(
+        provider_id: Option<&str>,
+        base_url: &str,
+        mode: &str,
+    ) -> Result<(), String> {
+        if mode != "new_api" && mode != "sub2api" {
+            return Ok(());
+        }
+        let raw = commands::codex::load_codex_model_providers().await?;
+        let mut providers: Value = serde_json::from_str(&raw)
+            .map_err(|err| format!("解析 Codex 模型供应商失败: {}", err))?;
+        let Some(items) = providers.as_array_mut() else {
+            return Ok(());
+        };
+        let normalized_base_url = normalize_provider_base_url(base_url);
+        let mut changed = false;
+        for provider in items {
+            let id_matches = provider_id.is_some_and(|target_id| {
+                json_path(Some(provider), &["id"])
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    == Some(target_id)
+            });
+            let base_matches = json_path(Some(provider), &["baseUrl"])
+                .and_then(Value::as_str)
+                .map(normalize_provider_base_url)
+                == Some(normalized_base_url.clone());
+            if id_matches || base_matches {
+                if provider
+                    .get("integrationType")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    != Some(mode)
+                {
+                    if let Some(object) = provider.as_object_mut() {
+                        object.insert(
+                            "integrationType".to_string(),
+                            Value::String(mode.to_string()),
+                        );
+                        object.insert(
+                            "updatedAt".to_string(),
+                            Value::Number(serde_json::Number::from(
+                                chrono::Utc::now().timestamp_millis(),
+                            )),
+                        );
+                        changed = true;
+                    }
+                }
+                break;
+            }
+        }
+        if changed {
+            let data = serde_json::to_string_pretty(&providers)
+                .map_err(|err| format!("序列化 Codex 模型供应商失败: {}", err))?;
+            commands::codex::save_codex_model_providers(data).await?;
+        }
+        Ok(())
+    }
+
+    async fn refresh_codex_api_key_usage_for_menu(
+        app: AppHandle,
+        account_id: String,
+    ) -> Result<(), String> {
+        let mut account = modules::codex_account::list_accounts()
+            .into_iter()
+            .find(|account| account.id == account_id)
+            .ok_or_else(|| "未找到 Codex API Key 账号".to_string())?;
+        if !account.is_api_key_auth() {
+            commands::codex::refresh_codex_quota(app, account_id).await?;
+            return Ok(());
+        }
+        let api_key = account
+            .openai_api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "Codex API Key 为空".to_string())?;
+        let providers_raw = commands::codex::load_codex_model_providers().await?;
+        let providers: Vec<Value> = serde_json::from_str(&providers_raw).unwrap_or_default();
+        let provider = find_codex_provider_for_account(&providers, &account);
+        let base_url = provider
+            .as_ref()
+            .and_then(|provider| json_path(Some(provider), &["baseUrl"]))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                account
+                    .api_base_url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            })
+            .ok_or_else(|| "Codex API Base URL 为空".to_string())?
+            .to_string();
+        let integration_type = provider
+            .as_ref()
+            .and_then(|provider| json_path(Some(provider), &["integrationType"]))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let summary = commands::codex::codex_query_model_provider_usage(
+            base_url.clone(),
+            api_key.to_string(),
+            integration_type,
+        )
+        .await?;
+        let summary_value = serde_json::to_value(&summary)
+            .map_err(|err| format!("序列化 Codex API Key 用量失败: {}", err))?;
+        let now = chrono::Utc::now().timestamp();
+        let mut raw_data = account
+            .quota
+            .as_ref()
+            .and_then(|quota| quota.raw_data.clone())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if !raw_data.is_object() {
+            raw_data = serde_json::json!({});
+        }
+        if let Some(object) = raw_data.as_object_mut() {
+            object.insert("provider_usage".to_string(), summary_value);
+        }
+        account.quota = Some(crate::models::codex::CodexQuota {
+            hourly_percentage: 0,
+            hourly_reset_time: None,
+            hourly_window_minutes: None,
+            hourly_window_present: Some(false),
+            weekly_percentage: 0,
+            weekly_reset_time: None,
+            weekly_window_minutes: None,
+            weekly_window_present: Some(false),
+            reset_credits_available: None,
+            reset_credits: Vec::new(),
+            reset_credits_next_expires_at: None,
+            raw_data: Some(raw_data),
+        });
+        account.quota_error = None;
+        account.usage_updated_at = Some(now);
+        modules::codex_account::save_account(&account)?;
+        if let Some(mode) = summary.mode.as_deref() {
+            let provider_id = provider
+                .as_ref()
+                .and_then(|provider| json_path(Some(provider), &["id"]))
+                .and_then(Value::as_str);
+            save_detected_codex_provider_integration_type(provider_id, &base_url, mode).await?;
+        }
+        let _ = crate::modules::tray::update_tray_menu(&app);
+        Ok(())
+    }
+
+    async fn refresh_all_codex_usage_for_menu(app: AppHandle) -> Result<i32, String> {
+        let accounts = modules::codex_account::list_accounts();
+        let mut refreshed = 0;
+        let mut last_error: Option<String> = None;
+        for account in accounts {
+            match refresh_codex_api_key_usage_for_menu(app.clone(), account.id.clone()).await {
+                Ok(_) => refreshed += 1,
+                Err(err) => last_error = Some(err),
+            }
+        }
+        if refreshed > 0 {
+            Ok(refreshed)
+        } else {
+            Err(last_error.unwrap_or_else(|| "没有可刷新的 Codex 账号".to_string()))
+        }
+    }
+
+    async fn refresh_codex_api_service_pool_for_menu(app: AppHandle) -> Result<i32, String> {
+        let target_ids = modules::codex_local_access::api_service_refreshable_account_ids();
+        if target_ids.is_empty() {
+            return Err("API 服务账号池暂无可刷新的额度".to_string());
+        }
+        let success_count =
+            commands::codex::refresh_codex_quotas_batch(app.clone(), target_ids, Some(true))
+                .await?;
+        if success_count <= 0 {
+            return Err("API 服务账号池额度刷新失败".to_string());
+        }
+        let _ = crate::modules::tray::update_tray_menu(&app);
+        Ok(success_count)
     }
 
     fn spawn_refresh(platform: PlatformId, account_id: Option<String>) {
@@ -3857,15 +4951,24 @@ mod imp {
                         .await
                         .map(|_| 0)
                 }
+                (PlatformId::Codex, Some(account_id))
+                    if modules::codex_instance::is_api_service_bind_account_id(&account_id) =>
+                {
+                    refresh_codex_api_service_pool_for_menu(app.clone()).await
+                }
                 (PlatformId::Codex, Some(account_id)) => {
-                    commands::codex::refresh_codex_quota(app.clone(), account_id)
+                    refresh_codex_api_key_usage_for_menu(app.clone(), account_id)
                         .await
                         .map(|_| 0)
                 }
-                (PlatformId::Codex, None) => {
-                    commands::codex::refresh_current_codex_quota(app.clone())
+                (PlatformId::Codex, None) => refresh_all_codex_usage_for_menu(app.clone()).await,
+                (PlatformId::Claude, Some(account_id)) => {
+                    commands::claude::refresh_claude_quota(app.clone(), account_id)
                         .await
                         .map(|_| 0)
+                }
+                (PlatformId::Claude, None) => {
+                    commands::claude::refresh_all_claude_quotas(app.clone()).await
                 }
                 (PlatformId::GitHubCopilot, Some(account_id)) => {
                     commands::github_copilot::refresh_github_copilot_token(app.clone(), account_id)
@@ -3899,13 +5002,13 @@ mod imp {
                 (PlatformId::Cursor, None) => {
                     commands::cursor::refresh_all_cursor_tokens(app.clone()).await
                 }
-                (PlatformId::Gemini, Some(account_id)) => {
-                    commands::gemini::refresh_gemini_token(app.clone(), account_id)
+                (PlatformId::Grok, Some(account_id)) => {
+                    commands::grok::refresh_grok_account(app.clone(), account_id)
                         .await
                         .map(|_| 0)
                 }
-                (PlatformId::Gemini, None) => {
-                    commands::gemini::refresh_all_gemini_tokens(app.clone()).await
+                (PlatformId::Grok, None) => {
+                    commands::grok::refresh_all_grok_accounts(app.clone()).await
                 }
                 (PlatformId::Codebuddy, Some(account_id)) => {
                     commands::codebuddy::refresh_codebuddy_token(app.clone(), account_id)
@@ -3931,14 +5034,30 @@ mod imp {
                 (PlatformId::Qoder, None) => {
                     commands::qoder::refresh_all_qoder_tokens(app.clone()).await
                 }
-                (PlatformId::Trae, Some(account_id)) => {
-                    commands::trae::refresh_trae_token(app.clone(), account_id)
+                (PlatformId::Zcode, Some(account_id)) => {
+                    commands::zcode::refresh_zcode_account(app.clone(), account_id)
                         .await
                         .map(|_| 0)
                 }
-                (PlatformId::Trae, None) => {
-                    commands::trae::refresh_all_trae_tokens(app.clone()).await
+                (PlatformId::Zcode, None) => {
+                    commands::zcode::refresh_all_zcode_accounts(app.clone()).await
                 }
+                (
+                    PlatformId::Trae
+                    | PlatformId::TraeSolo
+                    | PlatformId::TraeCn
+                    | PlatformId::TraeSoloCn,
+                    Some(account_id),
+                ) => commands::trae::refresh_trae_token(app.clone(), account_id)
+                    .await
+                    .map(|_| 0),
+                (
+                    PlatformId::Trae
+                    | PlatformId::TraeSolo
+                    | PlatformId::TraeCn
+                    | PlatformId::TraeSoloCn,
+                    None,
+                ) => commands::trae::refresh_all_trae_tokens(app.clone()).await,
                 (PlatformId::Workbuddy, Some(account_id)) => {
                     commands::workbuddy::refresh_workbuddy_token(app.clone(), account_id)
                         .await
@@ -3970,6 +5089,9 @@ mod imp {
         unsafe {
             macos_native_menu_update_snapshot(snapshot_json.as_ptr());
         }
+        if let Some(app) = crate::get_app_handle() {
+            let _ = update_status_item(app);
+        }
     }
 
     fn spawn_switch_account(platform: PlatformId, account_id: String) {
@@ -3978,13 +5100,24 @@ mod imp {
         };
 
         tauri::async_runtime::spawn(async move {
+            let status_app = app.clone();
             let _ = match platform {
                 PlatformId::Antigravity => commands::account::switch_account(app, account_id, None)
                     .await
                     .map(|_| ()),
-                PlatformId::Codex => commands::codex::switch_codex_account(app, account_id)
+                PlatformId::Codex
+                    if modules::codex_instance::is_api_service_bind_account_id(&account_id) =>
+                {
+                    commands::codex::codex_local_access_activate(app, None)
+                        .await
+                        .map(|_| ())
+                }
+                PlatformId::Codex => commands::codex::switch_codex_account(app, account_id, None)
                     .await
                     .map(|_| ()),
+                PlatformId::Claude => {
+                    commands::claude::switch_claude_account(app, account_id).map(|_| ())
+                }
                 PlatformId::GitHubCopilot => {
                     commands::github_copilot::inject_github_copilot_to_vscode(app, account_id)
                         .await
@@ -4001,8 +5134,8 @@ mod imp {
                 PlatformId::Cursor => commands::cursor::inject_cursor_account(app, account_id)
                     .await
                     .map(|_| ()),
-                PlatformId::Gemini => {
-                    commands::gemini::inject_gemini_account(app, account_id).map(|_| ())
+                PlatformId::Grok => {
+                    commands::grok::switch_grok_account(app, account_id).map(|_| ())
                 }
                 PlatformId::Codebuddy => {
                     commands::codebuddy::inject_codebuddy_to_vscode(app, account_id)
@@ -4017,9 +5150,19 @@ mod imp {
                 PlatformId::Qoder => commands::qoder::inject_qoder_account(app, account_id)
                     .await
                     .map(|_| ()),
-                PlatformId::Trae => commands::trae::inject_trae_account(app, account_id)
-                    .await
-                    .map(|_| ()),
+                PlatformId::Zcode => {
+                    commands::zcode::inject_zcode_account(app, account_id).map(|_| ())
+                }
+                PlatformId::Trae
+                | PlatformId::TraeSolo
+                | PlatformId::TraeCn
+                | PlatformId::TraeSoloCn => commands::trae::inject_trae_account(
+                    app,
+                    account_id,
+                    Some(platform.as_str().to_string()),
+                )
+                .await
+                .map(|_| ()),
                 PlatformId::Workbuddy => {
                     commands::workbuddy::inject_workbuddy_to_vscode(app, account_id)
                         .await
@@ -4029,6 +5172,7 @@ mod imp {
                     .await
                     .map(|_| ()),
             };
+            let _ = update_status_item(&status_app);
         });
     }
 
@@ -4046,4 +5190,4 @@ mod imp {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use imp::toggle_tray_menu;
+pub(crate) use imp::{toggle_tray_menu, update_status_item};

@@ -1,0 +1,136 @@
+.codex-account-pool-health-overlay {
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.62);
+}
+
+.codex-account-pool-health-modal {
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg-surface);
+  box-shadow: 0 24px 70px rgba(2, 6, 23, 0.28);
+}
+
+.codex-account-pool-health-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.codex-account-pool-health-title-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.codex-account-pool-health-title-row svg {
+  color: var(--danger, #dc2626);
+}
+
+.codex-account-pool-health-header h3 {
+  margin: 0;
+}
+
+.codex-account-pool-health-header p {
+  max-width: 580px;
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.codex-account-pool-health-body {
+  min-height: 180px;
+  overflow-y: auto;
+}
+
+.codex-account-pool-health-list {
+  display: grid;
+  gap: 10px;
+}
+
+.codex-account-pool-health-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  background: var(--bg-card);
+}
+
+.codex-account-pool-health-item-main {
+  min-width: 0;
+}
+
+.codex-account-pool-health-item-main strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-account-pool-health-item-status {
+  display: inline-flex;
+  margin-top: 5px;
+  color: var(--danger, #dc2626);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.codex-account-pool-health-item.is-cooldown .codex-account-pool-health-item-status {
+  color: var(--warning, #b45309);
+}
+
+.codex-account-pool-health-item.is-missing .codex-account-pool-health-item-status {
+  color: var(--text-secondary);
+}
+
+.codex-account-pool-health-item p {
+  margin: 5px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.codex-account-pool-health-empty {
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-secondary);
+}
+
+.codex-account-pool-health-empty svg {
+  color: var(--success, #16a34a);
+}
+
+.codex-account-pool-health-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 560px) {
+  .codex-account-pool-health-overlay {
+    padding: 12px;
+  }
+
+  .codex-account-pool-health-item {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .codex-account-pool-health-item > button {
+    align-self: flex-end;
+  }
+}

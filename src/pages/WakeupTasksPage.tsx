@@ -37,6 +37,7 @@ import {
 import { ModalErrorMessage, useModalErrorState } from '../components/ModalErrorMessage';
 import { useEscClose } from '../hooks/useEscClose';
 import { OverviewTabsHeader } from '../components/OverviewTabsHeader';
+import { useAntigravityRuntimeTarget } from '../hooks/useAntigravityRuntimeTarget';
 
 const TASKS_STORAGE_KEY = 'agtools.wakeup.tasks';
 const WAKEUP_ENABLED_KEY = 'agtools.wakeup.enabled';
@@ -115,6 +116,8 @@ interface WakeupTask {
   createdAt: number;
   lastRunAt?: number;
   schedule: ScheduleConfig;
+  execution_mode?: 'auto' | 'confirm';
+  confirm_timeout_minutes?: number;
 }
 
 interface WakeupGeneralConfig {
@@ -659,7 +662,9 @@ const getTriggerMode = (task: WakeupTask): TriggerMode => {
 
 export function WakeupTasksPage({ onNavigate }: WakeupPageProps) {
   const { t, i18n } = useTranslation();
-  const { accounts, currentAccount, fetchAccounts, fetchCurrentAccount } = useAccountStore();
+  const antigravityRuntimeTarget = useAntigravityRuntimeTarget();
+  const { accounts, currentAccountsByTarget, fetchAccounts, fetchCurrentAccount } = useAccountStore();
+  const currentAccount = currentAccountsByTarget[antigravityRuntimeTarget] ?? null;
   const locale = i18n.language || 'zh-CN';
   const [tasks, setTasks] = useState<WakeupTask[]>(() => loadTasks(t('wakeup.defaultTaskName')));
   const [wakeupEnabled, setWakeupEnabled] = useState(() => {
@@ -711,6 +716,8 @@ export function WakeupTasksPage({ onNavigate }: WakeupPageProps) {
     'immediate',
   );
   const [formStartupDelayMinutes, setFormStartupDelayMinutes] = useState('1');
+  const [formExecutionMode, setFormExecutionMode] = useState<'auto' | 'confirm'>('auto');
+  const [formConfirmTimeoutMinutes, setFormConfirmTimeoutMinutes] = useState(5);
   const {
     message: formError,
     scrollKey: formErrorScrollKey,
@@ -1011,8 +1018,8 @@ export function WakeupTasksPage({ onNavigate }: WakeupPageProps) {
 
   useEffect(() => {
     fetchAccounts();
-    fetchCurrentAccount();
-  }, [fetchAccounts, fetchCurrentAccount]);
+    fetchCurrentAccount(antigravityRuntimeTarget);
+  }, [antigravityRuntimeTarget, fetchAccounts, fetchCurrentAccount]);
 
   useEffect(() => {
     const syncMode = () => {
@@ -1638,6 +1645,8 @@ export function WakeupTasksPage({ onNavigate }: WakeupPageProps) {
     setFormCrontabError('');
     setFormStartupDelayMode('immediate');
     setFormStartupDelayMinutes('1');
+    setFormExecutionMode('auto');
+    setFormConfirmTimeoutMinutes(5);
     setFormTimeWindowEnabled(false);
     setFormTimeWindowStart('09:00');
     setFormTimeWindowEnd('18:00');
@@ -1685,6 +1694,8 @@ export function WakeupTasksPage({ onNavigate }: WakeupPageProps) {
     setFormTimeWindowStart(schedule.timeWindowStart || '09:00');
     setFormTimeWindowEnd(schedule.timeWindowEnd || '18:00');
     setFormFallbackTimes(schedule.fallbackTimes?.length ? [...schedule.fallbackTimes] : ['07:00']);
+    setFormExecutionMode(task.execution_mode || 'auto');
+    setFormConfirmTimeoutMinutes(task.confirm_timeout_minutes || 5);
     setCustomDailyTime('');
     setCustomWeeklyTime('');
     setCustomFallbackTime('');
@@ -1947,19 +1958,8 @@ export function WakeupTasksPage({ onNavigate }: WakeupPageProps) {
         const oldValue = config.auto_refresh_minutes;
         
         // 更新配置
-        await invoke('save_general_config', {
-          language: config.language,
-          theme: config.theme,
+        await invoke('save_refresh_interval_config', {
           autoRefreshMinutes: minMinutes,
-          codexAutoRefreshMinutes: config.codex_auto_refresh_minutes ?? 10,
-          closeBehavior: config.close_behavior || 'ask',
-          opencodeAppPath: config.opencode_app_path ?? '',
-          antigravityAppPath: config.antigravity_app_path ?? '',
-          codexAppPath: config.codex_app_path ?? '',
-          vscodeAppPath: config.vscode_app_path ?? '',
-          opencodeSyncOnSwitch: config.opencode_sync_on_switch ?? false,
-          opencodeAuthOverwriteOnSwitch: config.opencode_auth_overwrite_on_switch ?? false,
-          codexLaunchOnSwitch: config.codex_launch_on_switch ?? true,
         });
         
         // 触发配置更新事件（让 useAutoRefresh 重新设置定时器）
@@ -2111,6 +2111,8 @@ export function WakeupTasksPage({ onNavigate }: WakeupPageProps) {
         ? tasksRef.current.find((task) => task.id === editingTaskId)?.lastRunAt
         : undefined,
       schedule,
+      execution_mode: formExecutionMode,
+      confirm_timeout_minutes: formExecutionMode === 'confirm' ? formConfirmTimeoutMinutes : 5,
     };
 
     setTasks((prev) => {
@@ -2362,7 +2364,7 @@ export function WakeupTasksPage({ onNavigate }: WakeupPageProps) {
       )}
 
       {showTestModal && (
-        <div className="modal-overlay" onClick={closeTestModal}>
+        <div className="modal-overlay">
           <div
             className="modal wakeup-modal wakeup-test-modal"
             onClick={(event) => event.stopPropagation()}
@@ -2560,7 +2562,7 @@ export function WakeupTasksPage({ onNavigate }: WakeupPageProps) {
       )}
 
       {showHistoryModal && (
-        <div className="modal-overlay" onClick={() => setShowHistoryModal(false)}>
+        <div className="modal-overlay">
           <div
             className="modal wakeup-modal wakeup-history-modal"
             onClick={(event) => event.stopPropagation()}
@@ -2637,7 +2639,7 @@ export function WakeupTasksPage({ onNavigate }: WakeupPageProps) {
       )}
 
       {showModal && (
-        <div className="modal-overlay" onClick={() => setShowModal(false)}>
+        <div className="modal-overlay">
           <div className="modal modal-lg wakeup-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header">
               <button className="btn btn-secondary icon-only" onClick={() => setShowModal(false)} title={t('common.back', '返回')} aria-label={t('common.back', '返回')}><ChevronLeft size={14} /></button>
@@ -3245,6 +3247,40 @@ export function WakeupTasksPage({ onNavigate }: WakeupPageProps) {
                       </div>
                     </div>
                   )}
+                </div>
+              )}
+
+              <div className="wakeup-form-group">
+                <label>{t('wakeup.form.executionMode', '执行模式')}</label>
+                <select
+                  className="wakeup-select"
+                  value={formExecutionMode}
+                  onChange={(event) =>
+                    setFormExecutionMode(event.target.value as 'auto' | 'confirm')
+                  }
+                >
+                  <option value="auto">{t('wakeup.form.executionModeAuto', '直接执行')}</option>
+                  <option value="confirm">{t('wakeup.form.executionModeConfirm', '需要确认')}</option>
+                </select>
+              </div>
+
+              {formExecutionMode === 'confirm' && (
+                <div className="wakeup-form-group">
+                  <label>{t('wakeup.form.confirmTimeout', '确认超时（分钟）')}</label>
+                  <div className="wakeup-input-with-unit">
+                    <input
+                      className="wakeup-input"
+                      type="number"
+                      min={1}
+                      max={60}
+                      value={formConfirmTimeoutMinutes}
+                      onChange={(event) => {
+                        const value = Math.min(60, Math.max(1, Number(event.target.value)));
+                        setFormConfirmTimeoutMinutes(value);
+                      }}
+                    />
+                    <span>{t('settings.general.minutes')}</span>
+                  </div>
                 </div>
               )}
 

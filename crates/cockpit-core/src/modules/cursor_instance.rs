@@ -101,7 +101,7 @@ pub fn get_default_instances_root_dir() -> Result<PathBuf, String> {
     }
 
     #[allow(unreachable_code)]
-    Err("Cursor 多开实例仅支持 macOS、Windows 和 Linux".to_string())
+    Err("Cursor 应用多开仅支持 macOS、Windows 和 Linux".to_string())
 }
 
 pub fn get_instance_defaults() -> Result<InstanceDefaults, String> {
@@ -1094,9 +1094,13 @@ pub fn detect_and_save_cursor_launch_path(force: bool) -> Option<String> {
     let detected = detect_cursor_exec_path()?;
     let normalized = normalize_cursor_path_for_config(&detected);
     if current.cursor_app_path != normalized {
-        let mut next = current.clone();
-        next.cursor_app_path = normalized.clone();
-        if let Err(err) = modules::config::save_user_config(&next) {
+        let path_to_save = normalized.clone();
+        if let Err(err) = modules::config::patch_user_config(move |config| {
+            if force || normalize_custom_path(&config.cursor_app_path).is_none() {
+                config.cursor_app_path = path_to_save;
+            }
+            Ok(())
+        }) {
             modules::logger::log_warn(&format!("保存 Cursor 启动路径失败（已忽略）: {}", err));
         }
     }
@@ -1269,7 +1273,7 @@ pub fn start_cursor_with_args_with_new_window(
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         let _ = (target, extra_args, use_new_window);
-        Err("Cursor 多开实例仅支持 macOS、Windows 和 Linux".to_string())
+        Err("Cursor 应用多开仅支持 macOS、Windows 和 Linux".to_string())
     }
 }
 

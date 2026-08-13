@@ -101,7 +101,7 @@ pub fn get_default_instances_root_dir() -> Result<PathBuf, String> {
     }
 
     #[allow(unreachable_code)]
-    Err("Cursor 多开实例仅支持 macOS、Windows 和 Linux".to_string())
+    Err("Cursor 应用多开仅支持 macOS、Windows 和 Linux".to_string())
 }
 
 pub fn get_instance_defaults() -> Result<InstanceDefaults, String> {
@@ -873,6 +873,8 @@ fn focus_window_by_pid(pid: u32) -> Result<(), String> {
 fn focus_window_by_pid(pid: u32) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
 
+    let _spawn_guard = crate::modules::app_lifecycle::acquire_process_spawn_guard("PowerShell")
+        .map_err(|error| error.to_string())?;
     let command = format!(
         r#"$targetPid={pid};$h=[IntPtr]::Zero;for($i=0;$i -lt 20;$i++){{$p=Get-Process -Id $targetPid -ErrorAction Stop;$h=$p.MainWindowHandle;if ($h -ne 0) {{ break }};Start-Sleep -Milliseconds 150}};if ($h -eq 0) {{ throw 'MAIN_WINDOW_HANDLE_EMPTY' }};Add-Type @'
 using System;
@@ -921,11 +923,11 @@ pub fn focus_cursor_instance(
 }
 
 fn normalize_custom_path(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
+    let normalized = modules::process::normalize_windows_user_facing_path(value);
+    if normalized.is_empty() {
         None
     } else {
-        Some(trimmed.to_string())
+        Some(normalized)
     }
 }
 
@@ -1077,27 +1079,34 @@ fn path_looks_like_cursor(path: &Path) -> bool {
 fn normalize_cursor_path_for_config(path: &Path) -> String {
     #[cfg(target_os = "macos")]
     {
-        return normalize_macos_app_root(path)
-            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        return normalize_macos_app_root(path).unwrap_or_else(|| {
+            modules::process::normalize_windows_user_facing_path(&path.to_string_lossy())
+        });
     }
     #[cfg(not(target_os = "macos"))]
     {
-        path.to_string_lossy().to_string()
+        modules::process::normalize_windows_user_facing_path(&path.to_string_lossy())
     }
 }
 
 pub fn detect_and_save_cursor_launch_path(force: bool) -> Option<String> {
     let current = modules::config::get_user_config();
-    if !force && normalize_custom_path(&current.cursor_app_path).is_some() {
-        return Some(current.cursor_app_path);
+    if !force {
+        if let Some(configured) = normalize_custom_path(&current.cursor_app_path) {
+            return Some(configured);
+        }
     }
 
     let detected = detect_cursor_exec_path()?;
     let normalized = normalize_cursor_path_for_config(&detected);
     if current.cursor_app_path != normalized {
-        let mut next = current.clone();
-        next.cursor_app_path = normalized.clone();
-        if let Err(err) = modules::config::save_user_config(&next) {
+        let path = normalized.clone();
+        if let Err(err) = modules::config::patch_user_config(move |config| {
+            if force || normalize_custom_path(&config.cursor_app_path).is_none() {
+                config.cursor_app_path = path;
+            }
+            Ok(())
+        }) {
             modules::logger::log_warn(&format!("保存 Cursor 启动路径失败（已忽略）: {}", err));
         }
     }
@@ -1270,7 +1279,7 @@ pub fn start_cursor_with_args_with_new_window(
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         let _ = (target, extra_args, use_new_window);
-        Err("Cursor 多开实例仅支持 macOS、Windows 和 Linux".to_string())
+        Err("Cursor 应用多开仅支持 macOS、Windows 和 Linux".to_string())
     }
 }
 

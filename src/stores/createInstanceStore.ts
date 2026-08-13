@@ -35,6 +35,7 @@ export type InstanceStoreState = {
     followLocalAccount?: boolean;
     launchMode?: InstanceLaunchMode;
     appSpeed?: CodexAppSpeed;
+    autoSyncThreads?: boolean;
   }) => Promise<InstanceProfile>;
   deleteInstance: (instanceId: string) => Promise<void>;
   startInstance: (instanceId: string) => Promise<InstanceProfile>;
@@ -66,6 +67,7 @@ type InstanceService = {
     followLocalAccount?: boolean;
     launchMode?: InstanceLaunchMode;
     appSpeed?: CodexAppSpeed;
+    autoSyncThreads?: boolean;
   }) => Promise<InstanceProfile>;
   deleteInstance: (instanceId: string) => Promise<void>;
   startInstance: (instanceId: string) => Promise<InstanceProfile>;
@@ -81,11 +83,13 @@ export function createInstanceStore(
   const loadCachedInstances = () => {
     try {
       const raw = localStorage.getItem(cacheKey);
-      if (!raw) return [];
+      if (!raw) return { instances: [], loaded: false };
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? (parsed as InstanceProfile[]) : [];
+      return Array.isArray(parsed)
+        ? { instances: parsed as InstanceProfile[], loaded: true }
+        : { instances: [], loaded: false };
     } catch {
-      return [];
+      return { instances: [], loaded: false };
     }
   };
 
@@ -97,16 +101,26 @@ export function createInstanceStore(
     }
   };
 
+  const cachedInstances = loadCachedInstances();
+  let hasLoadedInstances = cachedInstances.loaded;
+
   return create<InstanceStoreState>((set, get) => ({
-    instances: loadCachedInstances(),
+    instances: cachedInstances.instances,
     defaults: null,
     loading: false,
     error: null,
 
     fetchInstances: async () => {
-      set({ loading: true, error: null });
+      const showInitialLoading =
+        !hasLoadedInstances && get().instances.length === 0;
+      set(
+        showInitialLoading
+          ? { loading: true, error: null }
+          : { error: null },
+      );
       try {
         const instances = await service.listInstances();
+        hasLoadedInstances = true;
         set({ instances, loading: false });
         persistInstancesCache(instances);
       } catch (e) {
@@ -118,6 +132,7 @@ export function createInstanceStore(
       set({ error: null });
       try {
         const instances = await service.listInstances();
+        hasLoadedInstances = true;
         set({ instances });
         persistInstancesCache(instances);
         return instances;
@@ -154,8 +169,18 @@ export function createInstanceStore(
     },
 
     startInstance: async (instanceId) => {
+      const flowStartedAt = performance.now();
+      console.info("[Instance Start][Store] startInstance started", { instanceId });
       const instance = await service.startInstance(instanceId);
+      console.info("[Instance Start][Store] service.startInstance finished", {
+        instanceId,
+        elapsedMs: Math.round(performance.now() - flowStartedAt),
+      });
       await get().fetchInstances();
+      console.info("[Instance Start][Store] fetchInstances after start finished", {
+        instanceId,
+        elapsedMs: Math.round(performance.now() - flowStartedAt),
+      });
       return instance;
     },
 

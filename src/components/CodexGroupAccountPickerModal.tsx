@@ -147,7 +147,7 @@ export function CodexGroupAccountPickerModal({
   if (!isOpen || !targetGroup) return null
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal group-account-picker-modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-header">
           <h2 className="group-account-picker-title">

@@ -8,6 +8,7 @@ import {
   importAllAccountsFromTransferJson,
 } from './accountTransferService';
 import { ALL_PLATFORM_IDS, PlatformId } from '../types/platform';
+import * as claudeService from './claudeService';
 import { getGroupSettings, GroupSettings, saveGroupSettings } from './groupService';
 import {
   AccountGroup,
@@ -51,13 +52,15 @@ import * as githubCopilotService from './githubCopilotService';
 import * as windsurfService from './windsurfService';
 import * as kiroService from './kiroService';
 import * as cursorService from './cursorService';
-import * as geminiService from './geminiService';
+import * as grokService from './grokService';
 import * as codebuddyService from './codebuddyService';
 import * as codebuddyCnService from './codebuddyCnService';
 import * as qoderService from './qoderService';
+import * as zcodeService from './zcodeService';
 import * as traeService from './traeService';
 import * as workbuddyService from './workbuddyService';
 import type { InstanceLaunchMode } from '../types/instance';
+import type { ClaudeAccount } from '../types/claude';
 
 const DATA_TRANSFER_SCHEMA = 'cockpit-tools.data-transfer';
 const DATA_TRANSFER_VERSION = 1;
@@ -71,10 +74,11 @@ const INSTANCE_PLATFORMS = [
   'windsurf',
   'kiro',
   'cursor',
-  'gemini',
+  'grok',
   'codebuddy',
   'codebuddy_cn',
   'qoder',
+  'zcode',
   'trae',
   'workbuddy',
 ] as const;
@@ -85,14 +89,27 @@ type AccountLoader = () => Promise<TransferAccountRecord[]>;
 type LegacyFormat = 'data_bundle' | 'account_bundle' | 'legacy_account_json';
 type DataTransferWarningCode = 'accounts_section_missing' | 'config_section_missing';
 
+async function listClaudeManagerTransferAccounts(): Promise<TransferAccountRecord[]> {
+  const accounts = await claudeService.listClaudeAccounts();
+  const seen = new Set<string>();
+  return accounts.filter((account: ClaudeAccount) => {
+    if (!account.id || seen.has(account.id)) {
+      return false;
+    }
+    seen.add(account.id);
+    return true;
+  }) as unknown as TransferAccountRecord[];
+}
+
 interface RawUserConfig extends Record<string, unknown> {
   auto_switch_selected_account_ids?: string[];
   codex_auto_switch_selected_account_ids?: string[];
+  webdav_sync_password?: string;
 }
 
 interface ExportedUserConfig extends Omit<
   RawUserConfig,
-  'auto_switch_selected_account_ids' | 'codex_auto_switch_selected_account_ids'
+  'auto_switch_selected_account_ids' | 'codex_auto_switch_selected_account_ids' | 'webdav_sync_password'
 > {
   auto_switch_selected_account_refs: DataTransferAccountRef[];
   codex_auto_switch_selected_account_refs: DataTransferAccountRef[];
@@ -210,6 +227,14 @@ export interface DataTransferConfigBundle {
   antigravity_wakeup: ExportedAntigravityWakeupState;
   codex_wakeup: ExportedCodexWakeupState;
   current_account_refresh_minutes: CurrentAccountRefreshMinutesMap;
+  verification_records?: unknown;
+  verification_history?: unknown;
+  platform_layout_config?: unknown;
+  platform_layout_custom_icons?: unknown;
+  compact_group_order?: unknown;
+  compact_group_colors?: unknown;
+  compact_hidden_groups?: unknown;
+  app_language?: string;
 }
 
 export interface DataTransferBundle {
@@ -254,18 +279,24 @@ const ACCOUNT_LOADERS: Record<PlatformId, AccountLoader> = {
   antigravity_ide: async () =>
     (await accountService.listAccounts()) as unknown as TransferAccountRecord[],
   codex: async () => (await codexService.listCodexAccounts()) as unknown as TransferAccountRecord[],
+  codex_api_service: async () => [],
+  claude_manager: listClaudeManagerTransferAccounts,
   zed: async () => (await zedService.listZedAccounts()) as unknown as TransferAccountRecord[],
   'github-copilot': async () =>
     (await githubCopilotService.listGitHubCopilotAccounts()) as unknown as TransferAccountRecord[],
   windsurf: async () => (await windsurfService.listWindsurfAccounts()) as unknown as TransferAccountRecord[],
   kiro: async () => (await kiroService.listKiroAccounts()) as unknown as TransferAccountRecord[],
   cursor: async () => (await cursorService.listCursorAccounts()) as unknown as TransferAccountRecord[],
-  gemini: async () => (await geminiService.listGeminiAccounts()) as unknown as TransferAccountRecord[],
+  grok: async () => (await grokService.listGrokAccounts()) as unknown as TransferAccountRecord[],
   codebuddy: async () => (await codebuddyService.listCodebuddyAccounts()) as unknown as TransferAccountRecord[],
   codebuddy_cn: async () =>
     (await codebuddyCnService.listCodebuddyCnAccounts()) as unknown as TransferAccountRecord[],
   qoder: async () => (await qoderService.listQoderAccounts()) as unknown as TransferAccountRecord[],
+  zcode: async () => (await zcodeService.listZcodeAccounts()) as unknown as TransferAccountRecord[],
   trae: async () => (await traeService.listTraeAccounts()) as unknown as TransferAccountRecord[],
+  trae_solo: async () => (await traeService.listTraeAccounts()) as unknown as TransferAccountRecord[],
+  trae_cn: async () => (await traeService.listTraeAccounts()) as unknown as TransferAccountRecord[],
+  trae_solo_cn: async () => (await traeService.listTraeAccounts()) as unknown as TransferAccountRecord[],
   workbuddy: async () => (await workbuddyService.listWorkbuddyAccounts()) as unknown as TransferAccountRecord[],
 };
 
@@ -273,16 +304,22 @@ const LEGACY_IMPORTERS: Record<PlatformId, ((jsonContent: string) => Promise<unk
   antigravity: accountService.importFromJson,
   antigravity_ide: accountService.importFromJson,
   codex: codexService.importCodexFromJson,
+  codex_api_service: undefined,
+  claude_manager: claudeService.importClaudeFromJson,
   zed: zedService.importZedFromJson,
   'github-copilot': githubCopilotService.importGitHubCopilotFromJson,
   windsurf: windsurfService.importWindsurfFromJson,
   kiro: kiroService.importKiroFromJson,
   cursor: cursorService.importCursorFromJson,
-  gemini: geminiService.importGeminiFromJson,
+  grok: undefined,
   codebuddy: codebuddyService.importCodebuddyFromJson,
   codebuddy_cn: codebuddyCnService.importCodebuddyCnFromJson,
   qoder: qoderService.importQoderFromJson,
+  zcode: zcodeService.importZcodeFromJson,
   trae: traeService.importTraeFromJson,
+  trae_solo: traeService.importTraeFromJson,
+  trae_cn: traeService.importTraeFromJson,
+  trae_solo_cn: traeService.importTraeFromJson,
   workbuddy: workbuddyService.importWorkbuddyFromJson,
 };
 
@@ -331,6 +368,26 @@ function parseJsonOrThrow(jsonContent: string, errorCode: string): unknown {
   }
 }
 
+function safeGetLocalStorageItem(key: string): unknown {
+  const value = localStorage.getItem(key);
+  if (!value) return undefined;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function safeSetLocalStorageItem(key: string, value: unknown): void {
+  if (value === null || value === undefined) {
+    localStorage.removeItem(key);
+  } else if (typeof value === 'string') {
+    localStorage.setItem(key, value);
+  } else {
+    localStorage.setItem(key, JSON.stringify(value));
+  }
+}
+
 function ensureSelection(selection: DataTransferSelection): void {
   if (!selection.includeAccounts && !selection.includeConfig) {
     throw new Error('transfer_selection_required');
@@ -375,12 +432,11 @@ function buildAccountRegistry(
 }
 
 async function loadAccountRegistry(): Promise<AccountRegistry> {
-  const entries = await Promise.all(
-    ALL_PLATFORM_IDS.map(async (platform) => {
-      const accounts = await ACCOUNT_LOADERS[platform]();
-      return [platform, accounts] as const;
-    }),
-  );
+  const entries: Array<readonly [PlatformId, TransferAccountRecord[]]> = [];
+  for (const platform of ALL_PLATFORM_IDS) {
+    const accounts = await ACCOUNT_LOADERS[platform]();
+    entries.push([platform, accounts] as const);
+  }
 
   return buildAccountRegistry(entries);
 }
@@ -418,14 +474,26 @@ function buildAccountRef(platform: PlatformId, account: TransferAccountRecord): 
       ref.loginProvider = normalizeString(account.login_provider) ?? undefined;
       break;
     case 'cursor':
-    case 'gemini':
       ref.email = normalizeString(account.email) ?? undefined;
       ref.authId = normalizeString(account.auth_id) ?? undefined;
       break;
+    case 'grok':
+      ref.email = normalizeString(account.email) ?? undefined;
+      ref.userId =
+        normalizeString(account.user_id) ?? normalizeString(account.principal_id) ?? undefined;
+      break;
     case 'qoder':
     case 'trae':
+    case 'trae_solo':
+    case 'trae_cn':
+    case 'trae_solo_cn':
       ref.email = normalizeString(account.email) ?? undefined;
       ref.userId = normalizeString(account.user_id) ?? undefined;
+      break;
+    case 'zcode':
+      ref.email = normalizeString(account.email) ?? undefined;
+      ref.userId = normalizeString(account.user_id) ?? undefined;
+      ref.loginProvider = normalizeString(account.provider) ?? undefined;
       break;
     case 'codebuddy':
     case 'codebuddy_cn':
@@ -487,14 +555,29 @@ function scoreAccountRef(ref: DataTransferAccountRef, account: TransferAccountRe
       addStringScore(ref.loginProvider, account.login_provider, 4);
       break;
     case 'cursor':
-    case 'gemini':
       addStringScore(ref.authId, account.auth_id, 24);
+      addStringScore(ref.email, account.email, 10);
+      break;
+    case 'grok':
+      addStringScore(ref.userId, account.user_id ?? account.principal_id, 24);
       addStringScore(ref.email, account.email, 10);
       break;
     case 'qoder':
     case 'trae':
+    case 'trae_solo':
+    case 'trae_cn':
+    case 'trae_solo_cn':
       addStringScore(ref.userId, account.user_id, 24);
       addStringScore(ref.email, account.email, 10);
+      break;
+    case 'zcode':
+      if (ref.loginProvider && !stringEquals(ref.loginProvider, account.provider)) return 0;
+      if (ref.userId && !stringEquals(ref.userId, account.user_id)) return 0;
+      if (ref.email && !stringEquals(ref.email, account.email)) return 0;
+      if (!ref.userId && !ref.email) return 0;
+      addStringScore(ref.userId, account.user_id, 24);
+      addStringScore(ref.email, account.email, 10);
+      addStringScore(ref.loginProvider, account.provider, 4);
       break;
     case 'codebuddy':
     case 'codebuddy_cn':
@@ -594,7 +677,12 @@ function resolveAccountRefsToIds(
 }
 
 function exportUserConfig(config: RawUserConfig, registry: AccountRegistry): ExportedUserConfig {
-  const { auto_switch_selected_account_ids, codex_auto_switch_selected_account_ids, ...rest } = config;
+  const {
+    auto_switch_selected_account_ids,
+    codex_auto_switch_selected_account_ids,
+    webdav_sync_password: _webdavSyncPassword,
+    ...rest
+  } = config;
 
   return {
     ...rest,
@@ -671,6 +759,7 @@ function exportCodexAccountGroups(
     name: group.name,
     sortOrder: group.sortOrder,
     createdAt: group.createdAt,
+    quotaAutoRefreshMinutes: group.quotaAutoRefreshMinutes ?? null,
     accountRefs: mapAccountIdsToRefs('codex', group.accountIds, registry),
   }));
 }
@@ -688,6 +777,13 @@ function importCodexAccountGroups(
       name: group.name,
       sortOrder: group.sortOrder,
       createdAt: group.createdAt,
+      // 兼容旧导出里的 boolean；新字段优先
+      quotaAutoRefreshMinutes:
+        (group as { quotaAutoRefreshMinutes?: number | null }).quotaAutoRefreshMinutes !== undefined
+          ? (group as { quotaAutoRefreshMinutes?: number | null }).quotaAutoRefreshMinutes ?? null
+          : (group as { quotaRefreshEnabled?: boolean }).quotaRefreshEnabled === false
+            ? -1
+            : null,
       accountIds: resolved.ids,
     };
   });
@@ -938,12 +1034,14 @@ async function exportConfigBundle(registry: AccountRegistry): Promise<DataTransf
     listCodexModelProviders(),
     getCodexWakeupState(),
     getCodexWakeupCliStatus(),
-    Promise.all(
-      INSTANCE_PLATFORMS.map(async (platform) => {
+    (async () => {
+      const entries: Array<readonly [InstancePlatform, ExportedInstanceStore]> = [];
+      for (const platform of INSTANCE_PLATFORMS) {
         const store = await invoke<RawInstanceStore>('data_transfer_get_instance_store', { platform });
-        return [platform, exportInstanceStore(platform, store, registry)] as const;
-      }),
-    ),
+        entries.push([platform, exportInstanceStore(platform, store, registry)] as const);
+      }
+      return entries;
+    })(),
   ]);
 
   return {
@@ -965,6 +1063,14 @@ async function exportConfigBundle(registry: AccountRegistry): Promise<DataTransf
       },
     ),
     current_account_refresh_minutes: loadCurrentAccountRefreshMinutesMap(),
+    verification_records: safeGetLocalStorageItem('agtools.mfa.vault.v2'),
+    verification_history: safeGetLocalStorageItem('agtools.mfa.vault.history'),
+    platform_layout_config: safeGetLocalStorageItem('agtools.platform_layout.v1'),
+    platform_layout_custom_icons: safeGetLocalStorageItem('agtools.platform_layout.custom_icons.v1'),
+    compact_group_order: safeGetLocalStorageItem('compactGroupOrder'),
+    compact_group_colors: safeGetLocalStorageItem('compactGroupColors'),
+    compact_hidden_groups: safeGetLocalStorageItem('compactHiddenGroups'),
+    app_language: localStorage.getItem('app-language') ?? undefined,
   };
 }
 
@@ -1046,6 +1152,24 @@ async function importConfigBundle(bundle: DataTransferConfigBundle): Promise<Dat
     normalizeString(codexWakeupImport.state.runtime.node_path) ?? undefined,
   );
 
+  const legacyRecordsKey = ['mfa', 'vault', 'records'].join('_');
+  const legacyRecords = (bundle as Record<string, any>)[legacyRecordsKey];
+  const records = bundle.verification_records !== undefined ? bundle.verification_records : legacyRecords;
+  if (records !== undefined) safeSetLocalStorageItem('agtools.mfa.vault.v2', records);
+
+  const legacyHistoryKey = ['mfa', 'vault', 'history'].join('_');
+  const legacyHistory = (bundle as Record<string, any>)[legacyHistoryKey];
+  const history = bundle.verification_history !== undefined ? bundle.verification_history : legacyHistory;
+  if (history !== undefined) safeSetLocalStorageItem('agtools.mfa.vault.history', history);
+  if (bundle.platform_layout_config !== undefined) safeSetLocalStorageItem('agtools.platform_layout.v1', bundle.platform_layout_config);
+  if (bundle.platform_layout_custom_icons !== undefined) safeSetLocalStorageItem('agtools.platform_layout.custom_icons.v1', bundle.platform_layout_custom_icons);
+  if (bundle.compact_group_order !== undefined) safeSetLocalStorageItem('compactGroupOrder', bundle.compact_group_order);
+  if (bundle.compact_group_colors !== undefined) safeSetLocalStorageItem('compactGroupColors', bundle.compact_group_colors);
+  if (bundle.compact_hidden_groups !== undefined) safeSetLocalStorageItem('compactHiddenGroups', bundle.compact_hidden_groups);
+  if (bundle.app_language !== undefined) {
+    localStorage.setItem('app-language', bundle.app_language);
+  }
+
   saveCurrentAccountRefreshMinutesMap(bundle.current_account_refresh_minutes);
   window.dispatchEvent(new Event('config-updated'));
   window.dispatchEvent(new Event('wakeup-tasks-updated'));
@@ -1085,6 +1209,13 @@ function detectLegacyPlatform(value: unknown): PlatformId | null {
   if (id?.startsWith('codebuddy_cn_')) return 'codebuddy_cn';
   if (id?.startsWith('workbuddy_')) return 'workbuddy';
   if (id?.startsWith('codebuddy_')) return 'codebuddy';
+  if (
+    id?.startsWith('zcode_') ||
+    'zcode_jwt_token' in sample ||
+    (sample.auth_mode === 'api_key' && 'api_key' in sample && 'provider' in sample)
+  ) {
+    return 'zcode';
+  }
 
   if ('tokens' in sample || 'OPENAI_API_KEY' in sample || 'auth_mode' in sample || 'authMode' in sample) {
     return 'codex';
@@ -1104,9 +1235,6 @@ function detectLegacyPlatform(value: unknown): PlatformId | null {
   if ('kiro_auth_token_raw' in sample || 'kiro_usage_raw' in sample || 'login_provider' in sample) {
     return 'kiro';
   }
-  if ('gemini_auth_raw' in sample || 'gemini_usage_raw' in sample || 'selected_auth_type' in sample) {
-    return 'gemini';
-  }
   if ('cursor_auth_raw' in sample || 'cursor_usage_raw' in sample || 'membership_type' in sample) {
     return 'cursor';
   }
@@ -1115,6 +1243,9 @@ function detectLegacyPlatform(value: unknown): PlatformId | null {
   }
   if ('auth_user_info_raw' in sample || 'auth_credit_usage_raw' in sample || 'credits_usage_percent' in sample) {
     return 'qoder';
+  }
+  if ('zcode_jwt_token' in sample || ('quota_raw' in sample && 'provider' in sample)) {
+    return 'zcode';
   }
   if ('uid' in sample || 'enterprise_id' in sample || 'dosage_notify_code' in sample) {
     if (stringContains(sample.domain, 'workbuddy')) return 'workbuddy';

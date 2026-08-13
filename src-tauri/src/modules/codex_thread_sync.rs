@@ -447,11 +447,7 @@ fn is_instance_running(
     instance: &CodexSyncInstance,
     process_entries: &[(u32, Option<String>)],
 ) -> bool {
-    let codex_home = if instance.id == DEFAULT_INSTANCE_ID {
-        None
-    } else {
-        instance.data_dir.to_str()
-    };
+    let codex_home = instance.data_dir.to_str();
     modules::process::resolve_codex_pid_from_entries(instance.last_pid, codex_home, process_entries)
         .is_some()
 }
@@ -1119,13 +1115,9 @@ fn session_index_workspace_root(entry: &JsonValue) -> Option<String> {
 }
 
 fn normalize_workspace_root(value: &str) -> Option<String> {
-    let mut value = value.trim();
-    if value.is_empty() {
-        return None;
-    }
-    if let Some(stripped) = value.strip_prefix("\\\\?\\") {
-        value = stripped;
-    }
+    let normalized_desktop_path =
+        modules::codex_session_visibility::to_desktop_workspace_path(value)?;
+    let value = normalized_desktop_path.as_str();
 
     let is_windows_path = value.starts_with("\\\\")
         || value
@@ -1613,6 +1605,10 @@ mod tests {
         assert_eq!(
             normalize_workspace_root(r"\\?\C:\Users\demo\project\").as_deref(),
             Some(r"C:\Users\demo\project")
+        );
+        assert_eq!(
+            normalize_workspace_root(r"\\?\UNC\server\share\project\").as_deref(),
+            Some(r"\\server\share\project")
         );
         assert_eq!(
             normalize_workspace_root("C:/Users/demo/project/").as_deref(),

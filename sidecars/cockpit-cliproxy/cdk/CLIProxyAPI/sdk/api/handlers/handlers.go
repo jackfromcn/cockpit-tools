@@ -188,6 +188,15 @@ func StreamingBootstrapRetries(cfg *config.SDKConfig) int {
 	return retries
 }
 
+func streamingBootstrapRetryDelay(cfg *config.SDKConfig, attempt int) time.Duration {
+	if cfg == nil {
+		return 0
+	}
+	base := time.Duration(cfg.Streaming.BootstrapRetryBaseDelayMS) * time.Millisecond
+	max := time.Duration(cfg.Streaming.BootstrapRetryMaxDelayMS) * time.Millisecond
+	return util.BackoffDelay(attempt, base, max)
+}
+
 // PassthroughHeadersEnabled returns whether upstream response headers should be forwarded to clients.
 // Default is false.
 func PassthroughHeadersEnabled(cfg *config.SDKConfig) bool {
@@ -580,7 +589,7 @@ func (h *BaseAPIHandler) executeWithAuthManager(ctx context.Context, handlerType
 	opts.Metadata = reqMeta
 	resp, err := h.AuthManager.Execute(ctx, providers, req, opts)
 	if err != nil {
-		err = enrichAuthSelectionError(err, providers, normalizedModel)
+		err = enrichAuthSelectionError(err, providers, normalizedModel, h.Cfg, headersFromContext(ctx).Get("Accept-Language"))
 		status := http.StatusInternalServerError
 		if se, ok := err.(interface{ StatusCode() int }); ok && se != nil {
 			if code := se.StatusCode(); code > 0 {
@@ -629,7 +638,7 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 	opts.Metadata = reqMeta
 	resp, err := h.AuthManager.ExecuteCount(ctx, providers, req, opts)
 	if err != nil {
-		err = enrichAuthSelectionError(err, providers, normalizedModel)
+		err = enrichAuthSelectionError(err, providers, normalizedModel, h.Cfg, headersFromContext(ctx).Get("Accept-Language"))
 		status := http.StatusInternalServerError
 		if se, ok := err.(interface{ StatusCode() int }); ok && se != nil {
 			if code := se.StatusCode(); code > 0 {
@@ -691,7 +700,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManager(ctx context.Context, handl
 	opts.Metadata = reqMeta
 	streamResult, err := h.AuthManager.ExecuteStream(ctx, providers, req, opts)
 	if err != nil {
-		err = enrichAuthSelectionError(err, providers, normalizedModel)
+		err = enrichAuthSelectionError(err, providers, normalizedModel, h.Cfg, headersFromContext(ctx).Get("Accept-Language"))
 		errChan := make(chan *interfaces.ErrorMessage, 1)
 		status := http.StatusInternalServerError
 		if se, ok := err.(interface{ StatusCode() int }); ok && se != nil {
@@ -792,7 +801,11 @@ func (h *BaseAPIHandler) executeStreamWithAuthManager(ctx context.Context, handl
 					// retry a few times (to allow auth rotation / transient recovery) and then attempt model fallback.
 					if !sentPayload {
 						if bootstrapRetries < maxBootstrapRetries && bootstrapEligible(streamErr) {
-							bootstrapRetries++
+							nextRetry := bootstrapRetries + 1
+							if errWait := util.SleepContext(ctx, streamingBootstrapRetryDelay(h.Cfg, nextRetry)); errWait != nil {
+								return
+							}
+							bootstrapRetries = nextRetry
 							retryResult, retryErr := h.AuthManager.ExecuteStream(ctx, providers, req, opts)
 							if retryErr == nil {
 								if passthroughHeadersEnabled {
@@ -801,7 +814,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManager(ctx context.Context, handl
 								chunks = retryResult.Chunks
 								continue outer
 							}
-							streamErr = enrichAuthSelectionError(retryErr, providers, normalizedModel)
+							streamErr = enrichAuthSelectionError(retryErr, providers, normalizedModel, h.Cfg, headersFromContext(ctx).Get("Accept-Language"))
 						}
 					}
 
@@ -975,7 +988,7 @@ func replaceHeader(dst http.Header, src http.Header) {
 	}
 }
 
-func enrichAuthSelectionError(err error, providers []string, model string) error {
+func enrichAuthSelectionError(err error, providers []string, model string, cfg *config.SDKConfig, acceptLanguage string) error {
 	if err == nil {
 		return nil
 	}
@@ -1003,6 +1016,9 @@ func enrichAuthSelectionError(err error, providers []string, model string) error
 	if baseMessage == "" {
 		baseMessage = "no auth available"
 	}
+	if localized := localizedAuthSelectionMessage(cfg, code, acceptLanguage); localized != "" {
+		baseMessage = localized
+	}
 	detail := fmt.Sprintf("%s (providers=%s, model=%s)", baseMessage, providerText, modelText)
 
 	// Clarify the most common alias confusion between Anthropic route names and internal provider keys.
@@ -1021,6 +1037,65 @@ func enrichAuthSelectionError(err error, providers []string, model string) error
 		Retryable:  authErr.Retryable,
 		HTTPStatus: status,
 	}
+}
+
+func localizedAuthSelectionMessage(cfg *config.SDKConfig, code, acceptLanguage string) string {
+	if cfg == nil {
+		return ""
+	}
+	messages := cfg.AuthErrorLocalization.AuthUnavailable
+	if code == "auth_not_found" {
+		messages = cfg.AuthErrorLocalization.AuthNotFound
+	}
+	if len(messages) == 0 {
+		return ""
+	}
+
+	candidates := localeCandidates(acceptLanguage)
+	candidates = append(candidates, localeCandidates(cfg.AuthErrorLocalization.DefaultLocale)...)
+	candidates = append(candidates, "en")
+	for _, candidate := range candidates {
+		if message := localizedMessageForLocale(messages, candidate); message != "" {
+			return message
+		}
+	}
+	return ""
+}
+
+func localeCandidates(raw string) []string {
+	seen := make(map[string]struct{})
+	result := make([]string, 0, 4)
+	for _, part := range strings.Split(raw, ",") {
+		locale := strings.TrimSpace(strings.SplitN(part, ";", 2)[0])
+		locale = strings.ToLower(strings.ReplaceAll(locale, "_", "-"))
+		if locale == "" || locale == "*" {
+			continue
+		}
+		if _, ok := seen[locale]; !ok {
+			seen[locale] = struct{}{}
+			result = append(result, locale)
+		}
+		if base, _, ok := strings.Cut(locale, "-"); ok && base != "" {
+			if _, exists := seen[base]; !exists {
+				seen[base] = struct{}{}
+				result = append(result, base)
+			}
+		}
+	}
+	return result
+}
+
+func localizedMessageForLocale(messages map[string]string, locale string) string {
+	locale = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(locale, "_", "-")))
+	if locale == "" {
+		return ""
+	}
+	for key, value := range messages {
+		if strings.ToLower(strings.TrimSpace(strings.ReplaceAll(key, "_", "-"))) == locale {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // WriteErrorResponse writes an error message to the response writer using the HTTP status embedded in the message.

@@ -1,9 +1,25 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::de::DeserializeOwned;
+use sha2::{Digest, Sha256};
+
+static PATH_WRITE_LOCKS: LazyLock<Mutex<std::collections::HashMap<PathBuf, Arc<Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+fn path_write_lock(path: &Path) -> Result<Arc<Mutex<()>>, String> {
+    let normalized = path.to_path_buf();
+    let mut locks = PATH_WRITE_LOCKS
+        .lock()
+        .map_err(|_| "文件写入锁表已损坏".to_string())?;
+    Ok(locks
+        .entry(normalized)
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone())
+}
 
 fn format_io_error(action: &str, path: &Path, err: &std::io::Error) -> String {
     format!("{}失败: path={}, error={}", action, path.display(), err)
@@ -145,10 +161,38 @@ fn write_string_atomic_internal(
 }
 
 pub fn write_string_atomic(path: &Path, content: &str) -> Result<(), String> {
+    let lock = path_write_lock(path)?;
+    let _guard = lock.lock().map_err(|_| "文件写入锁已损坏".to_string())?;
     write_string_atomic_internal(path, content, true)
 }
 
+pub fn write_string_atomic_if_hash_matches<F>(
+    path: &Path,
+    expected_hash: [u8; 32],
+    build_content: F,
+) -> Result<bool, String>
+where
+    F: FnOnce() -> Result<String, String>,
+{
+    let lock = path_write_lock(path)?;
+    let _guard = lock.lock().map_err(|_| "文件写入锁已损坏".to_string())?;
+    let current = match fs::read(path) {
+        Ok(current) => current,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format_io_error("读取待迁移文件", path, &error)),
+    };
+    let current_hash: [u8; 32] = Sha256::digest(&current).into();
+    if current_hash != expected_hash {
+        return Ok(false);
+    }
+    let content = build_content()?;
+    write_string_atomic_internal(path, &content, true)?;
+    Ok(true)
+}
+
 pub fn write_bytes_atomic(path: &Path, content: &[u8]) -> Result<(), String> {
+    let lock = path_write_lock(path)?;
+    let _guard = lock.lock().map_err(|_| "文件写入锁已损坏".to_string())?;
     let parent = path.parent().ok_or("无法定位目标目录")?;
     fs::create_dir_all(parent).map_err(|e| format_io_error("创建目录", parent, &e))?;
 
@@ -165,11 +209,26 @@ pub fn write_bytes_atomic(path: &Path, content: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+pub fn remove_file_locked(path: &Path) -> Result<bool, String> {
+    let lock = path_write_lock(path)?;
+    let _guard = lock.lock().map_err(|_| "文件写入锁已损坏".to_string())?;
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format_io_error("删除文件", path, &error)),
+    }
+}
+
 pub fn restore_from_backup(path: &Path) -> Result<bool, String> {
     let backup_path = build_backup_path(path)?;
     if !backup_path.exists() {
         return Ok(false);
     }
+
+    // Hold the same per-path write lock as normal writes so restore cannot race a
+    // concurrent CAS migration or delete on this path.
+    let lock = path_write_lock(path)?;
+    let _guard = lock.lock().map_err(|_| "文件写入锁已损坏".to_string())?;
 
     let backup_content = fs::read_to_string(&backup_path)
         .map_err(|e| format_io_error("读取备份文件", &backup_path, &e))?;
@@ -205,7 +264,11 @@ pub fn parse_json_with_auto_restore<T: DeserializeOwned>(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_backup_path, quarantine_file, restore_from_backup, write_string_atomic};
+    use super::{
+        build_backup_path, quarantine_file, remove_file_locked, restore_from_backup,
+        write_string_atomic, write_string_atomic_if_hash_matches,
+    };
+    use sha2::{Digest, Sha256};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -244,6 +307,32 @@ mod tests {
             fs::read_to_string(&backup_path).expect("read backup again"),
             r#"{"version":1}"#
         );
+    }
+
+    #[test]
+    fn conditional_write_never_overwrites_newer_or_deleted_file() {
+        let dir = make_temp_dir("atomic_write_cas");
+        let path = dir.join("account.json");
+        write_string_atomic(&path, r#"{"version":1}"#).expect("write initial");
+        let expected: [u8; 32] = Sha256::digest(r#"{"version":1}"#.as_bytes()).into();
+
+        write_string_atomic(&path, r#"{"version":2}"#).expect("write newer");
+        assert!(!write_string_atomic_if_hash_matches(&path, expected, || {
+            Ok(r#"{"version":3}"#.to_string())
+        })
+        .expect("reject stale write"));
+        assert_eq!(
+            fs::read_to_string(&path).expect("read newer"),
+            r#"{"version":2}"#
+        );
+
+        remove_file_locked(&path).expect("delete account");
+        assert!(!write_string_atomic_if_hash_matches(&path, expected, || {
+            Ok(r#"{"version":3}"#.to_string())
+        })
+        .expect("reject deleted write"));
+        assert!(!path.exists());
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

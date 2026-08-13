@@ -20,6 +20,13 @@ const DisallowFreeAuthMetadataKey = "disallow_free_auth"
 // ReasoningEffortMetadataKey stores the client-requested reasoning effort for usage logs.
 const ReasoningEffortMetadataKey = "reasoning_effort"
 
+// ServiceTierMetadataKey stores the client-requested service tier for usage logs.
+const ServiceTierMetadataKey = "service_tier"
+
+// SessionAffinityNamespaceMetadataKey separates session-affinity cache entries
+// for callers that share the same downstream session identifier.
+const SessionAffinityNamespaceMetadataKey = "session_affinity_namespace"
+
 const (
 	// PinnedAuthMetadataKey locks execution to a specific auth ID.
 	PinnedAuthMetadataKey = "pinned_auth_id"
@@ -94,4 +101,12 @@ type StreamResult struct {
 type StatusError interface {
 	error
 	StatusCode() int
+}
+
+// RequestScopedError identifies a failure tied to the current request rather
+// than the selected credential. Auth managers should not retry these errors
+// across credentials or change credential availability because of them.
+type RequestScopedError interface {
+	error
+	IsRequestScoped() bool
 }

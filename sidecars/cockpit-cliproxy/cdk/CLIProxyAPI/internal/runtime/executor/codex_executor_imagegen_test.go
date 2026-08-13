@@ -116,3 +116,32 @@ func TestEnsureImageGenerationTool_FreeCodexAuthDoesNotInjectTool(t *testing.T) 
 		t.Fatalf("expected no tools for free codex auth, got %s", gjson.GetBytes(result, "tools").Raw)
 	}
 }
+
+func TestEnsureImageGenerationTool_ImageGenFunctionDoesNotInjectHostedTool(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-sol","tools":[{"type":"function","name":"image_gen.imagegen","parameters":{}}]}`)
+	result := ensureImageGenerationTool(body, "gpt-5.6-sol", nil)
+
+	tools := gjson.GetBytes(result, "tools").Array()
+	if len(tools) != 1 {
+		t.Fatalf("expected only the image_gen function, got %d tools: %s", len(tools), string(result))
+	}
+	if tools[0].Get("name").String() != "image_gen.imagegen" {
+		t.Fatalf("expected image_gen.imagegen to be preserved, got %s", tools[0].Raw)
+	}
+}
+
+func TestEnsureImageGenerationTool_ImageGenNamespaceRemovesHostedToolAndChoice(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-sol","tool_choice":{"type":"image_generation"},"tools":[{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen","parameters":{}}]},{"type":"image_generation","output_format":"png"}]}`)
+	result := ensureImageGenerationTool(body, "gpt-5.6-sol", nil)
+
+	tools := gjson.GetBytes(result, "tools").Array()
+	if len(tools) != 1 {
+		t.Fatalf("expected only the image_gen namespace, got %d tools: %s", len(tools), string(result))
+	}
+	if tools[0].Get("type").String() != "namespace" || tools[0].Get("name").String() != "image_gen" {
+		t.Fatalf("expected image_gen namespace to be preserved, got %s", tools[0].Raw)
+	}
+	if gjson.GetBytes(result, "tool_choice").Exists() {
+		t.Fatalf("expected hosted image_generation tool choice to be removed, got %s", string(result))
+	}
+}

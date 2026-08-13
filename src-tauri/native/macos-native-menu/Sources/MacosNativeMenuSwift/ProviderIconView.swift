@@ -35,10 +35,10 @@ enum ProviderIconRegistry {
             return ProviderIconResource(name: "antigravity-menu", ext: "png", renderingMode: .original)
         case "codex":
             return ProviderIconResource(name: "codex", ext: "svg", renderingMode: .template)
+        case "claude_manager":
+            return ProviderIconResource(name: "claude", ext: "png", renderingMode: .original)
         case "cursor":
             return ProviderIconResource(name: "cursor-menu", ext: "png", renderingMode: .original)
-        case "gemini":
-            return ProviderIconResource(name: "gemini-menu", ext: "png", renderingMode: .original)
         case "github-copilot":
             return ProviderIconResource(name: "github-copilot", ext: "svg", renderingMode: .template)
         case "kiro":
@@ -53,6 +53,12 @@ enum ProviderIconRegistry {
             return ProviderIconResource(name: "qoder", ext: "png", renderingMode: .original)
         case "trae":
             return ProviderIconResource(name: "trae", ext: "png", renderingMode: .original)
+        case "trae_solo", "trae-solo":
+            return ProviderIconResource(name: "trae-solo", ext: "png", renderingMode: .original)
+        case "trae_cn", "trae-cn":
+            return ProviderIconResource(name: "trae-cn", ext: "png", renderingMode: .original)
+        case "trae_solo_cn", "trae-solo-cn":
+            return ProviderIconResource(name: "trae-solo-cn", ext: "png", renderingMode: .original)
         case "workbuddy":
             return ProviderIconResource(name: "workbuddy", ext: "png", renderingMode: .original)
         default:

@@ -4,10 +4,11 @@ import type {
   CodebuddyOfficialQuotaResource,
 } from "../types/codebuddy";
 import type { CodexAccount } from "../types/codex";
+import type { ClaudeAccount } from "../types/claude";
 import type { GitHubCopilotAccount } from "../types/githubCopilot";
 import type { WindsurfAccount } from "../types/windsurf";
 import type { CursorAccount } from "../types/cursor";
-import type { GeminiAccount } from "../types/gemini";
+import type { GrokAccount } from "../types/grok";
 import type { KiroAccount, KiroAccountStatus } from "../types/kiro";
 import type { QoderAccount, QoderSubscriptionInfo } from "../types/qoder";
 import type { TraeAccount } from "../types/trae";
@@ -16,11 +17,10 @@ import type {
   WorkbuddyOfficialQuotaResource,
 } from "../types/workbuddy";
 import type { ZedAccount } from "../types/zed";
+import type { ZcodeAccount } from "../types/zcode";
 import {
   formatResetTimeDisplay,
   getAntigravityTierBadge,
-  getDisplayModels,
-  getModelShortName,
   getQuotaClass as getAntigravityQuotaClass,
   matchModelName,
 } from "../utils/account";
@@ -33,14 +33,28 @@ import {
 } from "../types/codebuddy";
 import {
   formatCodexResetTime,
+  getCodexAdditionalQuotaWindows,
   getCodexCodeReviewQuotaMetric,
   getCodexEffectiveQuotaPercentages,
   getCodexPlanBadgePresentation,
   getCodexQuotaClass,
   getCodexQuotaWindows,
   isCodexApiKeyAccount,
+  isCodexChatCompletionsApiKeyAccount,
   isCodexNewApiAccount,
+  isCodexPendingOAuthAccount,
 } from "../types/codex";
+import { withCodexPlanBadgeStyle } from "../utils/codexPreferences";
+import {
+  formatClaudeResetTime,
+  getClaudeAccountDisplayEmail,
+  getClaudePlanBadge,
+  getClaudePlanBadgeClass,
+} from "../types/claude";
+import {
+  resolveClaudeDisplayPercentage,
+  resolveClaudeDisplayQuotaClass,
+} from "../utils/claudeQuotaDisplayPreference";
 import {
   formatGitHubCopilotResetTime,
   getGitHubCopilotPlanBadge,
@@ -70,11 +84,12 @@ import {
   isCursorAccountBanned,
 } from "../types/cursor";
 import {
-  getGeminiAccountDisplayEmail,
-  getGeminiPlanDisplayName,
-  getGeminiPlanBadgeClass,
-  getGeminiTierQuotaSummary,
-} from "../types/gemini";
+  formatGrokQuotaUsedTotal,
+  getGrokAccountDisplayEmail,
+  getGrokPlanBadge,
+  getGrokQuotaClass,
+  getGrokQuotaSummaryItems,
+} from "../types/grok";
 import {
   formatKiroResetTime,
   getKiroAccountDisplayEmail,
@@ -113,8 +128,13 @@ import {
   getZedPlanBadge,
   getZedUsage,
 } from "../types/zed";
-import type { DisplayGroup, GroupSettings } from "../services/groupService";
-import { calculateGroupQuota } from "../services/groupService";
+import {
+  getZcodeAccountDisplayEmail,
+  getZcodePlanBadge,
+  getZcodeQuotaGroups,
+  getZcodeUsage,
+} from "../types/zcode";
+import type { DisplayGroup } from "../services/groupService";
 
 type Translate = {
   (key: string): string;
@@ -438,34 +458,6 @@ export function buildCreditMetrics(
   };
 }
 
-function getAgAccountQuotas(account: Account): Record<string, number> {
-  const quotas: Record<string, number> = {};
-  if (!account.quota?.models) {
-    return quotas;
-  }
-  for (const model of account.quota.models) {
-    quotas[model.name] = model.percentage;
-  }
-  return quotas;
-}
-
-function buildAgDisplayGroupSettings(groups: DisplayGroup[]): GroupSettings {
-  const settings: GroupSettings = {
-    groupMappings: {},
-    groupNames: {},
-    groupOrder: groups.map((group) => group.id),
-    updatedAt: 0,
-    updatedBy: "desktop",
-  };
-
-  for (const group of groups) {
-    settings.groupNames[group.id] = group.name;
-    for (const modelId of group.models) {
-      settings.groupMappings[modelId] = group.id;
-    }
-  }
-  return settings;
-}
 
 export function getAntigravityGroupResetTimestamp(
   account: Account,
@@ -497,49 +489,126 @@ export function getAntigravityGroupResetTimestamp(
 
 export function getAntigravityQuotaDisplayItems(
   account: Account,
-  displayGroups: DisplayGroup[],
+  _displayGroups: DisplayGroup[],
 ): AgQuotaDisplayItem[] {
-  const rawDisplayModels = getDisplayModels(account.quota);
-  if (rawDisplayModels.length === 0) {
-    return [];
+  const models = account.quota?.models || [];
+  const result: AgQuotaDisplayItem[] = [];
+
+  // Claude 5h
+  // Claude 5h
+  let claude5h = models.find(m => m.name === '3p-5h' || m.name === 'claude:5h');
+  if (!claude5h) {
+    claude5h = models.find(m => {
+      const name = m.name.toLowerCase();
+      return name.includes('claude') && (name.includes('high') || !name.includes('low'));
+    });
+  }
+  if (!claude5h) {
+    claude5h = models.find(m => m.name.toLowerCase().includes('claude'));
   }
 
-  if (displayGroups.length === 0) {
-    return rawDisplayModels.map((model) => ({
-      key: model.name,
-      label: getModelShortName(model.name),
-      percentage: model.percentage,
-      resetTime: model.reset_time,
-    }));
-  }
-
-  const quotas = getAgAccountQuotas(account);
-  const settings = buildAgDisplayGroupSettings(displayGroups);
-  const groupedItems: AgQuotaDisplayItem[] = [];
-
-  for (const group of displayGroups) {
-    const percentage = calculateGroupQuota(group.id, quotas, settings);
-    if (percentage === null) continue;
-
-    const resetTimestamp = getAntigravityGroupResetTimestamp(account, group);
-    groupedItems.push({
-      key: `group:${group.id}`,
-      label: group.name,
-      percentage,
-      resetTime: resetTimestamp ? new Date(resetTimestamp).toISOString() : "",
+  // Claude Weekly
+  let claudeWeekly = models.find(m => m.name === '3p-weekly' || m.name === 'claude:weekly');
+  if (!claudeWeekly) {
+    claudeWeekly = models.find(m => {
+      const name = m.name.toLowerCase();
+      return name.includes('claude') && name.includes('low');
     });
   }
 
-  if (groupedItems.length > 0) {
-    return groupedItems;
+  // Gemini 5h
+  let gemini5h = models.find(m => m.name === 'gemini-5h' || m.name === 'gemini:5h');
+  if (!gemini5h) {
+    gemini5h = models.find(m => {
+      const name = m.name.toLowerCase();
+      return name.includes('gemini') && name.includes('pro') && name.includes('high');
+    });
+  }
+  if (!gemini5h) {
+    gemini5h = models.find(m => {
+      const name = m.name.toLowerCase();
+      return name.includes('gemini') && name.includes('high');
+    });
+  }
+  if (!gemini5h) {
+    gemini5h = models.find(m => {
+      const name = m.name.toLowerCase();
+      return name.includes('gemini') && name.includes('flash');
+    });
+  }
+  if (!gemini5h) {
+    gemini5h = models.find(m => {
+      const name = m.name.toLowerCase();
+      return name.includes('gemini') && !name.includes('low');
+    });
   }
 
-  return rawDisplayModels.map((model) => ({
-    key: model.name,
-    label: getModelShortName(model.name),
-    percentage: model.percentage,
-    resetTime: model.reset_time,
-  }));
+  // Gemini Weekly
+  let geminiWeekly = models.find(m => m.name === 'gemini-weekly' || m.name === 'gemini:weekly');
+  if (!geminiWeekly) {
+    geminiWeekly = models.find(m => {
+      const name = m.name.toLowerCase();
+      return name.includes('gemini') && name.includes('pro') && name.includes('low');
+    });
+  }
+  if (!geminiWeekly) {
+    geminiWeekly = models.find(m => {
+      const name = m.name.toLowerCase();
+      return name.includes('gemini') && name.includes('low');
+    });
+  }
+
+  if (claude5h) {
+    result.push({
+      key: 'claude:5h',
+      label: 'Claude (5h)',
+      percentage: claude5h.percentage,
+      resetTime: claude5h.reset_time,
+    });
+  }
+  if (claudeWeekly) {
+    result.push({
+      key: 'claude:weekly',
+      label: 'Claude (Weekly)',
+      percentage: claudeWeekly.percentage,
+      resetTime: claudeWeekly.reset_time,
+    });
+  }
+  if (gemini5h) {
+    let percentage = gemini5h.percentage;
+    let resetTime = gemini5h.reset_time;
+
+    if (resetTime) {
+      const resetTs = new Date(resetTime).getTime();
+      if (!isNaN(resetTs)) {
+        const diffHours = (resetTs - Date.now()) / (1000 * 60 * 60);
+        // If the reset time is > 5 hours in the future (e.g. weekly reset),
+        // it means the weekly limit is active and capping the 5h limit.
+        // We override the 5h display remaining to 100% and clear the reset time.
+        if (diffHours > 5) {
+          percentage = 100;
+          resetTime = '';
+        }
+      }
+    }
+
+    result.push({
+      key: 'gemini:5h',
+      label: 'Gemini (5h)',
+      percentage,
+      resetTime,
+    });
+  }
+  if (geminiWeekly) {
+    result.push({
+      key: 'gemini:weekly',
+      label: 'Gemini (Weekly)',
+      percentage: geminiWeekly.percentage,
+      resetTime: geminiWeekly.reset_time,
+    });
+  }
+
+  return result;
 }
 
 export function buildAntigravityAccountPresentation(
@@ -643,7 +712,9 @@ export function buildCodexAccountPresentation(
     ? buildCodexNewApiQuotaItems(account, t)
     : [];
   const quotaItems: UnifiedQuotaMetric[] =
-    newApiQuotaItems.length > 0
+    isCodexChatCompletionsApiKeyAccount(account)
+      ? []
+      : newApiQuotaItems.length > 0
       ? newApiQuotaItems
       : getCodexQuotaWindows(account.quota).map((window) => ({
           key: window.id,
@@ -660,6 +731,29 @@ export function buildCodexAccountPresentation(
               ? weeklyBlocksHourlyHint
               : undefined,
         }));
+  const additionalQuotaItems =
+    !isCodexChatCompletionsApiKeyAccount(account)
+      ? getCodexAdditionalQuotaWindows(account.quota).map((window) => {
+          const hintText = [window.limitName, window.meteredFeature]
+            .filter(Boolean)
+            .join(" · ");
+          const limitLabel =
+            window.limitLabel || t("codex.quota.additional", "额外额度");
+          return {
+            key: window.id,
+            label: `${limitLabel} ${window.label}`,
+            percentage: window.percentage,
+            quotaClass: getCodexQuotaClass(window.percentage),
+            valueText: `${window.percentage}%`,
+            resetText: window.resetTime
+              ? formatCodexResetTime(window.resetTime, t)
+              : "",
+            resetAt: window.resetTime,
+            hintText: hintText || undefined,
+          };
+        })
+      : [];
+  quotaItems.push(...additionalQuotaItems);
   const codeReviewMetric = getCodexCodeReviewQuotaMetric(account.quota);
   if (codeReviewMetric) {
     quotaItems.push({
@@ -674,14 +768,66 @@ export function buildCodexAccountPresentation(
       resetAt: codeReviewMetric.resetTime,
     });
   }
-  const planBadge = getCodexPlanBadgePresentation(account);
+  const planBadge = isCodexPendingOAuthAccount(account)
+    ? {
+        label: t("codex.pendingAuth.badge", "待授权"),
+        className: "pending-auth",
+      }
+    : getCodexPlanBadgePresentation(account);
 
   return {
     id: account.id,
     displayName,
     planLabel: planBadge.label,
-    planClass: planBadge.className,
+    planClass: withCodexPlanBadgeStyle(planBadge.className),
     quotaItems,
+  };
+}
+
+export function buildClaudeAccountPresentation(
+  account: ClaudeAccount,
+  t: Translate,
+): UnifiedAccountPresentation {
+  const quotaItems: UnifiedQuotaMetric[] = [];
+  if (account.quota) {
+    const fiveHourDisplay = resolveClaudeDisplayPercentage(
+      account.quota.five_hour_percentage,
+    );
+    const sevenDayDisplay = resolveClaudeDisplayPercentage(
+      account.quota.seven_day_percentage,
+    );
+    quotaItems.push({
+      key: "five_hour",
+      label: t("claude.quota.fiveHour", "Current session"),
+      percentage: fiveHourDisplay,
+      quotaClass: resolveClaudeDisplayQuotaClass(
+        account.quota.five_hour_percentage,
+      ),
+      valueText: `${fiveHourDisplay}%`,
+      resetText: formatClaudeResetTime(account.quota.five_hour_reset_time),
+      resetAt: account.quota.five_hour_reset_time,
+    });
+    quotaItems.push({
+      key: "seven_day",
+      label: t("claude.quota.sevenDay", "Current week (all models)"),
+      percentage: sevenDayDisplay,
+      quotaClass: resolveClaudeDisplayQuotaClass(
+        account.quota.seven_day_percentage,
+      ),
+      valueText: `${sevenDayDisplay}%`,
+      resetText: formatClaudeResetTime(account.quota.seven_day_reset_time),
+      resetAt: account.quota.seven_day_reset_time,
+    });
+  }
+
+  return {
+    id: account.id,
+    displayName: getClaudeAccountDisplayEmail(account),
+    planLabel: getClaudePlanBadge(account) || t("claude.desktopOAuth.planUnknown", "订阅未知"),
+    planClass: getClaudePlanBadgeClass(account),
+    quotaItems,
+    sublineText: account.quota_error?.message,
+    sublineClass: account.quota_error ? "critical" : undefined,
   };
 }
 
@@ -1068,6 +1214,63 @@ export function buildWorkbuddyAccountPresentation(
   };
 }
 
+export function buildZcodeAccountPresentation(
+  account: ZcodeAccount,
+  t: Translate,
+): UnifiedAccountPresentation {
+  const planLabel = getZcodePlanBadge(account);
+  const usage = getZcodeUsage(account);
+  const quotaItems: UnifiedQuotaMetric[] = [];
+
+  getZcodeQuotaGroups(account, t).forEach((group) => {
+    group.items.forEach((resource, index) => {
+      if (resource.total <= 0 && resource.remain <= 0 && resource.used <= 0) {
+        return;
+      }
+      const remainPercent =
+        resource.remainPercent ??
+        (resource.total > 0 ? (resource.remain / resource.total) * 100 : null);
+      quotaItems.push({
+        key: `${group.key}_${resource.packageCode || index}`,
+        label: resource.packageName || group.label,
+        percentage: clampPercent(resource.usedPercent),
+        progressPercent: clampPercent(resource.usedPercent),
+        quotaClass: getRemainingQuotaClass(remainPercent ?? 0),
+        valueText: t("zcode.quota.usedOfTotal", {
+          used: formatQuotaNumber(resource.used),
+          total: formatQuotaNumber(resource.total),
+          defaultValue: "{{used}} / {{total}}",
+        }),
+        resetText: resolveResourceTimeText(
+          resource,
+          t,
+          "zcode.quota.updatedAt",
+          "zcode.quota.expireAt",
+        ),
+        resetAt: resource.refreshAt ?? resource.expireAt,
+        used: resource.used,
+        total: resource.total,
+        left: resource.remain,
+        showProgress: true,
+      });
+    });
+  });
+
+  return {
+    id: account.id,
+    displayName: getZcodeAccountDisplayEmail(account),
+    planLabel,
+    planClass: resolveSimplePlanClass(planLabel),
+    quotaItems,
+    ...buildUsageStatusSubline(
+      usage.isNormal,
+      t,
+      "zcode.usageNormal",
+      "zcode.usageAbnormal",
+    ),
+  };
+}
+
 export function buildQoderAccountPresentation(
   account: QoderAccount,
   t: Translate,
@@ -1371,10 +1574,6 @@ export interface CursorAccountPresentation extends UnifiedAccountPresentation {
   isBanned: boolean;
 }
 
-export interface GeminiAccountPresentation extends UnifiedAccountPresentation {
-  isBanned: boolean;
-}
-
 function normalizeCursorUsagePercent(
   raw: number | null | undefined,
 ): number | null {
@@ -1486,42 +1685,51 @@ export function buildCursorAccountPresentation(
   };
 }
 
-export function buildGeminiAccountPresentation(
-  account: GeminiAccount,
+
+export function buildGrokAccountPresentation(
+  account: GrokAccount,
   t: Translate,
-): GeminiAccountPresentation {
-  const tierSummary = getGeminiTierQuotaSummary(account);
-  const planLabel = getGeminiPlanDisplayName(account);
-  const quotaItems: UnifiedQuotaMetric[] = [];
+): UnifiedAccountPresentation {
+  const quotaItems: UnifiedQuotaMetric[] = getGrokQuotaSummaryItems(account, t).map(
+    (item) => {
+      const usedPercent = clampPercent(item.percentage);
+      const remaining = clampPercent(100 - usedPercent);
+      const amountText = formatGrokQuotaUsedTotal(item.used, item.total);
+      const left =
+        item.used != null && item.total != null
+          ? Math.max(0, item.total - item.used)
+          : null;
+      // 与 Gemini 一致：文案与进度条均为剩余%（额度越少条越短）；颜色按已用比例
+      const remainingText = t("common.shared.quota.leftPercent", "{{value}}% left", {
+        value: Math.round(remaining),
+      });
+      const valueText = amountText
+        ? `${amountText} · ${remainingText}`
+        : remainingText;
+      return {
+        key: item.key,
+        label: item.label,
+        percentage: remaining,
+        progressPercent: remaining,
+        quotaClass: getGrokQuotaClass(usedPercent),
+        valueText,
+        resetAt: item.resetAtMs,
+        resetText: formatMetricResetText(item.resetAtMs, t),
+        used: item.used ?? usedPercent,
+        total: item.total ?? 100,
+        left: left ?? remaining,
+        showProgress: true,
+      };
+    },
+  );
 
-  [tierSummary.pro, tierSummary.flash].forEach((tier) => {
-    const remaining =
-      tier.remainingPercent == null
-        ? null
-        : clampPercent(tier.remainingPercent);
-    const usedPercent = remaining == null ? 100 : 100 - remaining;
-    quotaItems.push({
-      key: tier.key,
-      label: t(`gemini.quota.${tier.key}`, tier.label),
-      percentage: remaining ?? 0,
-      progressPercent: remaining ?? 0,
-      quotaClass: getCursorUsageQuotaClass(usedPercent),
-      valueText:
-        remaining == null
-          ? "--"
-          : t("gemini.quota.left", "{{value}}% left", { value: remaining }),
-      resetText: formatMetricResetText(tier.resetAt, t),
-      resetAt: tier.resetAt,
-      showProgress: true,
-    });
-  });
-
+  const planBadge = getGrokPlanBadge(account);
   return {
     id: account.id,
-    displayName: getGeminiAccountDisplayEmail(account),
-    planLabel,
-    planClass: getGeminiPlanBadgeClass(undefined, account),
-    isBanned: false,
+    displayName: getGrokAccountDisplayEmail(account),
+    planLabel: planBadge || t("common.none", "暂无"),
+    // Missing tier (暂无) uses Free styling, not red unknown.
+    planClass: planBadge ? "plan-badge-default" : "free",
     quotaItems,
   };
 }

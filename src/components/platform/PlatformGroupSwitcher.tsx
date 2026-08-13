@@ -6,6 +6,7 @@ import { PLATFORM_PAGE_MAP, type PlatformId } from '../../types/platform';
 import type { Page } from '../../types/navigation';
 import { renderPlatformIcon } from '../../utils/platformMeta';
 import { setAntigravityRuntimeTargetFromPlatform } from '../../utils/antigravityRuntimeTarget';
+import { isReducedMotionEnabled } from '../../utils/reducedMotion';
 
 export interface PlatformGroupSwitcherOption {
   platformId: PlatformId;
@@ -40,7 +41,7 @@ export function PlatformGroupSwitcher({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
-  const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
+  const [dropdownPosition, setDropdownPosition] = useState<{ top: number; left: number } | null>(null);
 
   const updateDropdownPosition = useCallback(() => {
     const trigger = triggerRef.current;
@@ -87,18 +88,26 @@ export function PlatformGroupSwitcher({
 
   useEffect(() => {
     if (!open) {
+      setDropdownPosition(null);
       return;
     }
 
     updateDropdownPosition();
     const raf = window.requestAnimationFrame(updateDropdownPosition);
-    const handleViewportChange = () => updateDropdownPosition();
-    window.addEventListener('resize', handleViewportChange);
-    window.addEventListener('scroll', handleViewportChange, true);
+    const handleResize = () => updateDropdownPosition();
+    const handleScroll = () => {
+      if (isReducedMotionEnabled()) {
+        setOpen(false);
+        return;
+      }
+      updateDropdownPosition();
+    };
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('scroll', handleScroll, true);
     return () => {
       window.cancelAnimationFrame(raf);
-      window.removeEventListener('resize', handleViewportChange);
-      window.removeEventListener('scroll', handleViewportChange, true);
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('scroll', handleScroll, true);
     };
   }, [open, updateDropdownPosition]);
 
@@ -127,13 +136,23 @@ export function PlatformGroupSwitcher({
     window.dispatchEvent(new CustomEvent('app-request-navigate', { detail: page }));
   };
 
+  const handleTriggerClick = () => {
+    setOpen((currentlyOpen) => {
+      const openNext = !currentlyOpen;
+      if (openNext) {
+        updateDropdownPosition();
+      }
+      return openNext;
+    });
+  };
+
   return (
     <div className="platform-group-switcher" ref={containerRef}>
       <button
         type="button"
         className={`platform-group-switcher-trigger ${open ? 'is-open' : ''}`}
         ref={triggerRef}
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={handleTriggerClick}
         aria-label={t('platformLayout.groupSwitchLabel', '切换同组平台')}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -146,6 +165,7 @@ export function PlatformGroupSwitcher({
       </button>
 
       {open &&
+        dropdownPosition &&
         createPortal(
           <div
             className="platform-group-switcher-dropdown"

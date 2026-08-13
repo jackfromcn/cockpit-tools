@@ -24,12 +24,16 @@ import {
   Eye,
   EyeOff,
   BookOpen,
+  CalendarCheck,
+  Gift,
+  Settings,
 } from 'lucide-react';
 import { TagEditModal } from '../components/TagEditModal';
 import { ExportJsonModal } from '../components/ExportJsonModal';
 import { ModalErrorMessage } from '../components/ModalErrorMessage';
 import { MfaQuickCodeSelect } from '../components/MfaQuickCodeSelect';
 import { PaginationControls } from '../components/PaginationControls';
+import { AccountSelectionToolbar } from '../components/AccountSelectionToolbar';
 import { QuickSettingsPopover } from '../components/QuickSettingsPopover';
 import {
   PlatformOverviewTab,
@@ -41,16 +45,19 @@ import { SingleSelectFilterDropdown } from '../components/SingleSelectFilterDrop
 import { TraeInstancesContent } from './TraeInstancesPage';
 import { useTraeAccountStore } from '../stores/useTraeAccountStore';
 import * as traeService from '../services/traeService';
+import type { TraePlatformId } from '../services/traeService';
 import type { TraeAccount } from '../types/trae';
 import {
   getTraeAccountDisplayEmail,
   getTraeAccountDisplayName,
+  getTraeAccountPlatformId,
   getTraeLoginProvider,
   getTraePlanBadge,
   getTraePlanBadgeClass,
   getTraePlanDisplayName,
   getTraeUsage,
   hasTraeQuotaData,
+  isTraeCnAccountPlatform,
   TRAE_PRODUCT_TYPE,
 } from '../types/trae';
 import { compareCurrentAccountFirst } from '../utils/currentAccountSort';
@@ -72,12 +79,57 @@ import {
   removeAccountsOverviewFilterField,
   writeAccountsOverviewFilterField,
 } from '../utils/accountsOverviewFilterPersistence';
+import { TraeCheckinModal } from '../components/codebuddy-suite/TraeCheckinModal';
+import { TraeAutoCheckinConfigModal } from '../components/codebuddy-suite/TraeAutoCheckinConfigModal';
+import {
+  TraeAutoCheckinConfig,
+  getTraeAutoCheckinConfig,
+  saveTraeAutoCheckinConfig,
+} from '../services/traeAutoCheckinService';
 
-const TRAE_CURRENT_ACCOUNT_ID_KEY = 'agtools.trae.current_account_id';
-const TRAE_FLOW_NOTICE_COLLAPSED_KEY = 'agtools.trae.flow_notice_collapsed';
-const TRAE_FILTER_PERSISTENCE_SCOPE = normalizeAccountsOverviewScope('Trae');
 const FILTER_TYPES_FIELD = 'filter_types';
 const TRAE_KNOWN_SORT_KEYS = ['created_at', 'plan', 'quota'] as const;
+
+const TRAE_PLATFORM_PAGE_CONFIG: Record<TraePlatformId, {
+  platformKey: string;
+  currentAccountIdKey: string;
+  flowNoticeCollapsedKey: string;
+  exportFilePrefix: string;
+  networkNoticeKey: string;
+}> = {
+  trae: {
+    platformKey: 'Trae',
+    currentAccountIdKey: 'agtools.trae.current_account_id',
+    flowNoticeCollapsedKey: 'agtools.trae.flow_notice_collapsed',
+    exportFilePrefix: 'trae_accounts',
+    networkNoticeKey: 'trae.flowNotice.networkGlobal',
+  },
+  trae_solo: {
+    platformKey: 'TRAE SOLO',
+    currentAccountIdKey: 'agtools.trae_solo.current_account_id',
+    flowNoticeCollapsedKey: 'agtools.trae_solo.flow_notice_collapsed',
+    exportFilePrefix: 'trae_solo_accounts',
+    networkNoticeKey: 'trae.flowNotice.networkGlobal',
+  },
+  trae_cn: {
+    platformKey: 'Trae CN',
+    currentAccountIdKey: 'agtools.trae_cn.current_account_id',
+    flowNoticeCollapsedKey: 'agtools.trae_cn.flow_notice_collapsed',
+    exportFilePrefix: 'trae_cn_accounts',
+    networkNoticeKey: 'trae.flowNotice.networkCn',
+  },
+  trae_solo_cn: {
+    platformKey: 'TRAE SOLO CN',
+    currentAccountIdKey: 'agtools.trae_solo_cn.current_account_id',
+    flowNoticeCollapsedKey: 'agtools.trae_solo_cn.flow_notice_collapsed',
+    exportFilePrefix: 'trae_solo_cn_accounts',
+    networkNoticeKey: 'trae.flowNotice.networkCn',
+  },
+};
+
+interface TraeAccountsPageProps {
+  platformId?: TraePlatformId;
+}
 
 type TraeQuotaSummary = {
   percentage: number | null;
@@ -119,50 +171,126 @@ function formatTraeMoney(value: number | null | undefined): string {
   return `$${formatNumber(value)}`;
 }
 
-export function TraeAccountsPage() {
+function getTraeAccountSwitchLabel(account: TraeAccount): string {
+  const email = getTraeAccountDisplayEmail(account);
+  const label = email === 'unknown' ? getTraeAccountDisplayName(account) : email;
+  return label === 'unknown' ? (account.user_id || account.id) : label;
+}
+
+export function TraeAccountsPage({ platformId = 'trae' }: TraeAccountsPageProps) {
+  const platformConfig = TRAE_PLATFORM_PAGE_CONFIG[platformId];
+  const filterPersistenceScopeSeed = platformConfig.platformKey;
+  const targetFilterPersistenceScope = normalizeAccountsOverviewScope(filterPersistenceScopeSeed);
   const [activeTab, setActiveTab] = useState<PlatformOverviewTab>('overview');
   const [filterTypes, setFilterTypes] = useState<string[]>(() =>
-    readAccountsOverviewFilterPersistenceEnabled(TRAE_FILTER_PERSISTENCE_SCOPE)
-      ? readAccountsOverviewFilterStringArray(TRAE_FILTER_PERSISTENCE_SCOPE, FILTER_TYPES_FIELD)
+    readAccountsOverviewFilterPersistenceEnabled(targetFilterPersistenceScope)
+      ? readAccountsOverviewFilterStringArray(targetFilterPersistenceScope, FILTER_TYPES_FIELD)
       : [],
   );
   const untaggedKey = '__untagged__';
 
   const store = useTraeAccountStore();
+  const platformAccounts = useMemo(
+    () => store.accounts.filter((account) => getTraeAccountPlatformId(account) === platformId),
+    [platformId, store.accounts],
+  );
+  const [targetCurrentAccountId, setTargetCurrentAccountIdState] = useState<string | null>(() => {
+    try {
+      const value = localStorage.getItem(platformConfig.currentAccountIdKey);
+      return value && value.trim() ? value : null;
+    } catch {
+      return null;
+    }
+  });
+  const setTargetCurrentAccountId = useCallback(
+    (accountId: string | null) => {
+      const normalized = accountId?.trim() || null;
+      setTargetCurrentAccountIdState(normalized);
+      try {
+        if (normalized) {
+          localStorage.setItem(platformConfig.currentAccountIdKey, normalized);
+        } else {
+          localStorage.removeItem(platformConfig.currentAccountIdKey);
+        }
+      } catch {
+        // ignore local cache failures
+      }
+    },
+    [platformConfig.currentAccountIdKey],
+  );
+  const loadTargetCurrentAccountId = useCallback(async () => {
+    try {
+      setTargetCurrentAccountId(await traeService.getTraeCurrentAccountId(platformId));
+    } catch (error) {
+      console.warn('[Trae Accounts] Failed to load target current account:', error);
+      setTargetCurrentAccountId(null);
+    }
+  }, [platformId, setTargetCurrentAccountId]);
 
-  const page = useProviderAccountsPage<TraeAccount>({
-    platformKey: 'Trae',
-    oauthLogPrefix: 'TraeOAuth',
-    flowNoticeCollapsedKey: TRAE_FLOW_NOTICE_COLLAPSED_KEY,
-    currentAccountIdKey: TRAE_CURRENT_ACCOUNT_ID_KEY,
-    exportFilePrefix: 'trae_accounts',
-    store: {
-      accounts: store.accounts,
-      currentAccountId: store.currentAccountId,
+  useEffect(() => {
+    void loadTargetCurrentAccountId();
+  }, [loadTargetCurrentAccountId, platformAccounts.length]);
+
+  const pageStore = useMemo(
+    () => ({
+      accounts: platformAccounts,
+      currentAccountId: targetCurrentAccountId,
       loading: store.loading,
       error: store.error,
       fetchAccounts: store.fetchAccounts,
-      fetchCurrentAccountId: store.fetchCurrentAccountId,
+      fetchCurrentAccountId: () => traeService.getTraeCurrentAccountId(platformId),
       deleteAccounts: store.deleteAccounts,
       refreshToken: store.refreshToken,
       refreshAllTokens: store.refreshAllTokens,
-      setCurrentAccountId: store.setCurrentAccountId,
+      setCurrentAccountId: setTargetCurrentAccountId,
       updateAccountTags: store.updateAccountTags,
-    },
-    oauthService: {
-      startLogin: traeService.traeOauthLoginStart,
-      completeLogin: (loginId: string) => traeService.traeOauthLoginComplete(loginId),
-      cancelLogin: (loginId?: string) => traeService.traeOauthLoginCancel(loginId),
-      submitCallbackUrl: (loginId: string, callbackUrl: string) =>
-        traeService.traeOauthSubmitCallbackUrl(loginId, callbackUrl),
-    },
-    dataService: {
+    }),
+    [
+      platformId,
+      setTargetCurrentAccountId,
+      store.deleteAccounts,
+      store.error,
+      store.fetchAccounts,
+      store.loading,
+      store.refreshAllTokens,
+      store.refreshToken,
+      store.updateAccountTags,
+      targetCurrentAccountId,
+      platformAccounts,
+    ],
+  );
+  const dataService = useMemo(
+    () => ({
       importFromJson: traeService.importTraeFromJson,
-      importFromLocal: traeService.importTraeFromLocal,
+      importFromLocal: async () => {
+        const imported = await traeService.importTraeFromLocal(platformId);
+        await loadTargetCurrentAccountId();
+        return imported;
+      },
       exportAccounts: traeService.exportTraeAccounts,
-      injectToVSCode: traeService.injectTraeAccount,
+      injectToVSCode: (accountId: string) => traeService.injectTraeAccount(accountId, platformId),
+    }),
+    [loadTargetCurrentAccountId, platformId],
+  );
+
+  const page = useProviderAccountsPage<TraeAccount>({
+    platformKey: platformConfig.platformKey,
+    oauthLogPrefix: 'TraeOAuth',
+    flowNoticeCollapsedKey: platformConfig.flowNoticeCollapsedKey,
+    currentAccountIdKey: platformConfig.currentAccountIdKey,
+    exportFilePrefix: platformConfig.exportFilePrefix,
+    store: pageStore,
+    oauthService: {
+      startLogin: () => traeService.traeOauthLoginStart(platformId),
+      completeLogin: (loginId: string) =>
+        traeService.traeOauthLoginComplete(loginId, platformId),
+      cancelLogin: (loginId?: string) =>
+        traeService.traeOauthLoginCancel(loginId, platformId),
+      submitCallbackUrl: (loginId: string, callbackUrl: string) =>
+        traeService.traeOauthSubmitCallbackUrl(loginId, callbackUrl, platformId),
     },
-    getDisplayEmail: (account) => getTraeAccountDisplayEmail(account),
+    dataService,
+    getDisplayEmail: getTraeAccountSwitchLabel,
   });
 
   const {
@@ -295,7 +423,7 @@ export function TraeAccountsPage() {
     setFilterTypes([]);
   }, []);
 
-  const accounts = store.accounts;
+  const accounts = platformAccounts;
   const loading = store.loading;
 
   const isAbnormalAccount = useCallback(
@@ -417,7 +545,7 @@ export function TraeAccountsPage() {
   const exportSelectionCount = getScopedSelectedCount(filteredIds);
   const pagination = usePagination({
     items: filteredAccounts,
-    storageKey: buildPaginationPageSizeStorageKey('Trae'),
+    storageKey: buildPaginationPageSizeStorageKey(platformConfig.platformKey),
   });
   const paginatedAccounts = pagination.pageItems;
   const paginatedIds = useMemo(() => paginatedAccounts.map((account) => account.id), [paginatedAccounts]);
@@ -472,6 +600,10 @@ export function TraeAccountsPage() {
   const resolveQuotaSummary = useCallback(
     (account: TraeAccount): TraeQuotaSummary => {
       const usage = getTraeUsage(account);
+      const isCnAccount =
+        platformId === 'trae_cn' ||
+        platformId === 'trae_solo_cn' ||
+        isTraeCnAccountPlatform(account);
       const percentage =
         typeof usage.usedPercent === 'number' && Number.isFinite(usage.usedPercent)
           ? Math.max(0, Math.min(100, Math.round(usage.usedPercent)))
@@ -482,53 +614,139 @@ export function TraeAccountsPage() {
         .toLowerCase()
         .includes('free');
 
-      const statusTone: TraeQuotaSummary['statusTone'] = !account.trae_usage_raw
-        ? 'unknown'
-        : usage.usageExhausted
-          ? usage.payAsYouGoOpen && !isFreePlan
-            ? 'normal'
-            : 'warning'
-          : 'normal';
+      const hasUsageRaw = account.trae_usage_raw != null || account.trae_entitlement_raw != null;
+      const hasFastRequest =
+        usage.usageModel === 'fast_request' && usage.fastRequestAvailable != null;
+      const formatFastTimes = (value: number) =>
+        value === -1
+          ? t('trae.quota.fastUnlimited', '无限次')
+          : t('trae.quota.fastTimes', '{{count}} 次', {
+              count: value,
+            });
 
-      const statusText = !account.trae_usage_raw
-        ? t('trae.quota.statusUnknown', 'Status: --')
-        : usage.usageExhausted
-          ? isFreePlan
-            ? t(
-                'trae.quota.statusExhaustedFree',
-                'Status: Usage exhausted, upgrade recommended',
-              )
-            : usage.payAsYouGoOpen
-              ? t('trae.quota.statusNormal', 'Status: Normal')
-              : t(
-                  'trae.quota.statusExhaustedPro',
-                  'Status: Usage exhausted, upgrade or enable on-demand usage',
-                )
-          : t('trae.quota.statusNormal', 'Status: Normal');
-
-      return {
-        percentage,
-        percentageText: percentage == null ? '--' : `${percentage}%`,
-        quotaClass: computeQuotaClass(percentage),
-        costText:
+      // CN：优先速通次数展示，无可靠剩余时不猜测（对齐社区 #1281）
+      let costText: string;
+      if (isCnAccount) {
+        if (hasFastRequest) {
+          costText = t('trae.quota.fastAvailable', '速通可用 {{times}}', {
+            times: formatFastTimes(usage.fastRequestAvailable ?? 0),
+          });
+        } else if ((usage.fastRequestPerMonth ?? 0) > 0) {
+          costText = t('trae.quota.fastPerMonth', '快请求/月：{{count}}', {
+            count: usage.fastRequestPerMonth ?? 0,
+          });
+        } else if (isFreePlan) {
+          costText = hasUsageRaw
+            ? t('trae.quota.freeRemainingUnknown', '免费剩余：--')
+            : t('trae.quota.usageUnknown', 'Usage: --');
+        } else if (usage.spentUsd != null && usage.totalUsd != null && (usage.totalUsd ?? 0) > 0) {
+          costText = t('trae.quota.usedOfTotal', {
+            used: formatNumber(usage.spentUsd),
+            total: formatNumber(usage.totalUsd),
+            defaultValue: '${{used}} / ${{total}}',
+          });
+        } else {
+          costText = hasUsageRaw
+            ? t('trae.quota.timesRemainingUnknown', '剩余次数：--')
+            : t('trae.quota.usageUnknown', 'Usage: --');
+        }
+      } else {
+        costText =
           usage.spentUsd != null && usage.totalUsd != null
             ? t('trae.quota.usedOfTotal', {
                 used: formatNumber(usage.spentUsd),
                 total: formatNumber(usage.totalUsd),
                 defaultValue: '${{used}} / ${{total}}',
               })
-            : t('trae.quota.usageUnknown', 'Usage: --'),
+            : t('trae.quota.usageUnknown', 'Usage: --');
+      }
+
+      const statusTone: TraeQuotaSummary['statusTone'] = !hasUsageRaw
+        ? 'unknown'
+        : isCnAccount
+          ? hasFastRequest
+            ? usage.usageExhausted
+              ? 'warning'
+              : 'normal'
+            : 'unknown'
+          : usage.usageExhausted
+            ? usage.payAsYouGoOpen && !isFreePlan
+              ? 'normal'
+              : 'warning'
+            : 'normal';
+
+      const statusText = !hasUsageRaw
+        ? t('trae.quota.statusUnknown', 'Status: --')
+        : isCnAccount
+          ? hasFastRequest
+            ? usage.usageExhausted
+              ? t('trae.quota.statusExhaustedFree', 'Status: Usage exhausted, upgrade recommended')
+              : t('trae.quota.statusSynced', '状态：已同步')
+            : t('trae.quota.statusSyncedPending', '状态：已同步，剩余额待确认')
+          : usage.usageExhausted
+            ? isFreePlan
+              ? t(
+                  'trae.quota.statusExhaustedFree',
+                  'Status: Usage exhausted, upgrade recommended',
+                )
+              : usage.payAsYouGoOpen
+                ? t('trae.quota.statusNormal', 'Status: Normal')
+                : t(
+                    'trae.quota.statusExhaustedPro',
+                    'Status: Usage exhausted, upgrade or enable on-demand usage',
+                  )
+            : t('trae.quota.statusNormal', 'Status: Normal');
+
+      const bonusText = isCnAccount
+        ? hasFastRequest
+          ? ''
+          : (usage.fastRequestPerMonth ?? 0) > 0
+            ? t('trae.quota.fastChannelPerMonth', '快通道: {{count}}/月', {
+                count: usage.fastRequestPerMonth ?? 0,
+              })
+            : usage.canGetExpressStatus != null
+              ? t('trae.quota.fastChannelStatus', '快通道: {{status}}', {
+                  status: usage.canGetExpressStatus,
+                })
+              : t('trae.quota.bonusEmpty', 'Bonus: --')
+        : (usage.bonusUsage ?? 0) > 0
+          ? t('trae.quota.bonusUsed', {
+              amount: formatTraeMoney(usage.bonusUsage),
+              defaultValue: 'Bonus: +{{amount}}',
+            })
+          : (usage.bonusQuota ?? 0) > 0
+            ? t('trae.quota.bonusIncluded', 'Bonus: Included')
+            : t('trae.quota.bonusEmpty', 'Bonus: --');
+
+      const packageText = isCnAccount
+        ? usage.hasSoloPackage || usage.hasPackage
+          ? usage.soloParallelLimit != null
+            ? t('trae.quota.soloParallel', '权益包: Solo 并发 {{count}}', {
+                count: usage.soloParallelLimit,
+              })
+            : t('trae.quota.packageAvailable', 'Package: Available')
+          : t('trae.quota.packageEmpty', 'Package: --')
+        : usage.hasPackage
+          ? usage.consumingProductType === TRAE_PRODUCT_TYPE.PACKAGE
+            ? t('trae.quota.packageConsuming', 'Package: Consuming')
+            : t('trae.quota.packageAvailable', 'Package: Available')
+          : t('trae.quota.packageEmpty', 'Package: --');
+
+      return {
+        percentage: isCnAccount && !hasFastRequest && usage.usageModel !== 'usd' ? null : percentage,
+        percentageText:
+          isCnAccount && !hasFastRequest && usage.usageModel !== 'usd'
+            ? '--'
+            : percentage == null
+              ? '--'
+              : `${percentage}%`,
+        quotaClass: computeQuotaClass(
+          isCnAccount && !hasFastRequest && usage.usageModel !== 'usd' ? null : percentage,
+        ),
+        costText,
         statusText,
         statusTone,
-        bonusText:
-          (usage.bonusUsage ?? 0) > 0
-            ? t('trae.quota.bonusUsed', {
-                amount: formatTraeMoney(usage.bonusUsage),
-                defaultValue: 'Bonus: +{{amount}}',
-              })
-            : (usage.bonusQuota ?? 0) > 0
-              ? t('trae.quota.bonusIncluded', 'Bonus: Included')
-              : t('trae.quota.bonusEmpty', 'Bonus: --'),
+        bonusText,
         resetText:
           (usage.resetAt ?? account.plan_reset_at ?? null) != null
             ? t('trae.quota.resetAt', {
@@ -536,19 +754,17 @@ export function TraeAccountsPage() {
                 defaultValue: '重置时间：{{date}}',
               })
             : t('trae.quota.resetUnknown', '重置时间未知'),
-        packageText: usage.hasPackage
-          ? usage.consumingProductType === TRAE_PRODUCT_TYPE.PACKAGE
-            ? t('trae.quota.packageConsuming', 'Package: Consuming')
-            : t('trae.quota.packageAvailable', 'Package: Available')
-          : t('trae.quota.packageEmpty', 'Package: --'),
-        payAsYouGoText: usage.payAsYouGoOpen
-          ? usage.consumingProductType === TRAE_PRODUCT_TYPE.PAY_GO
-            ? t('trae.quota.payAsYouGoConsuming', 'On-Demand Usage: Consuming')
-            : t('trae.quota.payAsYouGoEnabled', 'On-Demand Usage: Enabled')
-          : t('trae.quota.payAsYouGoEmpty', 'On-Demand Usage: --'),
+        packageText,
+        payAsYouGoText: isCnAccount
+          ? t('trae.quota.payAsYouGoEmpty', 'On-Demand Usage: --')
+          : usage.payAsYouGoOpen
+            ? usage.consumingProductType === TRAE_PRODUCT_TYPE.PAY_GO
+              ? t('trae.quota.payAsYouGoConsuming', 'On-Demand Usage: Consuming')
+              : t('trae.quota.payAsYouGoEnabled', 'On-Demand Usage: Enabled')
+            : t('trae.quota.payAsYouGoEmpty', 'On-Demand Usage: --'),
       };
     },
-    [t],
+    [platformId, t],
   );
 
   const resolveDisplayName = useCallback(
@@ -966,7 +1182,12 @@ export function TraeAccountsPage() {
 
   return (
     <div className="ghcp-accounts-page trae-accounts-page">
-      <PlatformOverviewTabsHeader platform="trae" active={activeTab} onTabChange={setActiveTab} />
+      <PlatformOverviewTabsHeader
+        platform={platformId}
+        active={activeTab}
+        onTabChange={setActiveTab}
+        tabs={undefined}
+      />
 
       <div
         className={`ghcp-flow-notice ${isFlowNoticeCollapsed ? 'collapsed' : ''}`}
@@ -981,7 +1202,12 @@ export function TraeAccountsPage() {
         >
           <div className="ghcp-flow-notice-title">
             <CircleAlert size={16} />
-            <span>{t('trae.flowNotice.title', 'Trae 账号接入说明（点击展开/收起）')}</span>
+            <span>
+              {t('trae.flowNotice.titleWithPlatform', {
+                platform: platformConfig.platformKey,
+                defaultValue: '{{platform}} 账号接入说明（点击展开/收起）',
+              })}
+            </span>
           </div>
           <ChevronDown
             size={16}
@@ -992,21 +1218,33 @@ export function TraeAccountsPage() {
           <div className="ghcp-flow-notice-body">
             <div className="ghcp-flow-notice-desc">
               {t(
-                'trae.flowNotice.desc',
-                '支持官方 OAuth 授权、本机导入、JSON 导入与本地注入切号；切号过程按 Trae 客户端真实落盘规则写回。',
+                'trae.flowNotice.descWithPlatform',
+                {
+                  platform: platformConfig.platformKey,
+                  defaultValue:
+                    '支持 {{platform}} 官方 OAuth 授权、本机导入、JSON 导入与本地注入切号；切号过程按 {{platform}} 客户端真实落盘规则写回。',
+                },
               )}
             </div>
             <ul className="ghcp-flow-notice-list">
               <li>
                 {t(
-                  'trae.flowNotice.permission',
-                  '权限范围：读取并写入本机 Trae 配置目录中的 storage.json 登录相关字段，用于账号导入、切号注入与套餐信息展示；所有数据仅在本机处理。',
+                  'trae.flowNotice.permissionWithPlatform',
+                  {
+                    platform: platformConfig.platformKey,
+                    defaultValue:
+                      '权限范围：读取并写入本机 {{platform}} 配置目录中的 storage.json 登录相关字段，用于账号导入、切号注入与套餐信息展示；所有数据仅在本机处理。',
+                  },
                 )}
               </li>
               <li>
                 {t(
-                  'trae.flowNotice.network',
-                  '网络范围：OAuth 登录、令牌刷新和套餐查询会请求 Trae 官方接口；不会向第三方服务上传本地账号文件或原始存储内容。',
+                  platformConfig.networkNoticeKey,
+                  {
+                    platform: platformConfig.platformKey,
+                    defaultValue:
+                      '网络范围：{{platform}} OAuth 登录、令牌刷新和套餐查询会请求 Trae 官方接口；不会向第三方服务上传本地账号文件或原始存储内容。',
+                  },
                 )}
               </li>
             </ul>
@@ -1223,7 +1461,18 @@ export function TraeAccountsPage() {
               >
                 <Upload size={14} />
               </button>
-              {selected.size > 0 && (
+              <QuickSettingsPopover type={platformId} />
+            </div>
+          </div>
+
+          {filteredAccounts.length > 0 && (
+            <AccountSelectionToolbar
+              selectedCount={selected.size}
+              allSelected={isAllPaginatedSelected}
+              disabled={paginatedIds.length === 0}
+              onToggleSelectAll={() => toggleSelectAll(paginatedIds)}
+              onClearSelection={() => toggleSelectAll(Array.from(selected))}
+              actions={(
                 <button
                   className="btn btn-danger icon-only"
                   onClick={handleBatchDelete}
@@ -1233,9 +1482,8 @@ export function TraeAccountsPage() {
                   <Trash2 size={14} />
                 </button>
               )}
-              <QuickSettingsPopover type="trae" />
-            </div>
-          </div>
+            />
+          )}
 
           {loading && accounts.length === 0 ? (
             <div className="loading-container">
@@ -1247,10 +1495,11 @@ export function TraeAccountsPage() {
               <Globe size={48} />
               <h3>{t('common.shared.empty.title', '暂无账号')}</h3>
               <p>
-                {t(
-                  'trae.empty.description',
-                  '点击“添加账号”开始管理您的 Trae 账号，也可以从本机或 JSON 文件导入。',
-                )}
+                {t('trae.empty.descriptionWithPlatform', {
+                  platform: platformConfig.platformKey,
+                  defaultValue:
+                    '点击“添加账号”开始管理您的 {{platform}} 账号，也可以从本机 {{platform}} 数据或 JSON 文件导入。',
+                })}
               </p>
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginTop: '16px' }}>
                 <button className="btn btn-primary" onClick={() => openAddModal('oauth')}>
@@ -1277,14 +1526,6 @@ export function TraeAccountsPage() {
             </div>
           ) : viewMode === 'grid' ? (
         <div className="grid-view-container">
-          {paginatedAccounts.length > 0 && (
-            <div className="grid-view-header" style={{ marginBottom: '12px', paddingLeft: '4px' }}>
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: 'var(--text-color)' }}>
-                <input type="checkbox" checked={isAllPaginatedSelected} onChange={() => toggleSelectAll(paginatedIds)} />
-                {t('common.selectAll', '全选')}
-              </label>
-            </div>
-          )}
           {groupByTag ? (
               <div className="tag-group-list">
                 {paginatedGroupedAccounts.map(({ groupKey, items, totalCount }) => (
@@ -1381,11 +1622,16 @@ export function TraeAccountsPage() {
           />
 
           {showAddModal && (
-            <div className="modal-overlay" onClick={closeAddModal}>
+            <div className="modal-overlay">
               <div className="modal-content ghcp-add-modal" onClick={(event) => event.stopPropagation()}>
                 <div className="modal-header">
                   <button className="btn btn-secondary icon-only" onClick={closeAddModal} title={t('common.back', '返回')} aria-label={t('common.back', '返回')}><ChevronLeft size={14} /></button>
-                  <h2>{t('trae.addModal.title')}</h2>
+                  <h2>
+                    {t('trae.addModal.titleWithPlatform', {
+                      platform: platformConfig.platformKey,
+                      defaultValue: '添加 {{platform}} 账号',
+                    })}
+                  </h2>
                   <button
                     className="modal-close"
                     onClick={closeAddModal}
@@ -1424,7 +1670,11 @@ export function TraeAccountsPage() {
                   {addTab === 'oauth' ? (
                     <div className="add-section">
                       <p className="section-desc">
-                        {t('trae.oauth.desc', '点击下方按钮，在浏览器中完成 Trae OAuth 授权登录。')}
+                        {t('trae.oauth.descWithPlatform', {
+                          platform: platformConfig.platformKey,
+                          defaultValue:
+                            '点击下方按钮，在浏览器中完成 {{platform}} OAuth 授权登录。',
+                        })}
                       </p>
 
                       {oauthPrepareError ? (
@@ -1519,13 +1769,22 @@ export function TraeAccountsPage() {
                   ) : addTab === 'token' ? (
                     <div className="add-section">
                       <p className="section-desc">
-                        {t('accounts.importJsonHint', '导入由本工具导出的 Trae JSON 文件。')}
+                        {platformId === 'trae_cn' || platformId === 'trae_solo_cn'
+                          ? t(
+                              'trae.token.jsonOnlyDesc',
+                              '粘贴完整 Trae CN 账号 JSON。暂不支持裸 Token，避免导入后无法稳定识别账号或写入不可用登录态。',
+                            )
+                          : t('accounts.importJsonHint', '导入由本工具导出的 Trae JSON 文件。')}
                       </p>
                       <textarea
                         className="token-input"
                         value={tokenInput}
                         onChange={(event) => setTokenInput(event.target.value)}
-                        placeholder={t('common.shared.token.placeholder', '粘贴 Token 或 JSON...')}
+                        placeholder={
+                          platformId === 'trae_cn' || platformId === 'trae_solo_cn'
+                            ? t('trae.token.jsonOnlyPlaceholder', '粘贴完整 Trae CN JSON...')
+                            : t('common.shared.token.placeholder', '粘贴 Token 或 JSON...')
+                        }
                       />
                       <button
                         className="btn btn-primary btn-full"
@@ -1543,7 +1802,11 @@ export function TraeAccountsPage() {
                   ) : (
                     <div className="add-section">
                       <p className="section-desc">
-                        {t('trae.import.localDesc')}
+                        {t('trae.import.localDescWithPlatform', {
+                          platform: platformConfig.platformKey,
+                          defaultValue:
+                            '支持从本机 {{platform}} 配置目录读取当前登录账号、套餐信息和配额缓存数据。',
+                        })}
                       </p>
                       <button
                         className="btn btn-secondary btn-full"
@@ -1623,7 +1886,7 @@ export function TraeAccountsPage() {
           />
 
           {deleteConfirm && (
-            <div className="modal-overlay" onClick={() => !deleting && setDeleteConfirm(null)}>
+            <div className="modal-overlay">
               <div className="modal" onClick={(event) => event.stopPropagation()}>
                 <div className="modal-header">
                   <h2>{t('common.confirm', '确认')}</h2>
@@ -1656,7 +1919,7 @@ export function TraeAccountsPage() {
           )}
 
           {tagDeleteConfirm && (
-            <div className="modal-overlay" onClick={() => !deletingTag && setTagDeleteConfirm(null)}>
+            <div className="modal-overlay">
               <div className="modal" onClick={(event) => event.stopPropagation()}>
                 <div className="modal-header">
                   <h2>{t('common.confirm', '确认')}</h2>
@@ -1708,7 +1971,10 @@ export function TraeAccountsPage() {
       )}
 
       {activeTab === 'instances' && (
-        <TraeInstancesContent accountsForSelect={sortedAccountsForInstances} />
+        <TraeInstancesContent
+          platformId={platformId}
+          accountsForSelect={sortedAccountsForInstances}
+        />
       )}
     </div>
   );

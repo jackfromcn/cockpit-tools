@@ -117,6 +117,17 @@ pub struct KiroOAuthStartResponse {
     pub callback_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KiroOAuthLoginStartOptions {
+    #[serde(default)]
+    pub method: Option<String>,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub start_url: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct KiroOAuthCompletePayload {
     pub email: String,

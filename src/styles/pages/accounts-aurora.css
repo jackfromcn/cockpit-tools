@@ -766,6 +766,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
 }
 
 .accounts-page .quota-compact-header {
@@ -819,9 +820,23 @@
 }
 
 .accounts-page .quota-compact-reset {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 10px;
   color: var(--text-secondary);
   font-family: var(--font-mono);
+}
+
+.accounts-page .quota-reset {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .accounts-page .quota-empty {
@@ -987,20 +1002,24 @@
 }
 
 [data-theme="dark"] .accounts-page .pagination-container .tag-filter-btn.single-filter-btn {
-  background: rgba(15, 23, 42, 0.42);
-  border-color: rgba(148, 163, 184, 0.14);
-  color: rgba(226, 232, 240, 0.78);
+  background: rgba(15, 23, 42, 0.58);
+  border-color: rgba(96, 165, 250, 0.26);
+  color: rgba(226, 232, 240, 0.88);
 }
 
 [data-theme="dark"] .accounts-page .pagination-container .tag-filter-btn.single-filter-btn:hover:not(:disabled),
 [data-theme="dark"] .accounts-page .pagination-container .tag-filter-btn.single-filter-btn.active {
-  background: rgba(15, 23, 42, 0.58);
-  border-color: rgba(96, 165, 250, 0.24);
-  color: rgba(241, 245, 249, 0.96);
+  background: linear-gradient(
+    135deg,
+    rgba(37, 99, 235, 0.24),
+    rgba(20, 184, 166, 0.12)
+  );
+  border-color: rgba(96, 165, 250, 0.44);
+  color: rgba(248, 250, 252, 0.96);
 }
 
 [data-theme="dark"] .accounts-page .pagination-container .single-filter-icon {
-  color: rgba(148, 163, 184, 0.78);
+  color: rgba(96, 165, 250, 0.9);
 }
 
 [data-theme="dark"] .accounts-page .pagination-btn:hover:not(:disabled) {
@@ -1188,6 +1207,28 @@
   gap: 4px;
 }
 
+.accounts-add-target-group-hint {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 8px;
+  max-width: 100%;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--primary) 9%, var(--bg-secondary));
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.accounts-add-target-group-hint span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------- dark mode ---------- */
 [data-theme="dark"] .account-folder-card {
   background: rgba(30, 41, 59, 0.6);
@@ -1210,4 +1251,31 @@
 
 [data-theme="dark"] .breadcrumb-current {
   color: rgba(226, 232, 240, 0.9);
+}
+
+html[data-reduced-motion="true"] .accounts-page .toolbar,
+html[data-reduced-motion="true"] .accounts-page .accounts-grid .account-card,
+html[data-reduced-motion="true"] .accounts-page .card-quota-grid {
+  background: var(--bg-surface);
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+html[data-reduced-motion="true"] .accounts-page .accounts-grid .account-card,
+html[data-reduced-motion="true"] .accounts-page .accounts-grid .account-card:hover:not(.current) {
+  transform: none;
+}
+
+html[data-reduced-motion="true"] .accounts-page .account-card.current,
+html[data-reduced-motion="true"] .accounts-page .account-card.current:hover {
+  box-shadow: 0 0 0 2px var(--primary-light);
+}
+
+html[data-reduced-motion="true"] .accounts-page .account-card.selected {
+  background: color-mix(in srgb, var(--bg-surface) 88%, var(--primary) 12%);
+}
+
+html[data-reduced-motion="true"] .accounts-page .account-card.disabled {
+  filter: none;
+  background: color-mix(in srgb, var(--bg-surface) 92%, var(--danger) 8%);
 }

@@ -75,13 +75,36 @@ pub fn load_account(account_id: &str) -> Option<CodebuddyAccount> {
         return None;
     }
     let content = fs::read_to_string(&account_path).ok()?;
-    crate::modules::atomic_write::parse_json_with_auto_restore(&account_path, &content).ok()
+    match crate::modules::secure_account_storage::deserialize_account_file::<CodebuddyAccount>(
+        &account_path,
+        &content,
+    ) {
+        Ok((account, needs_rotation)) => {
+            if needs_rotation {
+                let account_for_rewrite = account.clone();
+                crate::modules::deferred_account_rewrite::schedule_account_rewrite_if_unchanged(
+                    "codebuddy",
+                    account_for_rewrite.id.clone(),
+                    account_path.clone(),
+                    content.as_bytes(),
+                    move || {
+                        crate::modules::secure_account_storage::serialize_account_file(
+                            "codebuddy",
+                            &account_for_rewrite,
+                        )
+                    },
+                );
+            }
+            Some(account)
+        }
+        Err(_) => None,
+    }
 }
 
 fn save_account_file(account: &CodebuddyAccount) -> Result<(), String> {
     let path = resolve_account_file_path(account.id.as_str())?;
     let content =
-        serde_json::to_string_pretty(account).map_err(|e| format!("序列化账号失败: {}", e))?;
+        crate::modules::secure_account_storage::serialize_account_file("codebuddy", account)?;
     crate::modules::atomic_write::write_string_atomic(&path, &content)
         .map_err(|e| format!("保存账号失败: {}", e))
 }
@@ -89,7 +112,8 @@ fn save_account_file(account: &CodebuddyAccount) -> Result<(), String> {
 fn delete_account_file(account_id: &str) -> Result<(), String> {
     let path = resolve_account_file_path(account_id)?;
     if path.exists() {
-        fs::remove_file(path).map_err(|e| format!("删除账号文件失败: {}", e))?;
+        crate::modules::atomic_write::remove_file_locked(&path)
+            .map_err(|e| format!("删除账号文件失败: {}", e))?;
     }
     Ok(())
 }
@@ -518,6 +542,7 @@ fn normalize_account_index(index: &mut CodebuddyAccountIndex) -> Vec<CodebuddyAc
 pub fn list_accounts() -> Vec<CodebuddyAccount> {
     let mut index = load_account_index();
     let had_index_accounts = !index.accounts.is_empty();
+    let index_before_normalize = serde_json::to_vec(&index).ok();
     let accounts = normalize_account_index(&mut index);
     if had_index_accounts && accounts.is_empty() {
         logger::log_warn(
@@ -525,8 +550,14 @@ pub fn list_accounts() -> Vec<CodebuddyAccount> {
         );
         return accounts;
     }
-    if let Err(err) = save_account_index(&index) {
-        logger::log_warn(&format!("[CodeBuddy Account] 保存账号索引失败: {}", err));
+    let index_changed = index_before_normalize
+        .as_ref()
+        .map(|before| Some(before.as_slice()) != serde_json::to_vec(&index).ok().as_deref())
+        .unwrap_or(true);
+    if index_changed {
+        if let Err(err) = save_account_index(&index) {
+            logger::log_warn(&format!("[CodeBuddy Account] 保存账号索引失败: {}", err));
+        }
     }
     accounts
 }
@@ -534,12 +565,19 @@ pub fn list_accounts() -> Vec<CodebuddyAccount> {
 pub fn list_accounts_checked() -> Result<Vec<CodebuddyAccount>, String> {
     let mut index = load_account_index_checked()?;
     let had_index_accounts = !index.accounts.is_empty();
+    let index_before_normalize = serde_json::to_vec(&index).ok();
     let accounts = normalize_account_index(&mut index);
     if had_index_accounts && accounts.is_empty() {
         return Err("CodeBuddy 账号索引中存在账号，但详情文件均无法读取；已保留前端缓存，请从账号备份或本地账号文件恢复。".to_string());
     }
-    if let Err(err) = save_account_index(&index) {
-        logger::log_warn(&format!("[CodeBuddy Account] 保存账号索引失败: {}", err));
+    let index_changed = index_before_normalize
+        .as_ref()
+        .map(|before| Some(before.as_slice()) != serde_json::to_vec(&index).ok().as_deref())
+        .unwrap_or(true);
+    if index_changed {
+        if let Err(err) = save_account_index(&index) {
+            logger::log_warn(&format!("[CodeBuddy Account] 保存账号索引失败: {}", err));
+        }
     }
     Ok(accounts)
 }

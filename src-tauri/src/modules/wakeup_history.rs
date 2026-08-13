@@ -21,6 +21,7 @@ pub struct WakeupHistoryItem {
     pub model_id: String,
     pub prompt: Option<String>,
     pub success: bool,
+    pub status: Option<String>,
     pub message: Option<String>,
     pub duration: Option<u64>,
 }
@@ -121,4 +122,39 @@ pub fn add_history_items(new_items: Vec<WakeupHistoryItem>) -> Result<(), String
 pub fn clear_history() -> Result<(), String> {
     let _lock = HISTORY_LOCK.lock().map_err(|_| "获取历史锁失败")?;
     save_history(&[])
+}
+
+/// 记录单条状态历史（用于确认/跳过等场景）
+pub fn record_status(
+    _app: &tauri::AppHandle,
+    task: &crate::modules::wakeup_scheduler::WakeupTask,
+    trigger_source: &str,
+    status: &str,
+) -> Result<(), String> {
+    let item = WakeupHistoryItem {
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now().timestamp(),
+        trigger_type: "scheduled".to_string(),
+        trigger_source: trigger_source.to_string(),
+        task_name: Some(task.name.clone()),
+        account_email: task
+            .schedule
+            .selected_accounts
+            .first()
+            .cloned()
+            .unwrap_or_default(),
+        model_id: task
+            .schedule
+            .selected_models
+            .first()
+            .cloned()
+            .unwrap_or_default(),
+        prompt: task.schedule.custom_prompt.clone(),
+        success: status == "success",
+        status: Some(status.to_string()),
+        message: Some(format!("Status: {}", status)),
+        duration: Some(0),
+    };
+
+    add_history_items(vec![item])
 }

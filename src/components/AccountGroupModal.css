@@ -51,23 +51,31 @@
 .group-modal-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .group-modal-item {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 10px;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  border-radius: 12px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
-  transition: all 0.15s ease;
+  overflow: hidden;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .group-modal-item:hover {
   border-color: var(--border-hover);
-  background: var(--bg-hover);
+}
+
+.group-modal-item-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  min-height: 48px;
 }
 
 .group-modal-item .group-icon {
@@ -90,11 +98,143 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 100%;
 }
 
 .group-modal-item .group-count {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+/* 第二行：额度策略，与主信息分层，避免挤在一行 */
+.group-modal-item-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+:root[data-theme='light'] .group-modal-item-meta,
+html.light .group-modal-item-meta,
+body.theme-light .group-modal-item-meta {
+  background: rgba(15, 23, 42, 0.02);
+}
+
+.group-quota-meta-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.group-quota-dropdown {
+  width: auto;
+  min-width: 120px;
+  max-width: 160px;
+  flex: 0 0 auto;
+}
+
+.group-quota-dropdown .single-select-dropdown-trigger {
+  min-height: 32px;
+  height: 32px;
+  padding: 0 8px 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  box-shadow: none;
+}
+
+.group-quota-dropdown .single-select-dropdown-trigger:hover:not(:disabled) {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: var(--bg-card);
+  box-shadow: none;
+  transform: none;
+}
+
+.group-quota-dropdown .single-select-dropdown-trigger.open {
+  border-color: rgba(59, 130, 246, 0.45);
+  background: var(--bg-card);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  transform: none;
+}
+
+.group-quota-dropdown .single-select-dropdown-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.group-quota-dropdown .single-select-dropdown-arrow {
+  width: 20px;
+  height: 20px;
+  background: rgba(59, 130, 246, 0.08);
+  color: var(--text-muted);
+}
+
+.group-quota-dropdown .single-select-dropdown-arrow svg {
+  width: 12px;
+  height: 12px;
+}
+
+.group-quota-dropdown-menu.single-select-dropdown-menu {
+  border-radius: 10px;
+  padding: 4px;
+}
+
+.group-quota-dropdown-menu .single-select-dropdown-item {
+  min-height: 34px;
+  border-radius: 8px;
+  padding: 0 10px;
+}
+
+.group-quota-dropdown-menu .single-select-dropdown-item-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.group-quota-custom-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 120px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: var(--bg-card);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.group-quota-custom-field {
+  width: 52px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0;
+}
+
+.group-quota-custom-field::-webkit-outer-spin-button,
+.group-quota-custom-field::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.group-quota-custom-field[type='number'] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.group-quota-unit {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .group-modal-item .group-actions {
@@ -256,8 +396,12 @@
 
 /* 分组筛选选中高亮 */
 .group-modal-item.group-filter-active {
-  border-color: var(--primary);
-  background: rgba(59, 130, 246, 0.06);
+  border-color: rgba(59, 130, 246, 0.45);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.12);
+}
+
+.group-modal-item.group-filter-active .group-modal-item-main {
+  background: rgba(59, 130, 246, 0.04);
 }
 
 /* 筛选提示条 */

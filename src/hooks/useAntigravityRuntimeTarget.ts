@@ -5,7 +5,11 @@ import {
   AntigravityRuntimeTarget,
   getAntigravityRuntimeTarget,
   normalizeAntigravityRuntimeTarget,
+  setAntigravityRuntimeTarget,
 } from '../utils/antigravityRuntimeTarget';
+import { resolvePreferredAntigravityRuntimeTarget } from '../services/antigravityRuntimeService';
+
+let antigravityRuntimeTargetAutoResolveStarted = false;
 
 export function useAntigravityRuntimeTarget(): AntigravityRuntimeTarget {
   const [target, setTarget] = useState<AntigravityRuntimeTarget>(() =>
@@ -30,6 +34,28 @@ export function useAntigravityRuntimeTarget(): AntigravityRuntimeTarget {
       window.removeEventListener(ANTIGRAVITY_RUNTIME_TARGET_CHANGED_EVENT, handleChange);
       window.removeEventListener('storage', handleChange);
     };
+  }, []);
+
+  useEffect(() => {
+    if (antigravityRuntimeTargetAutoResolveStarted) {
+      return;
+    }
+    antigravityRuntimeTargetAutoResolveStarted = true;
+
+    const initialTarget = getAntigravityRuntimeTarget();
+    void resolvePreferredAntigravityRuntimeTarget(initialTarget)
+      .then((preferredTarget) => {
+        if (preferredTarget === initialTarget) {
+          return;
+        }
+        if (getAntigravityRuntimeTarget() !== initialTarget) {
+          return;
+        }
+        setAntigravityRuntimeTarget(preferredTarget);
+      })
+      .catch((error) => {
+        console.warn('[AntigravityRuntime] failed to resolve preferred target:', error);
+      });
   }, []);
 
   return target;

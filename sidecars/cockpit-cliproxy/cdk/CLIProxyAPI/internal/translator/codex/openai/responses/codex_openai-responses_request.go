@@ -1,8 +1,9 @@
 package responses
 
 import (
-	"fmt"
+	"strings"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -19,7 +20,14 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 
 	rawJSON, _ = sjson.SetBytes(rawJSON, "stream", true)
 	rawJSON, _ = sjson.SetBytes(rawJSON, "store", false)
-	rawJSON, _ = sjson.SetBytes(rawJSON, "parallel_tool_calls", true)
+	parallelToolCalls := true
+	if requested := gjson.GetBytes(rawJSON, "parallel_tool_calls"); requested.Exists() {
+		parallelToolCalls = requested.Bool()
+	}
+	if registry.CodexClientModelUsesResponsesLite(modelName) {
+		parallelToolCalls = false
+	}
+	rawJSON, _ = sjson.SetBytes(rawJSON, "parallel_tool_calls", parallelToolCalls)
 	rawJSON, _ = sjson.SetBytes(rawJSON, "include", []string{"reasoning.encrypted_content"})
 	// Codex Responses rejects token limit fields, so strip them out before forwarding.
 	rawJSON, _ = sjson.DeleteBytes(rawJSON, "max_output_tokens")
@@ -38,11 +46,79 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 	// Delete the user field as it is not supported by the Codex upstream.
 	rawJSON, _ = sjson.DeleteBytes(rawJSON, "user")
 
-	// Convert role "system" to "developer" in input array to comply with Codex API requirements.
-	rawJSON = convertSystemRoleToDeveloper(rawJSON)
+	// Normalize replayed input metadata and roles in one pass.
+	rawJSON = normalizeCodexInputItems(rawJSON)
 	rawJSON = normalizeCodexBuiltinTools(rawJSON)
 
 	return rawJSON
+}
+
+// normalizeCodexInputItems strips unsupported metadata while preserving tool-call
+// namespaces needed by Codex OAuth, and converts unsupported system roles.
+func normalizeCodexInputItems(rawJSON []byte) []byte {
+	inputResult := gjson.GetBytes(rawJSON, "input")
+	if !inputResult.IsArray() {
+		return rawJSON
+	}
+
+	inputItems := inputResult.Array()
+	hasChanges := false
+	for _, item := range inputItems {
+		if shouldStripCodexInputNamespace(item) || item.Get("role").String() == "system" {
+			hasChanges = true
+			break
+		}
+	}
+	if !hasChanges {
+		return rawJSON
+	}
+
+	normalizedInput := make([]byte, 0, len(inputResult.Raw)+16)
+	normalizedInput = append(normalizedInput, '[')
+	for i, item := range inputItems {
+		if i > 0 {
+			normalizedInput = append(normalizedInput, ',')
+		}
+
+		hasNamespace := shouldStripCodexInputNamespace(item)
+		hasSystemRole := item.Get("role").String() == "system"
+		if !hasNamespace && !hasSystemRole {
+			normalizedInput = append(normalizedInput, item.Raw...)
+			continue
+		}
+
+		itemJSON := []byte(item.Raw)
+		if hasNamespace {
+			if updated, err := sjson.DeleteBytes(itemJSON, "namespace"); err == nil {
+				itemJSON = updated
+			}
+		}
+		if hasSystemRole {
+			if updated, err := sjson.SetBytes(itemJSON, "role", "developer"); err == nil {
+				itemJSON = updated
+			}
+		}
+		normalizedInput = append(normalizedInput, itemJSON...)
+	}
+	normalizedInput = append(normalizedInput, ']')
+
+	updated, err := sjson.SetRawBytes(rawJSON, "input", normalizedInput)
+	if err != nil {
+		return rawJSON
+	}
+	return updated
+}
+
+func shouldStripCodexInputNamespace(item gjson.Result) bool {
+	if !item.Get("namespace").Exists() {
+		return false
+	}
+	switch strings.TrimSpace(item.Get("type").String()) {
+	case "function_call", "custom_tool_call", "tool_call", "mcp_tool_call":
+		return false
+	default:
+		return true
+	}
 }
 
 // applyResponsesCompactionCompatibility handles OpenAI Responses context_management.compaction
@@ -62,59 +138,67 @@ func applyResponsesCompactionCompatibility(rawJSON []byte) []byte {
 	return rawJSON
 }
 
-// convertSystemRoleToDeveloper traverses the input array and converts any message items
-// with role "system" to role "developer". This is necessary because Codex API does not
-// accept "system" role in the input array.
-func convertSystemRoleToDeveloper(rawJSON []byte) []byte {
-	inputResult := gjson.GetBytes(rawJSON, "input")
-	if !inputResult.IsArray() {
-		return rawJSON
-	}
-
-	inputArray := inputResult.Array()
-	result := rawJSON
-
-	// Directly modify role values for items with "system" role
-	for i := 0; i < len(inputArray); i++ {
-		rolePath := fmt.Sprintf("input.%d.role", i)
-		if gjson.GetBytes(result, rolePath).String() == "system" {
-			result, _ = sjson.SetBytes(result, rolePath, "developer")
-		}
-	}
-
-	return result
-}
-
 // normalizeCodexBuiltinTools rewrites legacy/preview built-in tool variants to the
 // stable names expected by the current Codex upstream.
 func normalizeCodexBuiltinTools(rawJSON []byte) []byte {
-	result := rawJSON
+	result := normalizeCodexBuiltinToolArray(rawJSON, "tools")
 
-	tools := gjson.GetBytes(result, "tools")
-	if tools.IsArray() {
-		toolArray := tools.Array()
-		for i := 0; i < len(toolArray); i++ {
-			typePath := fmt.Sprintf("tools.%d.type", i)
-			result = normalizeCodexBuiltinToolAtPath(result, typePath)
-		}
-	}
-
-	result = normalizeCodexBuiltinToolAtPath(result, "tool_choice.type")
-
-	toolChoiceTools := gjson.GetBytes(result, "tool_choice.tools")
-	if toolChoiceTools.IsArray() {
-		toolArray := toolChoiceTools.Array()
-		for i := 0; i < len(toolArray); i++ {
-			typePath := fmt.Sprintf("tool_choice.tools.%d.type", i)
-			result = normalizeCodexBuiltinToolAtPath(result, typePath)
-		}
-	}
+	toolChoiceType := gjson.GetBytes(result, "tool_choice.type").String()
+	result = normalizeCodexBuiltinToolAtPath(result, "tool_choice.type", toolChoiceType)
+	result = normalizeCodexBuiltinToolArray(result, "tool_choice.tools")
 
 	return result
 }
 
-func normalizeCodexBuiltinToolAtPath(rawJSON []byte, path string) []byte {
-	currentType := gjson.GetBytes(rawJSON, path).String()
+func normalizeCodexBuiltinToolArray(rawJSON []byte, path string) []byte {
+	toolResult := gjson.GetBytes(rawJSON, path)
+	if !toolResult.IsArray() {
+		return rawJSON
+	}
+
+	tools := toolResult.Array()
+	hasChanges := false
+	for _, tool := range tools {
+		if normalizeCodexBuiltinToolType(tool.Get("type").String()) != "" {
+			hasChanges = true
+			break
+		}
+	}
+	if !hasChanges {
+		return rawJSON
+	}
+
+	normalizedTools := make([]byte, 0, len(toolResult.Raw))
+	normalizedTools = append(normalizedTools, '[')
+	for i, tool := range tools {
+		if i > 0 {
+			normalizedTools = append(normalizedTools, ',')
+		}
+
+		currentType := tool.Get("type").String()
+		normalizedType := normalizeCodexBuiltinToolType(currentType)
+		if normalizedType == "" {
+			normalizedTools = append(normalizedTools, tool.Raw...)
+			continue
+		}
+
+		toolJSON := []byte(tool.Raw)
+		if updated, err := sjson.SetBytes(toolJSON, "type", normalizedType); err == nil {
+			toolJSON = updated
+			log.Debugf("codex responses: normalized builtin tool type at %s.%d.type from %q to %q", path, i, currentType, normalizedType)
+		}
+		normalizedTools = append(normalizedTools, toolJSON...)
+	}
+	normalizedTools = append(normalizedTools, ']')
+
+	updated, err := sjson.SetRawBytes(rawJSON, path, normalizedTools)
+	if err != nil {
+		return rawJSON
+	}
+	return updated
+}
+
+func normalizeCodexBuiltinToolAtPath(rawJSON []byte, path, currentType string) []byte {
 	normalizedType := normalizeCodexBuiltinToolType(currentType)
 	if normalizedType == "" {
 		return rawJSON

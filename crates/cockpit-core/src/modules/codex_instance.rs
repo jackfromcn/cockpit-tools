@@ -19,7 +19,11 @@ const CODEX_SHARED_RULES_DIR_NAME: &str = "rules";
 const CODEX_SHARED_AGENTS_FILE_NAME: &str = "AGENTS.md";
 const CODEX_SHARED_VENDOR_IMPORTS_SKILLS_DIR: &str = "vendor_imports/skills";
 #[cfg(target_os = "windows")]
+const CODEX_SHARED_COPY_MARKER_FILE_NAME: &str = ".cockpit-tools-shared-copy";
+#[cfg(target_os = "windows")]
 const CODEX_WINDOWS_APP_DATA_DIR_NAME: &str = "codex-app-data";
+#[cfg(target_os = "windows")]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 #[derive(Debug, Clone)]
 pub struct CreateInstanceParams {
@@ -121,7 +125,7 @@ pub fn get_default_instances_root_dir() -> Result<PathBuf, String> {
     }
 
     #[allow(unreachable_code)]
-    Err("Codex 多开实例仅支持 macOS 和 Windows".to_string())
+    Err("Codex 应用多开仅支持 macOS 和 Windows".to_string())
 }
 
 pub fn get_instance_defaults() -> Result<InstanceDefaults, String> {
@@ -163,8 +167,91 @@ fn create_directory_symlink(source: &Path, target: &Path) -> Result<(), String> 
 
 #[cfg(windows)]
 fn create_directory_symlink(source: &Path, target: &Path) -> Result<(), String> {
-    std::os::windows::fs::symlink_dir(source, target)
-        .map_err(|e| format!("创建目录共享链接失败: {}", e))
+    create_directory_shared_link_or_copy(
+        source,
+        target,
+        |source, target| junction::create(source, target).map_err(|e| e.to_string()),
+        |source, target| instance_store::copy_dir_recursive(source, target),
+    )
+}
+
+#[cfg(windows)]
+fn create_directory_shared_link_or_copy<J, C>(
+    source: &Path,
+    target: &Path,
+    create_junction: J,
+    copy_directory: C,
+) -> Result<(), String>
+where
+    J: FnOnce(&Path, &Path) -> Result<(), String>,
+    C: FnOnce(&Path, &Path) -> Result<(), String>,
+{
+    if let Err(junction_error) = create_junction(source, target) {
+        modules::logger::log_warn(&format!(
+            "Windows directory junction failed, copying shared directory instead: source={}, target={}, error={}",
+            display_abs_path(source),
+            display_abs_path(target),
+            junction_error
+        ));
+        prepare_directory_copy_fallback_target(target)?;
+        copy_directory(source, target).map_err(|copy_error| {
+            format!(
+                "创建目录共享存储失败: junction_error={}, copy_error={}, source={}, target={}",
+                junction_error,
+                copy_error,
+                display_abs_path(source),
+                display_abs_path(target)
+            )
+        })?;
+        mark_directory_copy_fallback(target).map_err(|marker_error| {
+            format!(
+                "共享目录已复制但写入 fallback 标记失败: junction_error={}, marker_error={}, source={}, target={}",
+                junction_error,
+                marker_error,
+                display_abs_path(source),
+                display_abs_path(target)
+            )
+        })?;
+        return Ok(());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn prepare_directory_copy_fallback_target(target: &Path) -> Result<(), String> {
+    let Ok(metadata) = fs::symlink_metadata(target) else {
+        return Ok(());
+    };
+    if is_shared_directory_link(&metadata) {
+        return remove_symlink(target);
+    }
+    if metadata.is_dir() && is_directory_empty(target)? {
+        return fs::remove_dir(target).map_err(|e| {
+            format!(
+                "清理目录联接创建后残留的空目录失败 ({}): {}",
+                display_abs_path(target),
+                e
+            )
+        });
+    }
+    Err(format!(
+        "目录联接创建失败后目标路径已存在且非空，拒绝覆盖: {}",
+        display_abs_path(target)
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn mark_directory_copy_fallback(target: &Path) -> Result<(), String> {
+    fs::write(
+        target.join(CODEX_SHARED_COPY_MARKER_FILE_NAME),
+        "cockpit-tools-shared-copy-v1\n",
+    )
+    .map_err(|e| format!("写入目录复制 fallback 标记失败: {}", e))
+}
+
+#[cfg(target_os = "windows")]
+fn is_directory_copy_fallback(target: &Path) -> bool {
+    target.join(CODEX_SHARED_COPY_MARKER_FILE_NAME).is_file()
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -192,6 +279,23 @@ fn remove_symlink(path: &Path) -> Result<(), String> {
     fs::remove_file(path)
         .or_else(|_| fs::remove_dir(path))
         .map_err(|e| format!("移除已有共享链接失败: {}", e))
+}
+
+#[cfg(target_os = "windows")]
+fn is_windows_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(target_os = "windows")]
+fn is_shared_directory_link(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink() || is_windows_reparse_point(metadata)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_shared_directory_link(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
 }
 
 fn is_directory_empty(path: &Path) -> Result<bool, String> {
@@ -327,7 +431,7 @@ fn sync_shared_directory(
             e
         )
     })?;
-    if metadata.file_type().is_symlink() {
+    if is_shared_directory_link(&metadata) {
         let current_target = fs::read_link(&instance_dir).map_err(|e| {
             format!(
                 "读取实例共享目录链接失败 ({}): {}",
@@ -341,6 +445,15 @@ fn sync_shared_directory(
         }
         remove_symlink(&instance_dir)?;
         return create_directory_symlink(&global_dir, &instance_dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    if is_directory_copy_fallback(&instance_dir) {
+        modules::logger::log_warn(&format!(
+            "Windows shared directory is using a generated copy fallback; keeping it without destructive resync: path={}",
+            display_abs_path(&instance_dir)
+        ));
+        return Ok(());
     }
 
     if !metadata.is_dir() {
@@ -897,4 +1010,68 @@ pub async fn inject_account_to_profile(profile_dir: &Path, account_id: &str) -> 
     )
     .await
     .map(|_| ())
+}
+
+#[cfg(all(test, windows))]
+mod windows_shared_directory_tests {
+    use super::*;
+
+    fn make_temp_dir(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("{}-{}", label, Uuid::new_v4()));
+        fs::create_dir_all(&path).expect("create test directory");
+        path
+    }
+
+    #[test]
+    fn native_junction_supports_unicode_paths() {
+        let id = Uuid::new_v4();
+        let executable_dir = std::env::current_exe()
+            .expect("resolve test executable")
+            .parent()
+            .expect("resolve test executable directory")
+            .to_path_buf();
+        let source_root = executable_dir.join(format!("codex-junction-source-{}", id));
+        let target_root = std::env::temp_dir().join(format!("codex-junction-target-{}", id));
+        let source = source_root.join("共享技能");
+        let target = target_root.join("实例技能");
+        fs::create_dir_all(&source).expect("create junction source");
+        fs::create_dir_all(&target_root).expect("create junction target parent");
+        fs::write(source.join("探针.txt"), "shared").expect("write source probe");
+
+        create_directory_symlink(&source, &target).expect("create native junction");
+        assert_eq!(
+            fs::read_to_string(target.join("探针.txt")).expect("read through junction"),
+            "shared"
+        );
+
+        if junction::exists(&target).unwrap_or(false) {
+            junction::delete(&target).expect("delete test junction");
+        }
+        fs::remove_dir_all(&source_root).expect("remove test source directory");
+        fs::remove_dir_all(&target_root).expect("remove test target directory");
+    }
+
+    #[test]
+    fn failed_junction_copies_shared_directory() {
+        let root = make_temp_dir("codex-junction-copy-fallback");
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::create_dir_all(source.join("nested")).expect("create source directory");
+        fs::write(source.join("nested").join("probe.txt"), "shared").expect("write source probe");
+
+        create_directory_shared_link_or_copy(
+            &source,
+            &target,
+            |_, _| Err("junction unavailable".to_string()),
+            |source, target| instance_store::copy_dir_recursive(source, target),
+        )
+        .expect("copy fallback");
+
+        assert!(is_directory_copy_fallback(&target));
+        assert_eq!(
+            fs::read_to_string(target.join("nested").join("probe.txt")).expect("read copied probe"),
+            "shared"
+        );
+        fs::remove_dir_all(&root).expect("remove test directory");
+    }
 }

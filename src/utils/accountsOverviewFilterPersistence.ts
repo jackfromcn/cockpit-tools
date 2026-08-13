@@ -9,15 +9,20 @@ export interface AccountsOverviewFilterPersistenceChangedDetail {
 const QUICK_SETTINGS_SCOPE_MAP: Record<string, string> = {
   antigravity: 'antigravity',
   codex: 'codex',
+  claude: 'claude',
   github_copilot: 'githubcopilot',
   windsurf: 'windsurf',
   kiro: 'kiro',
   cursor: 'cursor',
-  gemini: 'gemini',
+  grok: 'grok',
   codebuddy: 'codebuddy',
   codebuddy_cn: 'codebuddy_cn',
   qoder: 'qoder',
+  zcode: 'zcode',
   trae: 'trae',
+  trae_solo: 'trae_solo',
+  trae_cn: 'trae_cn',
+  trae_solo_cn: 'trae_solo_cn',
   workbuddy: 'workbuddy',
   zed: 'zed',
 };
@@ -46,7 +51,7 @@ export function resolveAccountsOverviewScopeFromQuickSettingsType(type: string):
 export function readAccountsOverviewFilterPersistenceEnabled(rawScope: string): boolean {
   const scope = normalizeAccountsOverviewScope(rawScope);
   try {
-    return localStorage.getItem(getEnabledStorageKey(scope)) === '1';
+    return localStorage.getItem(getEnabledStorageKey(scope)) !== '0';
   } catch {
     return false;
   }

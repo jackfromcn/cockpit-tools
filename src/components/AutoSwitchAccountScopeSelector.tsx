@@ -166,7 +166,14 @@ export function AutoSwitchAccountScopeSelector({
     });
   }, [accounts, groupFilter, groupIdsByAccountId, searchQuery, tagFilter, typeFilter]);
 
-  const selectedSet = useMemo(() => new Set(selectedAccountIds), [selectedAccountIds]);
+  const availableSelectedAccountIds = useMemo(
+    () => selectedAccountIds.filter((accountId) => accountById.has(accountId)),
+    [accountById, selectedAccountIds],
+  );
+  const selectedSet = useMemo(
+    () => new Set(availableSelectedAccountIds),
+    [availableSelectedAccountIds],
+  );
   const visibleAccountIds = useMemo(
     () => filteredAccounts.map((account) => account.id),
     [filteredAccounts],
@@ -188,14 +195,6 @@ export function AutoSwitchAccountScopeSelector({
     () => selectedVisibleCount > 0 && selectedVisibleCount < visibleAccountIds.length,
     [selectedVisibleCount, visibleAccountIds.length],
   );
-
-  useEffect(() => {
-    const validAccountIds = new Set(accounts.map((account) => account.id));
-    const next = selectedAccountIds.filter((accountId) => validAccountIds.has(accountId));
-    if (next.length !== selectedAccountIds.length) {
-      onSelectedAccountIdsChange(next);
-    }
-  }, [accounts, onSelectedAccountIdsChange, selectedAccountIds]);
 
   useEffect(() => {
     const validGroupIds = new Set(groups.map((group) => group.id));
@@ -249,12 +248,12 @@ export function AutoSwitchAccountScopeSelector({
     const visibleSet = new Set(visibleAccountIds);
     if (allVisibleSelected) {
       onSelectedAccountIdsChange(
-        selectedAccountIds.filter((accountId) => !visibleSet.has(accountId)),
+        availableSelectedAccountIds.filter((accountId) => !visibleSet.has(accountId)),
       );
       return;
     }
-    const selected = new Set(selectedAccountIds);
-    const merged = [...selectedAccountIds];
+    const selected = new Set(availableSelectedAccountIds);
+    const merged = [...availableSelectedAccountIds];
     visibleAccountIds.forEach((accountId) => {
       if (!selected.has(accountId)) {
         selected.add(accountId);
@@ -270,7 +269,7 @@ export function AutoSwitchAccountScopeSelector({
           total: accounts.length,
         })
       : t('settings.general.autoSwitchAccountScopeSummary', {
-          selected: selectedAccountIds.length,
+          selected: availableSelectedAccountIds.length,
           total: accounts.length,
         });
 
@@ -338,7 +337,7 @@ export function AutoSwitchAccountScopeSelector({
         <span className="settings-account-scope-count">
           {selectedVisibleCount}/{visibleAccountIds.length}
           {visibleAccountIds.length !== accounts.length
-            ? ` · ${selectedAccountIds.length}/${accounts.length}`
+            ? ` · ${availableSelectedAccountIds.length}/${accounts.length}`
             : ''}
         </span>
       </div>
@@ -360,7 +359,9 @@ export function AutoSwitchAccountScopeSelector({
                   type="checkbox"
                   checked={isSelected}
                   onChange={() =>
-                    onSelectedAccountIdsChange(toggleMultiValue(selectedAccountIds, account.id))
+                    onSelectedAccountIdsChange(
+                      toggleMultiValue(availableSelectedAccountIds, account.id),
+                    )
                   }
                 />
                 <span className="settings-account-scope-item-label" title={account.label}>
@@ -415,7 +416,6 @@ export function AutoSwitchAccountScopeSelector({
         createPortal(
           <div
             className="settings-account-scope-dialog-overlay"
-            onClick={() => setDialogOpen(false)}
           >
             <div
               className="settings-account-scope-dialog"

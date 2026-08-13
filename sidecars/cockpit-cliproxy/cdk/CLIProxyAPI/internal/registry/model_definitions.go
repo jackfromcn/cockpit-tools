@@ -89,11 +89,13 @@ func GetXAIModels() []*ModelInfo {
 	return WithXAIBuiltins(cloneModelInfos(getModels().XAI))
 }
 
-// WithCodexBuiltins injects hard-coded Codex-only model definitions that should
+// WithCodexBuiltins injects embedded Codex-only model definitions that should
 // not depend on remote models.json updates. Built-ins replace any matching IDs
 // already present in the provided slice.
 func WithCodexBuiltins(models []*ModelInfo) []*ModelInfo {
-	return upsertModelInfos(models, codexBuiltinImageModelInfo())
+	builtins := codexClientBuiltinModelInfos()
+	builtins = append(builtins, codexBuiltinImageModelInfo())
+	return upsertModelInfos(models, builtins...)
 }
 
 // WithXAIBuiltins injects hard-coded xAI image/video model definitions that should

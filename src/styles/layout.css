@@ -54,7 +54,7 @@
   transform: translateY(-50%);
   width: 68px;
   height: auto;
-  min-height: 380px;
+  min-height: 344px;
   background: var(--bg-card);
   backdrop-filter: blur(20px);
   border: 1px solid var(--border);
@@ -63,8 +63,8 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 32px 0;
-  gap: 32px; /* 减小留白 (was 40px) */
+  padding: 24px 0;
+  gap: 20px;
   z-index: 1000;
   animation: slideInLeft 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
   user-select: none;
@@ -122,6 +122,11 @@
 
 .side-nav-update-btn.is-restart {
   background: linear-gradient(135deg, #0ea5e9, #22c55e);
+  color: #fff;
+}
+
+.side-nav-update-btn.is-updated {
+  background: linear-gradient(135deg, #7c3aed, #0ea5e9);
   color: #fff;
 }
 
@@ -239,7 +244,7 @@
 .nav-items {
   display: flex;
   flex-direction: column;
-  gap: 28px; /* 增加菜单间距 (was 20px) */
+  gap: 18px;
   flex: 1;
   justify-content: center;
   position: relative;
@@ -748,6 +753,9 @@ html[data-theme="dark"] .side-nav-classic-handle:hover {
   top: 50%;
   transform: translateY(-50%);
   width: 240px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 14px;

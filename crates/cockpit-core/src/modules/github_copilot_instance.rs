@@ -92,7 +92,7 @@ pub fn get_default_instances_root_dir() -> Result<PathBuf, String> {
     }
 
     #[allow(unreachable_code)]
-    Err("GitHub Copilot 多开实例仅支持 macOS、Windows 和 Linux".to_string())
+    Err("GitHub Copilot 应用多开仅支持 macOS、Windows 和 Linux".to_string())
 }
 
 pub fn get_instance_defaults() -> Result<InstanceDefaults, String> {

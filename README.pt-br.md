@@ -7,11 +7,11 @@
 [![GitHub release](https://img.shields.io/github/v/release/jlcodes99/cockpit-tools?style=flat)](https://github.com/jlcodes99/cockpit-tools/releases)
 [![GitHub issues](https://img.shields.io/github/issues/jlcodes99/cockpit-tools)](https://github.com/jlcodes99/cockpit-tools/issues)
 
-Uma **ferramenta universal de gerenciamento de contas para IDEs de IA**, atualmente compatível com **Antigravity IDE**, **Codex**, **GitHub Copilot**, **Windsurf**, **Kiro**, **Cursor**, **Gemini Cli**, **CodeBuddy**, **CodeBuddy CN**, **Qoder**, **Trae** e **Zed**, com fluxos de trabalho paralelos em múltiplas instâncias.
+Uma **ferramenta universal de gerenciamento de contas para IDEs de IA**, atualmente compatível com **Antigravity IDE**, **Codex**, **GitHub Copilot**, **Windsurf**, **Kiro**, **Cursor**, **CodeBuddy**, **CodeBuddy CN**, **Qoder**, **Trae** e **Zed**, com fluxos de trabalho paralelos em múltiplas instâncias.
 
 > Projetada para ajudar os usuários a gerenciar com eficiência múltiplas contas de IDE com IA, esta ferramenta oferece suporte à troca com um clique, monitoramento de cota, tarefas de ativação e execuções paralelas em múltiplas instâncias, ajudando você a utilizar totalmente os recursos de diferentes contas.
 
-**Recursos**: Alternância com um clique · Gerenciamento de múltiplas contas · Múltiplas instâncias · Monitoramento de cotas · Tarefas de ativação · Impressões digitais de dispositivos · Integração de plugins · Gerenciamento do GitHub Copilot · Gerenciamento do Windsurf · Gerenciamento do Kiro · Gerenciamento do Cursor · Gerenciamento do Gemini Cli · Gerenciamento do CodeBuddy · Gerenciamento do CodeBuddy CN · Gerenciamento do Qoder · Gerenciamento do Trae · Gerenciamento do Zed
+**Recursos**: Alternância com um clique · Gerenciamento de múltiplas contas · Múltiplas instâncias · Monitoramento de cotas · Tarefas de ativação · Integração de plugins · Gerenciamento do GitHub Copilot · Gerenciamento do Windsurf · Gerenciamento do Kiro · Gerenciamento do Cursor · Gerenciamento do CodeBuddy · Gerenciamento do CodeBuddy CN · Gerenciamento do Qoder · Gerenciamento do Trae · Gerenciamento do Zed
 
 **Idiomas**: Suporta 18 idiomas
 
@@ -27,7 +27,7 @@ Uma **ferramenta universal de gerenciamento de contas para IDEs de IA**, atualme
 
 Um painel visual totalmente novo que oferece uma visão geral do status em um único lugar:
 
-- **Suporte a doze Plataformas**: Exibe simultaneamente o status das contas do Antigravity IDE, Codex, GitHub Copilot, Windsurf, Kiro, Cursor, Gemini Cli, CodeBuddy, CodeBuddy CN, Qoder, Trae e Zed
+- **Suporte a doze Plataformas**: Exibe simultaneamente o status das contas do Antigravity IDE, Codex, GitHub Copilot, Windsurf, Kiro, Cursor, CodeBuddy, CodeBuddy CN, Qoder, Trae e Zed
 - **Monitoramento de Cotas**: Visualização em tempo real das cotas restantes e dos horários de redefinição para cada modelo
 - **Ações Rápidas**: Atualização com um clique, ativação com um clique
 - **Progresso Visual**: Barras de progresso intuitivas mostrando o consumo de cotas
@@ -39,13 +39,11 @@ Um painel visual totalmente novo que oferece uma visão geral do status em um ú
 - **Troca com Um Clique**: Altere instantaneamente a conta ativa no momento sem login/logout manual
 - **Múltiplos Métodos de Importação**: OAuth, Token de Atualização (Refresh Token), Sincronização de Plugin
 - **Tarefas de Ativação**: Agende ativações de modelos de IA para acionar ciclos de redefinição de cota com antecedência
-- **Impressões Digitais de Dispositivo**: Gere, gerencie e vincule impressões digitais de dispositivo para reduzir riscos
 
 > ![Contas do Antigravity IDE](docs/images/antigravity_list.png)
 >
-> *(Tarefas de Despertar & Impressões Digitais do Dispositivo)*
+> *(Tarefas de Despertar)*
 > ![Tarefas de Despertar](docs/images/wakeup_detail.png)
-> ![Impressões Digitais do Dispositivo](docs/images/fingerprint_detail.png)
 
 #### 2.1 Múltiplas Instâncias do Antigravity IDE
 
@@ -139,22 +137,15 @@ Gerencie instâncias do Cursor com perfis isolados e controles de ciclo de vida.
 - **Ciclo de Vida Rápido**: Inicie, pare e force a parada de instâncias.
 - **Controle de Janelas**: Abra janelas de instâncias e feche todas as instâncias.
 
-### 8. Gerenciamento de Contas do Gemini CLI
 
-- **Importação de Contas**: Importação via OAuth, Token/JSON e importação local
-- **Visualização de Cotas**: Exibe o uso total, uso automático + Composer, uso da API, uso sob demanda e informações de ciclo
-- **Operações em Lote**: Tags e ações em massa
-- **Injeção de Troca de Conta**: Suporta a injeção de credenciais locais do Gemini CLI após a troca de conta (`~/.gemini`)
-- **Limitação da Plataforma**: O gerenciamento de múltiplas instâncias do Gemini CLI ainda não é suportado
-
-### 9. Gerenciamento de conta CodeBuddy
+### 8. Gerenciamento de conta CodeBuddy
 
 - **Importação de Contas**: Importação via OAuth e Token/JSON
 - **Visualização de Cotas**: Consulta de cotas, detalhes do ciclo e exibição de créditos extras
 - **Operações em Lote**: Tags e ações em massa
 - **Injeção de Troca de Conta**: Suporta a injeção e inicialização do CodeBuddy após a troca de conta
 
-#### 9.1 CodeBuddy Multi-Instância
+#### 8.1 CodeBuddy Multi-Instância
 
 Gerencie instâncias do CodeBuddy com perfis isolados e controles de ciclo de vida.
 
@@ -162,14 +153,14 @@ Gerencie instâncias do CodeBuddy com perfis isolados e controles de ciclo de vi
 - **Ciclo de Vida Rápido**: Inicie, pare e force a parada de instâncias.
 - **Controle de Janelas**: Abra janelas de instâncias e feche todas as instâncias.
 
-### 10. Gerenciamento de Contas do CodeBuddy CN
+### 9. Gerenciamento de Contas do CodeBuddy CN
 
 - **Importação de Conta**: suporta importação de OAuth, Token/JSON e cliente local
 - **Visualização de Cota**: exibe o plano e o status de uso, com um atalho para abrir informações detalhadas de cota na página oficial
 - **Operações em Lote**: suporta tags e ações em massa
 - **Injeção de Troca de Conta**: suporta a gravação do estado de autenticação local de volta e a inicialização do CodeBuddy CN após a troca de conta
 
-#### 10.1 CodeBuddy CN Multi-Instância
+#### 8.1 CodeBuddy CN Multi-Instância
 
 Gerencie instâncias do CodeBuddy CN com perfis isolados e controles de ciclo de vida.
 
@@ -177,14 +168,14 @@ Gerencie instâncias do CodeBuddy CN com perfis isolados e controles de ciclo de
 - **Ciclo de Vida Rápido**: inicie, pare e force a parada de instâncias.
 - **Controle de Janelas**: abra janelas de instâncias e feche todas as instâncias.
 
-### 11. Gerenciamento de Contas do Qoder
+### 10. Gerenciamento de Contas do Qoder
 
 - **Importação de Contas**: suporta importação local e importação JSON
 - **Visualização de Cotas**: mostra o uso de créditos, créditos restantes e valores brutos do plano
 - **Operações em Lote**: suporta tags, filtros, exportação e exclusão/atualização em lote
 - **Injeção de Troca de Conta**: suporta a injeção e inicialização do Qoder após a troca de conta
 
-#### 11.1 Qoder Multi-Instância
+#### 9.1 Qoder Multi-Instância
 
 Gerencie instâncias do Qoder com perfis isolados e controles de ciclo de vida.
 
@@ -192,14 +183,14 @@ Gerencie instâncias do Qoder com perfis isolados e controles de ciclo de vida.
 - **Ciclo de Vida Rápido**: inicie, pare e force a parada de instâncias.
 - **Controle de Janelas**: abra janelas de instâncias e feche todas as instâncias.
 
-### 12. Gerenciamento de Contas Trae
+### 11. Gerenciamento de Contas Trae
 
 - **Importação de Contas**: suporta importação local e importação JSON
 - **Visualização de Cotas**: mostra os valores brutos do plano, USD gasto/orçamento total e tempo de reinicialização
 - **Operações em Lote**: suporta tags, filtros, exportação e exclusão/atualização em lote
 - **Injeção de Troca de Conta**: suporta a gravação do estado de autenticação local e a inicialização do Trae após a troca de conta
 
-#### 12.1 Trae Multi-Instância
+#### 10.1 Trae Multi-Instância
 
 Gerencie instâncias do Trae com perfis isolados e controles de ciclo de vida.
 
@@ -207,14 +198,14 @@ Gerencie instâncias do Trae com perfis isolados e controles de ciclo de vida.
 - **Ciclo de Vida Rápido**: inicie, pare e force a parada de instâncias.
 - **Controle de Janelas**: abra janelas de instâncias e feche todas as instâncias.
 
-### 13. Gerenciamento de Contas Zed
+### 12. Gerenciamento de Contas Zed
 
 - **Importação de Conta**: Suporta login OAuth oficial, importação JSON e importação do estado atual de login local.
 - **Visualização de Uso**: Exibe o status da assinatura, permite editar previsões, gastos com tokens, limite de gastos e o fim do período de faturamento.
 - **Operações em Lote**: Suporta tags, filtros, exportação e exclusão/atualização em lote.
 - **Injeção de Switch**: Aplica a conta selecionada de volta ao cliente Zed oficial usando as regras de persistência local reais do cliente e reinicia o cliente quando necessário.
 
-### 14. Configurações Gerais
+### 13. Configurações Gerais
 
 - **Configurações Personalizadas**: Troca de tema, configurações de idioma, intervalo de atualização automática
 - **Controles da Plataforma**: Configurações centralizadas de caminho de inicialização e alerta de cota do CodeBuddy CN/Qoder/Trae/Zed
@@ -231,8 +222,7 @@ Estas são as perguntas de segurança mais comuns respondidas diretamente:
 - **Os dados são armazenados principalmente em sua máquina**:
   - `~/.antigravity_cockpit`: Contas do Antigravity IDE, configurações, status do WebSocket, etc.
   - `~/.codex`: Arquivo `auth.json` de login atual do Codex
-  - `~/.gemini`: Arquivos de sessão local do Gemini CLI (por exemplo, `oauth_creds.json`, `google_accounts.json`, `settings.json`)
-  - Pasta de dados do aplicativo local em `com.antigravity.cockpit-tools`: Dados de índice de múltiplas contas do Codex / GitHub Copilot / Windsurf / Kiro / Cursor / Gemini CLI / CodeBuddy / CodeBuddy CN / Qoder / Trae / Zed, etc.
+  - Pasta de dados do aplicativo local em `com.antigravity.cockpit-tools`: Dados de índice de múltiplas contas do Codex / GitHub Copilot / Windsurf / Kiro / Cursor / CodeBuddy / CodeBuddy CN / Qoder / Trae / Zed, etc.
 - **O WebSocket é somente local por padrão**: vincula-se a `127.0.0.1`, porta padrão `19528`; você pode desativá-lo ou alterar a porta em Configurações.
 - **Quando ocorre acesso à rede**: login OAuth, atualização de token, obtenção de cota, verificações de atualização e outras solicitações oficiais da API.
 **Solicitações de permissão de privacidade do macOS**: após iniciar o Codex/agente a partir do Cockpit Tools, se um comando do shell executado pelo agente acessar pastas protegidas, como Área de Trabalho, Documentos, Downloads ou Fotos, o macOS poderá exibir a solicitação como "O Cockpit Tools gostaria de acessar...". Isso ocorre porque esses comandos são processos filhos iniciados pelo Cockpit Tools, portanto, o macOS atribui a solicitação ao aplicativo host; isso não significa, por si só, que o processo principal do Cockpit Tools esteja ativamente verificando essas pastas. Conceda acesso somente se você confiar na tarefa atual do agente e nos comandos que ela executará. Em caso de dúvida, negue a solicitação ou execute o projeto a partir de um diretório de trabalho normal primeiro.
@@ -258,14 +248,13 @@ Se você deseja uma configuração estável com ajustes mínimos, siga os valore
 | Windsurf Auto Refresh | Periodically updates Windsurf quota | 5-10 minutes | Same as above |
 | Kiro Auto Refresh | Periodically updates Kiro quota | 5-10 minutes | Same as above |
 | Cursor Auto Refresh | Periodically updates Cursor quota | 5-10 minutes | Same as above |
-| Gemini Cli Auto Refresh | Periodically updates Gemini Cli quota | 5-10 minutes | Same as above |
 | CodeBuddy Auto Refresh | Periodically updates CodeBuddy quota | 5-10 minutes | Same as above |
 | CodeBuddy CN Auto Refresh | Periodically updates CodeBuddy CN quota | 5-10 minutes | Same as above |
 | Qoder Auto Refresh | Periodically updates Qoder quota | 5-10 minutes | Same as above |
 | Trae Auto Refresh | Periodically updates Trae quota | 5-10 minutes | Same as above |
 | Zed Auto Refresh | Periodically updates Zed quota | 5-10 minutes | Same as above |
 | Data Directory | Where account/config files are stored | Keep default | Only for troubleshooting or backups |
-| Antigravity IDE/Codex/VS Code/Windsurf/Kiro/Cursor/Gemini Cli/CodeBuddy/CodeBuddy CN/Qoder/Trae/Zed/OpenCode App Path | Manually set executable path | Leave empty (auto-detect) | Change only if auto-detect fails or you use custom install paths |
+| Antigravity IDE/Codex/VS Code/Windsurf/Kiro/Cursor/CodeBuddy/CodeBuddy CN/Qoder/Trae/Zed/OpenCode App Path | Manually set executable path | Leave empty (auto-detect) | Change only if auto-detect fails or you use custom install paths |
 | Auto-restart OpenCode on Codex switch | Sync OpenCode auth after Codex switch | ON if you use OpenCode; otherwise OFF | Enable for frequent Codex switching with OpenCode |
 
 Observações:

@@ -1,24 +1,38 @@
 /**
  * Codex 账号分组管理弹窗
  * - 创建 / 重命名 / 删除分组
+ * - 分组额度刷新（继承平台 / 间隔 / 不刷新，交互对齐设置页）
  * - 显示分组列表及账号数量
  * - 支持勾选分组作为筛选条件
  * - 专用于 Codex 账号系统
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, FolderOpen, Plus, Pencil, Trash2, FolderPlus, AlertCircle } from 'lucide-react';
 import {
   type CodexAccountGroup,
+  type CodexGroupQuotaAutoRefreshMinutes,
   getCodexAccountGroups,
   createCodexGroup,
   deleteCodexGroup,
   renameCodexGroup,
   assignAccountsToCodexGroup,
+  setCodexGroupQuotaAutoRefreshMinutes,
+  resolveCodexGroupQuotaAutoRefreshMinutes,
+  normalizeCodexGroupQuotaAutoRefreshMinutes,
 } from '../services/codexAccountGroupService';
+import { SingleSelectDropdown } from './SingleSelectDropdown';
 import { useEscClose } from '../hooks/useEscClose';
 import './AccountGroupModal.css';
+
+const INHERIT_VALUE = 'inherit';
+const CUSTOM_VALUE = 'custom';
+
+function toSelectValue(minutes: CodexGroupQuotaAutoRefreshMinutes): string {
+  if (minutes === null) return INHERIT_VALUE;
+  return String(minutes);
+}
 
 // ─── Codex 分组管理弹窗 ──────────────────────────────────────────
 
@@ -45,6 +59,10 @@ export const CodexAccountGroupModal = ({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [quotaBusyId, setQuotaBusyId] = useState<string | null>(null);
+  /** 正在自定义输入分钟数的分组 id */
+  const [quotaCustomModeId, setQuotaCustomModeId] = useState<string | null>(null);
+  const [quotaCustomDraft, setQuotaCustomDraft] = useState('5');
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
@@ -57,6 +75,9 @@ export const CodexAccountGroupModal = ({
       setNewName('');
       setRenamingId(null);
       setDeleteConfirmId(null);
+      setQuotaBusyId(null);
+      setQuotaCustomModeId(null);
+      setQuotaCustomDraft('5');
       setError(null);
     }
   }, [isOpen, reload]);
@@ -122,12 +143,109 @@ export const CodexAccountGroupModal = ({
     }
   };
 
+  const applyQuotaMinutes = async (
+    group: CodexAccountGroup,
+    minutes: CodexGroupQuotaAutoRefreshMinutes,
+  ) => {
+    const next = normalizeCodexGroupQuotaAutoRefreshMinutes(minutes);
+    setError(null);
+    setQuotaBusyId(group.id);
+    try {
+      setGroups((prev) =>
+        prev.map((item) =>
+          item.id === group.id
+            ? { ...item, quotaAutoRefreshMinutes: next }
+            : item,
+        ),
+      );
+      const updated = await setCodexGroupQuotaAutoRefreshMinutes(group.id, next);
+      if (!updated) {
+        throw new Error(t('accounts.groups.error.notFound', '分组不存在'));
+      }
+      setQuotaCustomModeId(null);
+      await onGroupsChanged();
+    } catch (err) {
+      console.error('Failed to update codex group quota refresh:', err);
+      await reload();
+      setError(t('accounts.groups.error.quotaRefreshFailed', {
+        error: String(err),
+        defaultValue: '更新额度刷新设置失败: {{error}}',
+      }));
+    } finally {
+      setQuotaBusyId(null);
+    }
+  };
+
+  const handleQuotaSelectChange = (
+    group: CodexAccountGroup,
+    value: string,
+  ) => {
+    if (value === CUSTOM_VALUE) {
+      const current = resolveCodexGroupQuotaAutoRefreshMinutes(group);
+      const draft =
+        typeof current === 'number' && current > 0 ? String(current) : '5';
+      setQuotaCustomDraft(draft);
+      setQuotaCustomModeId(group.id);
+      return;
+    }
+    if (value === INHERIT_VALUE) {
+      void applyQuotaMinutes(group, null);
+      return;
+    }
+    void applyQuotaMinutes(group, Number(value));
+  };
+
+  const handleQuotaCustomApply = (group: CodexAccountGroup) => {
+    const normalized = normalizeCodexGroupQuotaAutoRefreshMinutes(quotaCustomDraft);
+    // 自定义输入不允许变成 inherit；空/非法回退 5
+    const minutes =
+      normalized === null || normalized === -1
+        ? 5
+        : normalized;
+    void applyQuotaMinutes(group, minutes);
+  };
+
+  const formatQuotaLabel = useCallback(
+    (minutes: CodexGroupQuotaAutoRefreshMinutes): string => {
+      if (minutes === null) {
+        return t('accounts.groups.quotaRefreshInherit', '继承平台');
+      }
+      if (minutes === -1) {
+        return t('settings.general.autoRefreshDisabled', '关闭');
+      }
+      return `${minutes} ${t('settings.general.minutes', '分钟')}`;
+    },
+    [t],
+  );
+
+  const quotaSelectOptions = useMemo(() => {
+    const minuteLabel = t('settings.general.minutes', '分钟');
+    return [
+      {
+        value: INHERIT_VALUE,
+        label: t('accounts.groups.quotaRefreshInherit', '继承平台'),
+      },
+      {
+        value: '-1',
+        label: t('settings.general.autoRefreshDisabled', '关闭'),
+      },
+      { value: '2', label: `2 ${minuteLabel}` },
+      { value: '5', label: `5 ${minuteLabel}` },
+      { value: '10', label: `10 ${minuteLabel}` },
+      { value: '15', label: `15 ${minuteLabel}` },
+      {
+        value: CUSTOM_VALUE,
+        label: t('settings.general.autoRefreshCustom', '自定义...'),
+      },
+    ];
+  }, [t]);
+
   if (!isOpen) return null;
 
   const hasFilter = groupFilter.length > 0;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal account-group-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>
@@ -186,87 +304,162 @@ export const CodexAccountGroupModal = ({
             </div>
           ) : (
             <div className="group-modal-list">
-              {groups.map((group) => (
-                <div key={group.id} className={`group-modal-item ${groupFilter.includes(group.id) ? 'group-filter-active' : ''}`}>
-                  {/* 筛选复选框 */}
-                  {onToggleGroupFilter && (
-                    <input
-                      type="checkbox"
-                      className="group-filter-checkbox"
-                      checked={groupFilter.includes(group.id)}
-                      onChange={() => onToggleGroupFilter(group.id)}
-                      title={t('accounts.groups.filterToggle', '勾选以筛选此分组')}
-                    />
-                  )}
-                  <FolderOpen size={18} className="group-icon" />
-                  <div className="group-info">
-                    {renamingId === group.id ? (
-                      <input
-                        className="group-rename-input"
-                        value={renameValue}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleRename(group.id);
-                          if (e.key === 'Escape') setRenamingId(null);
-                        }}
-                        onBlur={() => handleRename(group.id)}
-                        autoFocus
-                        maxLength={30}
-                      />
-                    ) : (
-                      <>
-                        <span className="group-name">{group.name}</span>
-                        <span className="group-count">
-                          {t('accounts.groups.accountCount', {
-                            count: group.accountIds.length,
-                            defaultValue: '{{count}} 个账号',
-                          })}
-                        </span>
-                      </>
-                    )}
+              {groups.map((group) => {
+                const quotaMinutes = resolveCodexGroupQuotaAutoRefreshMinutes(group);
+                const quotaValue = toSelectValue(quotaMinutes);
+                const quotaOptions =
+                  quotaValue !== INHERIT_VALUE &&
+                  quotaValue !== '-1' &&
+                  !quotaSelectOptions.some((option) => option.value === quotaValue)
+                    ? [
+                        { value: quotaValue, label: formatQuotaLabel(quotaMinutes) },
+                        ...quotaSelectOptions,
+                      ]
+                    : quotaSelectOptions;
+
+                return (
+                  <div
+                    key={group.id}
+                    className={`group-modal-item${
+                      groupFilter.includes(group.id) ? ' group-filter-active' : ''
+                    }`}
+                  >
+                    <div className="group-modal-item-main">
+                      {onToggleGroupFilter && (
+                        <input
+                          type="checkbox"
+                          className="group-filter-checkbox"
+                          checked={groupFilter.includes(group.id)}
+                          onChange={() => onToggleGroupFilter(group.id)}
+                          title={t('accounts.groups.filterToggle', '勾选以筛选此分组')}
+                        />
+                      )}
+                      <FolderOpen size={18} className="group-icon" />
+                      <div className="group-info">
+                        {renamingId === group.id ? (
+                          <input
+                            className="group-rename-input"
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleRename(group.id);
+                              if (e.key === 'Escape') setRenamingId(null);
+                            }}
+                            onBlur={() => handleRename(group.id)}
+                            autoFocus
+                            maxLength={30}
+                          />
+                        ) : (
+                          <>
+                            <span className="group-name">{group.name}</span>
+                            <span className="group-count">
+                              {t('accounts.groups.accountCount', {
+                                count: group.accountIds.length,
+                                defaultValue: '{{count}} 个账号',
+                              })}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                      <div className="group-actions">
+                        {deleteConfirmId === group.id ? (
+                          <>
+                            <button
+                              className="group-action-btn danger"
+                              onClick={() => handleDelete(group.id)}
+                              title={t('common.confirm', '确认')}
+                            >
+                              ✓
+                            </button>
+                            <button
+                              className="group-action-btn"
+                              onClick={() => setDeleteConfirmId(null)}
+                              title={t('common.cancel', '取消')}
+                            >
+                              ✗
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              className="group-action-btn"
+                              onClick={() => {
+                                setRenamingId(group.id);
+                                setRenameValue(group.name);
+                              }}
+                              title={t('accounts.groups.rename', '重命名')}
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            <button
+                              className="group-action-btn danger"
+                              onClick={() => setDeleteConfirmId(group.id)}
+                              title={t('common.delete', '删除')}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div
+                      className="group-modal-item-meta"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <span className="group-quota-meta-label">
+                        {t('accounts.groups.quotaRefresh', '额度刷新')}
+                      </span>
+                      {quotaCustomModeId === group.id ? (
+                        <div className="group-quota-custom-input">
+                          <input
+                            type="number"
+                            min={1}
+                            max={999}
+                            className="group-quota-custom-field"
+                            value={quotaCustomDraft}
+                            disabled={
+                              quotaBusyId === group.id || deleteConfirmId === group.id
+                            }
+                            onChange={(e) =>
+                              setQuotaCustomDraft(e.target.value.replace(/[^\d]/g, ''))
+                            }
+                            onBlur={() => handleQuotaCustomApply(group)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleQuotaCustomApply(group);
+                              }
+                              if (e.key === 'Escape') {
+                                e.preventDefault();
+                                setQuotaCustomModeId(null);
+                              }
+                            }}
+                            autoFocus
+                          />
+                          <span className="group-quota-unit">
+                            {t('settings.general.minutes', '分钟')}
+                          </span>
+                        </div>
+                      ) : (
+                        <SingleSelectDropdown
+                          className="group-quota-dropdown"
+                          menuClassName="group-quota-dropdown-menu"
+                          value={quotaValue}
+                          options={quotaOptions}
+                          disabled={
+                            quotaBusyId === group.id || deleteConfirmId === group.id
+                          }
+                          ariaLabel={t('accounts.groups.quotaRefresh', '额度刷新')}
+                          menuWidth={168}
+                          menuMaxHeight={260}
+                          onChange={(value) => handleQuotaSelectChange(group, value)}
+                        />
+                      )}
+                    </div>
                   </div>
-                  <div className="group-actions">
-                    {deleteConfirmId === group.id ? (
-                      <>
-                        <button
-                          className="group-action-btn danger"
-                          onClick={() => handleDelete(group.id)}
-                          title={t('common.confirm', '确认')}
-                        >
-                          ✓
-                        </button>
-                        <button
-                          className="group-action-btn"
-                          onClick={() => setDeleteConfirmId(null)}
-                          title={t('common.cancel', '取消')}
-                        >
-                          ✗
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button
-                          className="group-action-btn"
-                          onClick={() => {
-                            setRenamingId(group.id);
-                            setRenameValue(group.name);
-                          }}
-                          title={t('accounts.groups.rename', '重命名')}
-                        >
-                          <Pencil size={14} />
-                        </button>
-                        <button
-                          className="group-action-btn danger"
-                          onClick={() => setDeleteConfirmId(group.id)}
-                          title={t('common.delete', '删除')}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -349,7 +542,7 @@ export const CodexAddToGroupModal = ({
   const selectableGroups = groups.filter((group) => group.id !== sourceGroupId);
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal add-to-group-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>

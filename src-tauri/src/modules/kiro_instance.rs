@@ -11,6 +11,7 @@ use std::sync::Mutex;
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{json, Value};
+use sha1::{Digest, Sha1};
 #[cfg(not(target_os = "macos"))]
 use sysinfo::{ProcessRefreshKind, System, UpdateKind};
 use uuid::Uuid;
@@ -105,7 +106,7 @@ pub fn get_default_instances_root_dir() -> Result<PathBuf, String> {
     }
 
     #[allow(unreachable_code)]
-    Err("Kiro 多开实例仅支持 macOS、Windows 和 Linux".to_string())
+    Err("Kiro 应用多开仅支持 macOS、Windows 和 Linux".to_string())
 }
 
 pub fn get_instance_defaults() -> Result<InstanceDefaults, String> {
@@ -875,6 +876,8 @@ fn focus_window_by_pid(pid: u32) -> Result<(), String> {
 fn focus_window_by_pid(pid: u32) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
 
+    let _spawn_guard = crate::modules::app_lifecycle::acquire_process_spawn_guard("PowerShell")
+        .map_err(|error| error.to_string())?;
     let command = format!(
         r#"$targetPid={pid};$h=[IntPtr]::Zero;for($i=0;$i -lt 20;$i++){{$p=Get-Process -Id $targetPid -ErrorAction Stop;$h=$p.MainWindowHandle;if ($h -ne 0) {{ break }};Start-Sleep -Milliseconds 150}};if ($h -eq 0) {{ throw 'MAIN_WINDOW_HANDLE_EMPTY' }};Add-Type @'
 using System;
@@ -923,11 +926,11 @@ pub fn focus_kiro_instance(
 }
 
 fn normalize_custom_path(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
+    let normalized = modules::process::normalize_windows_user_facing_path(value);
+    if normalized.is_empty() {
         None
     } else {
-        Some(trimmed.to_string())
+        Some(normalized)
     }
 }
 
@@ -1079,27 +1082,34 @@ fn path_looks_like_kiro(path: &Path) -> bool {
 fn normalize_kiro_path_for_config(path: &Path) -> String {
     #[cfg(target_os = "macos")]
     {
-        return normalize_macos_app_root(path)
-            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        return normalize_macos_app_root(path).unwrap_or_else(|| {
+            modules::process::normalize_windows_user_facing_path(&path.to_string_lossy())
+        });
     }
     #[cfg(not(target_os = "macos"))]
     {
-        path.to_string_lossy().to_string()
+        modules::process::normalize_windows_user_facing_path(&path.to_string_lossy())
     }
 }
 
 pub fn detect_and_save_kiro_launch_path(force: bool) -> Option<String> {
     let current = modules::config::get_user_config();
-    if !force && normalize_custom_path(&current.kiro_app_path).is_some() {
-        return Some(current.kiro_app_path);
+    if !force {
+        if let Some(configured) = normalize_custom_path(&current.kiro_app_path) {
+            return Some(configured);
+        }
     }
 
     let detected = detect_kiro_exec_path()?;
     let normalized = normalize_kiro_path_for_config(&detected);
     if current.kiro_app_path != normalized {
-        let mut next = current.clone();
-        next.kiro_app_path = normalized.clone();
-        if let Err(err) = modules::config::save_user_config(&next) {
+        let path = normalized.clone();
+        if let Err(err) = modules::config::patch_user_config(move |config| {
+            if force || normalize_custom_path(&config.kiro_app_path).is_none() {
+                config.kiro_app_path = path;
+            }
+            Ok(())
+        }) {
             modules::logger::log_warn(&format!("保存 Kiro 启动路径失败（已忽略）: {}", err));
         }
     }
@@ -1269,7 +1279,7 @@ pub fn start_kiro_with_args_with_new_window(
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         let _ = (target, extra_args, use_new_window);
-        Err("Kiro 多开实例仅支持 macOS、Windows 和 Linux".to_string())
+        Err("Kiro 应用多开仅支持 macOS、Windows 和 Linux".to_string())
     }
 }
 
@@ -1489,6 +1499,43 @@ fn account_expires_at_iso(account: &KiroAccount) -> Option<String> {
     chrono::DateTime::from_timestamp(expires_at, 0).map(|dt| dt.to_rfc3339())
 }
 
+fn compute_idc_client_id_hash(start_url: &str) -> String {
+    let digest = Sha1::digest(start_url.as_bytes());
+    digest.iter().map(|value| format!("{value:02x}")).collect()
+}
+
+fn resolve_idc_registration_value(
+    auth_token: &Value,
+    client_id_hash: &str,
+) -> Result<Value, String> {
+    if let Some(registration) = auth_token
+        .get("clientRegistration")
+        .or_else(|| auth_token.get("client_registration"))
+        .filter(|value| value.is_object())
+    {
+        return Ok(registration.clone());
+    }
+
+    let cache_dir = kiro_account::get_default_kiro_auth_token_path()?
+        .parent()
+        .ok_or_else(|| "Kiro 授权缓存目录无效".to_string())?
+        .to_path_buf();
+    let mut token_for_lookup = auth_token.clone();
+    if let Some(object) = token_for_lookup.as_object_mut() {
+        object.insert(
+            "clientIdHash".to_string(),
+            Value::String(client_id_hash.to_string()),
+        );
+    }
+    kiro_account::read_idc_client_registration_from_cache_dir(&token_for_lookup, &cache_dir)?
+        .ok_or_else(|| {
+            format!(
+                "Kiro IdC 客户端注册信息缺失，无法写入 {}.json",
+                client_id_hash
+            )
+        })
+}
+
 fn write_local_auth_token_file(account: &KiroAccount) -> Result<(), String> {
     let token_path = kiro_account::get_default_kiro_auth_token_path()?;
     if let Some(parent) = token_path.parent() {
@@ -1504,12 +1551,32 @@ fn write_local_auth_token_file(account: &KiroAccount) -> Result<(), String> {
     if !raw.is_object() {
         raw = json!({});
     }
+    let raw_before_injection = raw.clone();
     let obj = raw
         .as_object_mut()
         .ok_or_else(|| "Kiro 授权快照结构异常".to_string())?;
     let provider = account_provider(account);
     let auth_method = account_auth_method(account, provider.as_deref());
     let profile_arn = account_profile_arn(account);
+    let is_idc = auth_method
+        .as_deref()
+        .map(|value| value.eq_ignore_ascii_case("idc"))
+        .unwrap_or(false)
+        || provider.as_deref().map(is_idc_provider).unwrap_or(false);
+    let idc_client_id_hash = if is_idc {
+        pick_string_by_paths(
+            Some(&raw_before_injection),
+            &[&["clientIdHash"], &["client_id_hash"]],
+        )
+        .or_else(|| {
+            account
+                .issuer_url
+                .as_deref()
+                .map(compute_idc_client_id_hash)
+        })
+    } else {
+        None
+    };
     obj.insert(
         "accessToken".to_string(),
         Value::String(account.access_token.clone()),
@@ -1570,6 +1637,13 @@ fn write_local_auth_token_file(account: &KiroAccount) -> Result<(), String> {
         obj.insert("client_id".to_string(), Value::String(value.to_string()));
         obj.insert("clientId".to_string(), Value::String(value.to_string()));
     }
+    if let Some(value) = idc_client_id_hash.as_ref() {
+        obj.insert("clientIdHash".to_string(), Value::String(value.clone()));
+        obj.remove("clientRegistration");
+        obj.remove("client_registration");
+        obj.remove("clientSecret");
+        obj.remove("client_secret");
+    }
     if let Some(value) = account
         .scopes
         .as_ref()
@@ -1603,7 +1677,38 @@ fn write_local_auth_token_file(account: &KiroAccount) -> Result<(), String> {
 
     let content =
         serde_json::to_string_pretty(&raw).map_err(|e| format!("序列化本地 token 失败: {}", e))?;
-    fs::write(&token_path, content)
+
+    if is_idc {
+        let client_id_hash = idc_client_id_hash
+            .as_deref()
+            .filter(|value| {
+                value.len() == 40
+                    && value
+                        .chars()
+                        .all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(&ch))
+            })
+            .ok_or_else(|| "Kiro IdC clientIdHash 格式无效，无法写入客户端注册文件".to_string())?;
+        let registration = resolve_idc_registration_value(&raw_before_injection, client_id_hash)?;
+        let registration_content = serde_json::to_string_pretty(&registration)
+            .map_err(|e| format!("序列化 Kiro IdC 客户端注册信息失败: {}", e))?;
+        let registration_path = token_path
+            .parent()
+            .ok_or_else(|| "Kiro 授权缓存目录无效".to_string())?
+            .join(format!("{}.json", client_id_hash));
+        crate::modules::atomic_write::write_string_atomic(
+            &registration_path,
+            &registration_content,
+        )
+        .map_err(|e| {
+            format!(
+                "写入 Kiro IdC 客户端注册文件失败({}): {}",
+                registration_path.display(),
+                e
+            )
+        })?;
+    }
+
+    crate::modules::atomic_write::write_string_atomic(&token_path, &content)
         .map_err(|e| format!("写入本地 token 文件失败({}): {}", token_path.display(), e))
 }
 

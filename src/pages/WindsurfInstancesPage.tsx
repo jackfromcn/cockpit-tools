@@ -12,7 +12,7 @@ import {
 } from '../presentation/platformAccountPresentation';
 
 /**
- * Windsurf 多开实例内容组件（不包含 header）
+ * Windsurf 应用多开内容组件（不包含 header）
  * 用于嵌入到 WindsurfAccountsPage 中
  */
 interface WindsurfInstancesContentProps {
@@ -74,7 +74,7 @@ export function WindsurfInstancesContent({
       unsupportedTitleKey="common.shared.instances.unsupported.title"
       unsupportedTitleDefault="暂不支持当前系统"
       unsupportedDescKey="windsurf.instances.unsupported.descPlatform"
-      unsupportedDescDefault="Windsurf 多开实例仅支持 macOS、Windows 和 Linux。"
+      unsupportedDescDefault="Devin 应用多开仅支持 macOS、Windows 和 Linux。"
     />
   );
 }

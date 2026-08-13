@@ -1,75 +1,92 @@
 import type { CodexAccount } from '../types/codex';
 import {
-  getCodexEffectiveQuotaPercentages,
   getCodexPlanFilterKey,
+  getCodexQuotaWindows,
 } from '../types/codex';
+import { sortCodexPlanFilterKeys } from './codexAccountOverview';
 
-export const CODEX_QUOTA_POOL_PLAN_KEYS = [
-  'FREE',
-  'API_KEY',
-  'PLUS',
-  'PRO',
-  'TEAM',
-  'ENTERPRISE',
-] as const;
-
-export type CodexQuotaPoolPlanKey = (typeof CODEX_QUOTA_POOL_PLAN_KEYS)[number];
+export interface CodexQuotaPoolWindow {
+  key: string;
+  label: string;
+  percentage: number;
+  accountCount: number;
+  windowMinutes: number;
+}
 
 export interface CodexQuotaPoolItem {
-  key: CodexQuotaPoolPlanKey | 'ALL';
+  key: string;
   count: number;
-  hourly: number;
-  weekly: number;
+  windows: CodexQuotaPoolWindow[];
 }
 
 export interface CodexQuotaPoolSummary {
   all: CodexQuotaPoolItem;
-  byPlan: Record<CodexQuotaPoolPlanKey, CodexQuotaPoolItem>;
+  byPlan: Record<string, CodexQuotaPoolItem>;
   visiblePlans: CodexQuotaPoolItem[];
 }
 
 function createQuotaPoolItem(key: CodexQuotaPoolItem['key']): CodexQuotaPoolItem {
-  return { key, count: 0, hourly: 0, weekly: 0 };
+  return { key, count: 0, windows: [] };
 }
 
 function addAccountToQuotaPool(target: CodexQuotaPoolItem, account: CodexAccount): void {
-  const percentages = getCodexEffectiveQuotaPercentages(account.quota);
   target.count += 1;
-  target.hourly += percentages.hourly ?? 0;
-  target.weekly += percentages.weekly ?? 0;
-}
-
-function isQuotaPoolPlanKey(value: string): value is CodexQuotaPoolPlanKey {
-  return CODEX_QUOTA_POOL_PLAN_KEYS.includes(value as CodexQuotaPoolPlanKey);
+  const seenWindowKeys = new Set<string>();
+  getCodexQuotaWindows(account.quota).forEach((window) => {
+    const key = window.label.trim().toLowerCase();
+    const windowMinutes =
+      window.windowMinutes ?? (window.id === 'secondary' ? 7 * 24 * 60 : 5 * 60);
+    let pooledWindow = target.windows.find((item) => item.key === key);
+    if (!pooledWindow) {
+      pooledWindow = {
+        key,
+        label: window.label,
+        percentage: 0,
+        accountCount: 0,
+        windowMinutes,
+      };
+      target.windows.push(pooledWindow);
+    }
+    pooledWindow.percentage += window.percentage;
+    pooledWindow.windowMinutes = Math.min(pooledWindow.windowMinutes, windowMinutes);
+    if (!seenWindowKeys.has(key)) {
+      pooledWindow.accountCount += 1;
+      seenWindowKeys.add(key);
+    }
+  });
+  target.windows.sort(
+    (left, right) =>
+      left.windowMinutes - right.windowMinutes || left.label.localeCompare(right.label),
+  );
 }
 
 export function summarizeCodexQuotaPool(accounts: CodexAccount[]): CodexQuotaPoolSummary {
-  const byPlan = CODEX_QUOTA_POOL_PLAN_KEYS.reduce(
-    (next, key) => {
-      next[key] = createQuotaPoolItem(key);
-      return next;
-    },
-    {} as Record<CodexQuotaPoolPlanKey, CodexQuotaPoolItem>,
-  );
+  const byPlan: Record<string, CodexQuotaPoolItem> = {};
   const all = createQuotaPoolItem('ALL');
 
   accounts.forEach((account) => {
     addAccountToQuotaPool(all, account);
     const planKey = getCodexPlanFilterKey(account);
-    if (isQuotaPoolPlanKey(planKey)) {
-      addAccountToQuotaPool(byPlan[planKey], account);
-    }
+    byPlan[planKey] ??= createQuotaPoolItem(planKey);
+    addAccountToQuotaPool(byPlan[planKey], account);
   });
 
   return {
     all,
     byPlan,
-    visiblePlans: CODEX_QUOTA_POOL_PLAN_KEYS.map((key) => byPlan[key]).filter(
-      (item) => item.count > 0,
+    visiblePlans: sortCodexPlanFilterKeys(Object.keys(byPlan)).map(
+      (key) => byPlan[key],
     ),
   };
 }
 
 export function formatCodexQuotaPoolPercent(value: number): string {
   return `${Math.max(0, Math.round(value))}%`;
+}
+
+export function formatCodexQuotaPoolWindowLabel(
+  label: string,
+  weeklyLabel: string,
+): string {
+  return label === 'Weekly' ? weeklyLabel : label;
 }

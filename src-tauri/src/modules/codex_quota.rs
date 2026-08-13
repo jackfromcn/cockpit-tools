@@ -1,11 +1,17 @@
-use crate::models::codex::{CodexAccount, CodexQuota, CodexQuotaErrorInfo};
-use crate::modules::{codex_account, logger};
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, REFERER, USER_AGENT};
+use crate::models::codex::{CodexAccount, CodexQuota, CodexQuotaErrorInfo, CodexResetCredit};
+use crate::modules::{codex_account, codex_agent_identity, logger};
+use reqwest::header::{
+    HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, REFERER, USER_AGENT,
+};
+use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 // 使用 wham/usage 端点（Quotio 使用的）
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+const RESET_CREDITS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+const RESET_CREDITS_CONSUME_URL: &str =
+    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
 const SUBSCRIPTION_ACCOUNTS_CHECK_URL: &str =
     "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27";
 const SUBSCRIPTIONS_URL: &str = "https://chatgpt.com/backend-api/subscriptions";
@@ -16,7 +22,9 @@ const LEGACY_NEW_API_EXCLUSIVE_PLAN_TYPE: &str = "NEW_API_EXCLUSIVE";
 const COCKPIT_API_BASE_URL: &str = "https://chongcodex.cn/v1";
 const CHATGPT_WEB_REFERER: &str = "https://chatgpt.com/";
 const CHATGPT_WEB_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
+const RESET_CREDITS_MOCK_JSON_ENV: &str = "CODEX_RESET_CREDITS_MOCK_JSON";
 const SUBSCRIPTION_RETRY_INTERVAL_SECONDS: i64 = 30 * 60;
+const HTTP_ERROR_BODY_DISPLAY_MAX_CHARS: usize = 4000;
 
 fn get_header_value(headers: &HeaderMap, name: &str) -> String {
     headers
@@ -50,6 +58,34 @@ fn extract_detail_code_from_body(body: &str) -> Option<String> {
     }
 
     None
+}
+
+fn normalize_http_error_body_for_display(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return "<empty>".to_string();
+    }
+
+    let mut compact = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
+    let char_count = compact.chars().count();
+    if char_count > HTTP_ERROR_BODY_DISPLAY_MAX_CHARS {
+        compact = compact
+            .chars()
+            .take(HTTP_ERROR_BODY_DISPLAY_MAX_CHARS)
+            .collect::<String>();
+        compact.push_str("...(truncated)");
+    }
+    compact
+}
+
+fn append_http_error_diagnostics(message: &mut String, headers: &HeaderMap, body: &str) {
+    message.push_str(&format!(
+        " [request-id:{}] [x-request-id:{}] [cf-ray:{}] [body:{}]",
+        get_header_value(headers, "request-id"),
+        get_header_value(headers, "x-request-id"),
+        get_header_value(headers, "cf-ray"),
+        normalize_http_error_body_for_display(body)
+    ));
 }
 
 fn extract_error_code_from_message(message: &str) -> Option<String> {
@@ -108,6 +144,12 @@ struct RateLimitInfo {
     secondary_window: Option<WindowInfo>,
 }
 
+/// 主动重置次数
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ResetCreditsInfo {
+    available_count: Option<i64>,
+}
+
 /// 使用率响应
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UsageResponse {
@@ -117,11 +159,25 @@ struct UsageResponse {
     rate_limit: Option<RateLimitInfo>,
     #[serde(rename = "code_review_rate_limit")]
     code_review_rate_limit: Option<RateLimitInfo>,
+    #[serde(rename = "rate_limit_reset_credits")]
+    rate_limit_reset_credits: Option<ResetCreditsInfo>,
 }
 
-fn normalize_remaining_percentage(window: &WindowInfo) -> i32 {
-    let used = window.used_percent.unwrap_or(0).clamp(0, 100);
-    100 - used
+#[derive(Debug, Clone, Serialize)]
+pub struct CodexResetCreditsSnapshot {
+    available_count: Option<i64>,
+    credits: Vec<CodexResetCredit>,
+    next_expires_at: Option<i64>,
+}
+
+fn normalize_remaining_percentage(window: &WindowInfo) -> Result<i32, String> {
+    let used = window
+        .used_percent
+        .ok_or_else(|| "配额窗口缺少 used_percent".to_string())?;
+    if !(0..=100).contains(&used) {
+        return Err(format!("配额窗口 used_percent 超出范围: {}", used));
+    }
+    Ok(100 - used)
 }
 
 fn normalize_window_minutes(window: &WindowInfo) -> Option<i64> {
@@ -176,6 +232,173 @@ struct AccountCheckRecord {
 
 fn now_timestamp() -> i64 {
     chrono::Utc::now().timestamp()
+}
+
+fn parse_reset_credit_timestamp_value(value: Option<&serde_json::Value>) -> Option<i64> {
+    match value? {
+        serde_json::Value::Number(number) => {
+            let mut timestamp = number
+                .as_i64()
+                .or_else(|| number.as_u64().and_then(|raw| i64::try_from(raw).ok()))?;
+            if timestamp > 1_000_000_000_000 {
+                timestamp /= 1000;
+            }
+            Some(timestamp)
+        }
+        serde_json::Value::String(text) => parse_subscription_timestamp(text),
+        _ => None,
+    }
+}
+
+fn extract_reset_credit_timestamp(
+    record: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<i64> {
+    for key in keys {
+        if let Some(timestamp) = parse_reset_credit_timestamp_value(record.get(*key)) {
+            return Some(timestamp);
+        }
+    }
+    None
+}
+
+fn extract_reset_credit_string(
+    record: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<String> {
+    for key in keys {
+        if let Some(value) = normalize_optional_json_scalar(record.get(*key)) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn normalize_reset_credit_status(status: Option<&str>, expires_at: Option<i64>) -> Option<String> {
+    let normalized = status.and_then(|value| normalize_optional_ref(Some(value)));
+    if let Some(value) = normalized {
+        return Some(value.to_ascii_lowercase());
+    }
+
+    if expires_at.is_some_and(|timestamp| timestamp <= now_timestamp()) {
+        return Some("expired".to_string());
+    }
+
+    None
+}
+
+fn is_available_reset_credit(credit: &CodexResetCredit) -> bool {
+    let status = credit
+        .status
+        .as_deref()
+        .or(credit.raw_status.as_deref())
+        .unwrap_or("available")
+        .trim()
+        .to_ascii_lowercase();
+    if matches!(
+        status.as_str(),
+        "redeemed" | "used" | "consumed" | "expired"
+    ) {
+        return false;
+    }
+
+    credit
+        .expires_at
+        .map(|timestamp| timestamp > now_timestamp())
+        .unwrap_or(true)
+}
+
+fn parse_reset_credit_record(value: &serde_json::Value) -> Option<CodexResetCredit> {
+    let record = value.as_object()?;
+    let raw_status = extract_reset_credit_string(record, &["status", "state"]);
+    let expires_at =
+        extract_reset_credit_timestamp(record, &["expires_at", "expire_at", "expiresAt"]);
+    let status = normalize_reset_credit_status(raw_status.as_deref(), expires_at);
+
+    Some(CodexResetCredit {
+        id: extract_reset_credit_string(record, &["id", "credit_id", "creditId"]),
+        status,
+        reset_type: extract_reset_credit_string(record, &["type", "reset_type", "resetType"]),
+        granted_at: extract_reset_credit_timestamp(
+            record,
+            &["granted_at", "created_at", "grantedAt"],
+        ),
+        expires_at,
+        redeemed_at: extract_reset_credit_timestamp(
+            record,
+            &["redeemed_at", "used_at", "consumed_at", "redeemedAt"],
+        ),
+        raw_status,
+    })
+}
+
+fn parse_reset_credits_snapshot(payload: serde_json::Value) -> CodexResetCreditsSnapshot {
+    let credits = payload
+        .get("credits")
+        .or_else(|| payload.get("data").and_then(|data| data.get("credits")))
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(parse_reset_credit_record)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let available_count = payload
+        .get("available_count")
+        .or_else(|| payload.get("availableCount"))
+        .or_else(|| {
+            payload.get("data").and_then(|data| {
+                data.get("available_count")
+                    .or_else(|| data.get("availableCount"))
+            })
+        })
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|raw| i64::try_from(raw).ok()))
+        })
+        .or_else(|| {
+            Some(
+                credits
+                    .iter()
+                    .filter(|credit| is_available_reset_credit(credit))
+                    .count() as i64,
+            )
+        });
+
+    let next_expires_at = credits
+        .iter()
+        .filter(|credit| is_available_reset_credit(credit))
+        .filter_map(|credit| credit.expires_at)
+        .min();
+
+    CodexResetCreditsSnapshot {
+        available_count,
+        credits,
+        next_expires_at,
+    }
+}
+
+fn mock_reset_credits_payload() -> Option<serde_json::Value> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+
+    if let Ok(raw) = std::env::var(RESET_CREDITS_MOCK_JSON_ENV) {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            match serde_json::from_str(trimmed) {
+                Ok(payload) => return Some(payload),
+                Err(error) => {
+                    logger::log_warn(&format!("Codex reset credit mock JSON 解析失败: {}", error))
+                }
+            }
+        }
+    }
+
+    None
 }
 
 fn current_chatgpt_timezone_offset_min() -> i32 {
@@ -322,6 +545,37 @@ fn collect_subscription_account_records(payload: &serde_json::Value) -> Vec<Acco
     records
 }
 
+fn account_check_record_parts(
+    item: &AccountCheckRecord,
+) -> Option<(
+    &serde_json::Map<String, serde_json::Value>,
+    Option<&serde_json::Map<String, serde_json::Value>>,
+)> {
+    let record = item.node.as_object()?;
+    let account_record = record
+        .get("account")
+        .and_then(|value| value.as_object())
+        .unwrap_or(record);
+    let entitlement = record
+        .get("entitlement")
+        .and_then(|value| value.as_object());
+    Some((account_record, entitlement))
+}
+
+fn account_check_record_plan_type(item: &AccountCheckRecord) -> Option<String> {
+    let (account_record, entitlement) = account_check_record_parts(item)?;
+    entitlement
+        .and_then(|value| extract_account_record_field(value, &["subscription_plan"]))
+        .or_else(|| extract_account_record_field(account_record, &["plan_type", "planType"]))
+}
+
+fn account_check_record_is_default(item: &AccountCheckRecord) -> bool {
+    account_check_record_parts(item)
+        .and_then(|(account_record, _)| account_record.get("is_default"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
 fn parse_account_check_snapshot(
     payload: &serde_json::Value,
     account: &CodexAccount,
@@ -331,44 +585,60 @@ fn parse_account_check_snapshot(
         return Err("accounts/check 返回里没有可用账号".to_string());
     }
 
+    let preferred_organization_id = normalize_optional_ref(account.organization_id.as_deref())
+        .or_else(|| {
+            codex_account::extract_chatgpt_organization_id_from_access_token(
+                &account.tokens.access_token,
+            )
+        });
     let preferred_account_id =
         normalize_optional_ref(account.account_id.as_deref()).or_else(|| {
             codex_account::extract_chatgpt_account_id_from_access_token(
                 &account.tokens.access_token,
             )
         });
-    let ordering_first_key = payload
-        .get("account_ordering")
-        .and_then(|value| value.as_array())
-        .and_then(|items| items.first())
-        .and_then(|value| value.as_str())
-        .and_then(|value| normalize_optional_ref(Some(value)));
 
     let selected = records
         .iter()
         .find(|item| {
-            let Some(record) = item.node.as_object() else {
-                return false;
-            };
-            let account_record = record
-                .get("account")
-                .and_then(|value| value.as_object())
-                .unwrap_or(record);
-            let candidate_id = extract_account_record_field(
-                account_record,
-                &["account_id", "id", "chatgpt_account_id", "workspace_id"],
-            );
-            candidate_id == preferred_account_id
+            preferred_organization_id
+                .as_deref()
+                .is_some_and(|preferred| {
+                    item.key
+                        .as_deref()
+                        .and_then(|value| normalize_optional_ref(Some(value)))
+                        .as_deref()
+                        == Some(preferred)
+                })
         })
         .or_else(|| {
             records.iter().find(|item| {
-                item.key
-                    .as_deref()
-                    .and_then(|value| normalize_optional_ref(Some(value)))
-                    == ordering_first_key
+                let Some(preferred) = preferred_account_id.as_deref() else {
+                    return false;
+                };
+                let Some((account_record, _)) = account_check_record_parts(item) else {
+                    return false;
+                };
+                let candidate_id = extract_account_record_field(
+                    account_record,
+                    &["account_id", "id", "chatgpt_account_id", "workspace_id"],
+                );
+                candidate_id.as_deref() == Some(preferred)
             })
         })
-        .unwrap_or(&records[0]);
+        .or_else(|| {
+            records
+                .iter()
+                .find(|item| account_check_record_is_default(item))
+        })
+        .or_else(|| {
+            records.iter().find(|item| {
+                account_check_record_plan_type(item)
+                    .is_some_and(|plan_type| !plan_type.eq_ignore_ascii_case("free"))
+            })
+        })
+        .or_else(|| records.first())
+        .ok_or_else(|| "accounts/check 返回里没有可用账号".to_string())?;
 
     let record = selected
         .node
@@ -495,6 +765,7 @@ async fn fetch_subscription_account_check(
             error_message.push_str(&format!(" [error_code:{}]", code));
         }
         error_message.push_str(&format!(" [body_len:{}]", body_len));
+        append_http_error_diagnostics(&mut error_message, &headers, &body);
         return Err(error_message);
     }
 
@@ -542,6 +813,7 @@ async fn fetch_subscriptions_snapshot(
             error_message.push_str(&format!(" [error_code:{}]", code));
         }
         error_message.push_str(&format!(" [body_len:{}]", body_len));
+        append_http_error_diagnostics(&mut error_message, &headers, &body);
         return Err(error_message);
     }
 
@@ -643,49 +915,19 @@ async fn refresh_account_tokens(account: &mut CodexAccount, reason: &str) -> Res
 
 /// 查询单个账号的配额
 pub async fn fetch_quota(account: &CodexAccount) -> Result<FetchQuotaResult, String> {
-    let client = reqwest::Client::new();
-
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", account.tokens.access_token))
-            .map_err(|e| format!("构建 Authorization 头失败: {}", e))?,
-    );
-    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
-
-    // 添加 ChatGPT-Account-Id 头（关键！）
     let account_id = account.account_id.clone().or_else(|| {
         codex_account::extract_chatgpt_account_id_from_access_token(&account.tokens.access_token)
     });
-
-    if let Some(ref acc_id) = account_id {
-        if !acc_id.is_empty() {
-            headers.insert(
-                "ChatGPT-Account-Id",
-                HeaderValue::from_str(acc_id)
-                    .map_err(|e| format!("构建 Account-Id 头失败: {}", e))?,
-            );
-        }
-    }
 
     logger::log_info(&format!(
         "Codex 配额请求: {} (account_id: {:?})",
         USAGE_URL, account_id
     ));
 
-    let response = client
-        .get(USAGE_URL)
-        .headers(headers)
-        .send()
-        .await
-        .map_err(|e| format!("请求失败: {}", e))?;
-
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("读取响应失败: {}", e))?;
+    let response = send_codex_api_request(account, Method::GET, USAGE_URL, None).await?;
+    let status = response.status;
+    let headers = response.headers;
+    let body = response.body;
 
     let request_id = get_header_value(&headers, "request-id");
     let x_request_id = get_header_value(&headers, "x-request-id");
@@ -701,14 +943,15 @@ pub async fn fetch_quota(account: &CodexAccount) -> Result<FetchQuotaResult, Str
         let detail_code = extract_detail_code_from_body(&body);
 
         logger::log_error(&format!(
-            "Codex 配额接口返回非成功状态: url={}, status={}, request-id={}, x-request-id={}, cf-ray={}, detail_code={:?}, body_len={}",
+            "Codex 配额接口返回非成功状态: url={}, status={}, request-id={}, x-request-id={}, cf-ray={}, detail_code={:?}, body_len={}, body={}",
             USAGE_URL,
             status,
             request_id,
             x_request_id,
             cf_ray,
             detail_code,
-            body_len
+            body_len,
+            normalize_http_error_body_for_display(&body)
         ));
 
         let mut error_message = format!("API 返回错误 {}", status);
@@ -716,6 +959,7 @@ pub async fn fetch_quota(account: &CodexAccount) -> Result<FetchQuotaResult, Str
             error_message.push_str(&format!(" [error_code:{}]", code));
         }
         error_message.push_str(&format!(" [body_len:{}]", body_len));
+        append_http_error_diagnostics(&mut error_message, &headers, &body);
         return Err(error_message);
     }
 
@@ -739,7 +983,7 @@ fn parse_quota_from_usage(usage: &UsageResponse, raw_body: &str) -> Result<Codex
     let (hourly_percentage, hourly_reset_time, hourly_window_minutes) =
         if let Some(primary) = primary_window {
             (
-                normalize_remaining_percentage(primary),
+                normalize_remaining_percentage(primary)?,
                 normalize_reset_time(primary),
                 normalize_window_minutes(primary),
             )
@@ -751,7 +995,7 @@ fn parse_quota_from_usage(usage: &UsageResponse, raw_body: &str) -> Result<Codex
     let (weekly_percentage, weekly_reset_time, weekly_window_minutes) =
         if let Some(secondary) = secondary_window {
             (
-                normalize_remaining_percentage(secondary),
+                normalize_remaining_percentage(secondary)?,
                 normalize_reset_time(secondary),
                 normalize_window_minutes(secondary),
             )
@@ -771,6 +1015,12 @@ fn parse_quota_from_usage(usage: &UsageResponse, raw_body: &str) -> Result<Codex
         weekly_reset_time,
         weekly_window_minutes,
         weekly_window_present: Some(secondary_window.is_some()),
+        reset_credits_available: usage
+            .rate_limit_reset_credits
+            .as_ref()
+            .and_then(|credits| credits.available_count),
+        reset_credits: Vec::new(),
+        reset_credits_next_expires_at: None,
         raw_data,
     })
 }
@@ -795,6 +1045,10 @@ fn is_new_api_account(account: &CodexAccount) -> bool {
                     || value.eq_ignore_ascii_case(LEGACY_NEW_API_EXCLUSIVE_PLAN_TYPE)
             })
             .unwrap_or(false)
+}
+
+pub fn supports_quota_refresh(account: &CodexAccount) -> bool {
+    !account.is_api_key_auth() || is_new_api_account(account)
 }
 
 fn normalize_api_base_url_for_match(raw: Option<&str>) -> Option<String> {
@@ -925,6 +1179,9 @@ async fn fetch_new_api_quota(account: &CodexAccount) -> Result<FetchQuotaResult,
             weekly_reset_time: None,
             weekly_window_minutes: None,
             weekly_window_present: Some(false),
+            reset_credits_available: None,
+            reset_credits: Vec::new(),
+            reset_credits_next_expires_at: None,
             raw_data: Some(json!({
                 "provider": "cockpit-api",
                 "object": "codex_cockpit_api_quota",
@@ -944,6 +1201,292 @@ async fn fetch_new_api_quota(account: &CodexAccount) -> Result<FetchQuotaResult,
                 .unwrap_or_else(|| COCKPIT_API_PLAN_TYPE.to_string()),
         ),
     })
+}
+
+fn build_codex_api_headers(
+    account: &CodexAccount,
+    account_id: Option<&str>,
+) -> Result<HeaderMap, String> {
+    let mut headers = HeaderMap::new();
+    if !account.is_agent_identity_auth() {
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", account.tokens.access_token))
+                .map_err(|e| format!("构建 Authorization 头失败: {}", e))?,
+        );
+    }
+    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(REFERER, HeaderValue::from_static(CHATGPT_WEB_REFERER));
+    headers.insert(USER_AGENT, HeaderValue::from_static(CHATGPT_WEB_USER_AGENT));
+    headers.insert("OpenAI-Beta", HeaderValue::from_static("codex-1"));
+    headers.insert("oai-language", HeaderValue::from_static("zh-CN"));
+    headers.insert("originator", HeaderValue::from_static("Codex Desktop"));
+    headers.insert("sec-fetch-site", HeaderValue::from_static("none"));
+    headers.insert("sec-fetch-mode", HeaderValue::from_static("no-cors"));
+    headers.insert("sec-fetch-dest", HeaderValue::from_static("empty"));
+    headers.insert("priority", HeaderValue::from_static("u=4, i"));
+
+    if account
+        .agent_identity
+        .as_ref()
+        .is_some_and(|identity| identity.chatgpt_account_is_fedramp)
+    {
+        headers.insert("x-openai-fedramp", HeaderValue::from_static("true"));
+    }
+
+    if let Some(account_id) = normalize_optional_ref(account_id) {
+        headers.insert(
+            "ChatGPT-Account-Id",
+            HeaderValue::from_str(&account_id)
+                .map_err(|e| format!("构建 ChatGPT-Account-Id 头失败: {}", e))?,
+        );
+    }
+
+    Ok(headers)
+}
+
+struct CodexApiResponse {
+    status: StatusCode,
+    headers: HeaderMap,
+    body: String,
+}
+
+async fn send_codex_api_request(
+    account: &CodexAccount,
+    method: Method,
+    url: &str,
+    json_body: Option<&serde_json::Value>,
+) -> Result<CodexApiResponse, String> {
+    send_codex_api_request_with_agent_auth_base_url(
+        account,
+        method,
+        url,
+        json_body,
+        codex_agent_identity::AGENT_IDENTITY_AUTH_API_BASE_URL,
+    )
+    .await
+}
+
+async fn send_codex_api_request_with_agent_auth_base_url(
+    account: &CodexAccount,
+    method: Method,
+    url: &str,
+    json_body: Option<&serde_json::Value>,
+    agent_auth_base_url: &str,
+) -> Result<CodexApiResponse, String> {
+    let account_id = account.account_id.clone().or_else(|| {
+        codex_account::extract_chatgpt_account_id_from_access_token(&account.tokens.access_token)
+    });
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|error| format!("创建 Codex 上游客户端失败: {}", error))?;
+    let mut current = account.clone();
+    let mut expected_task_id: Option<String> = None;
+
+    for attempt in 0..=1 {
+        let mut headers = build_codex_api_headers(&current, account_id.as_deref())?;
+        let mut assertion_task_id = None;
+        if current.is_agent_identity_auth() {
+            let (updated, auth_headers, task_id) =
+                codex_agent_identity::build_authentication_headers_with_base_url(
+                    &current,
+                    expected_task_id.as_deref(),
+                    agent_auth_base_url,
+                )
+                .await?;
+            current = updated;
+            headers.extend(auth_headers);
+            assertion_task_id = Some(task_id);
+        }
+
+        let mut request = client.request(method.clone(), url).headers(headers);
+        if let Some(body) = json_body {
+            request = request.json(body);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|error| format!("请求失败: {}", error))?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let raw_body = response
+            .text()
+            .await
+            .map_err(|error| format!("读取响应失败: {}", error))?;
+
+        if current.is_agent_identity_auth()
+            && attempt == 0
+            && codex_agent_identity::is_task_invalid_response(status, &raw_body)
+        {
+            expected_task_id = assertion_task_id;
+            continue;
+        }
+
+        let body = if status.is_success() {
+            raw_body
+        } else {
+            codex_agent_identity::redact_sensitive_body(&current, &raw_body)
+        };
+        return Ok(CodexApiResponse {
+            status,
+            headers,
+            body,
+        });
+    }
+
+    Err("Agent Identity task 恢复后请求仍失败".to_string())
+}
+
+async fn fetch_reset_credits(account: &CodexAccount) -> Result<CodexResetCreditsSnapshot, String> {
+    if let Some(payload) = mock_reset_credits_payload() {
+        logger::log_info("Codex reset credit 查询使用显式 mock JSON");
+        return Ok(parse_reset_credits_snapshot(payload));
+    }
+
+    let response = send_codex_api_request(account, Method::GET, RESET_CREDITS_URL, None)
+        .await
+        .map_err(|error| format!("请求主动重置次数明细失败: {}", error))?;
+    let status = response.status;
+    let headers = response.headers;
+    let body = response.body;
+
+    logger::log_info(&format!(
+        "Codex 主动重置次数明细响应: url={}, status={}, request-id={}, x-request-id={}, cf-ray={}, body_len={}",
+        RESET_CREDITS_URL,
+        status,
+        get_header_value(&headers, "request-id"),
+        get_header_value(&headers, "x-request-id"),
+        get_header_value(&headers, "cf-ray"),
+        body.len()
+    ));
+
+    if !status.is_success() {
+        let detail_code = extract_detail_code_from_body(&body);
+        let mut error_message = format!("主动重置次数明细接口返回错误 {}", status);
+        if let Some(code) = detail_code {
+            error_message.push_str(&format!(" [error_code:{}]", code));
+        }
+        error_message.push_str(&format!(" [body_len:{}]", body.len()));
+        append_http_error_diagnostics(&mut error_message, &headers, &body);
+        return Err(error_message);
+    }
+
+    let payload: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("主动重置次数明细 JSON 解析失败: {}", e))?;
+    Ok(parse_reset_credits_snapshot(payload))
+}
+
+pub async fn fetch_account_reset_credits(
+    account_id: &str,
+) -> Result<CodexResetCreditsSnapshot, String> {
+    let mut account = codex_account::prepare_account_for_injection(account_id).await?;
+    if account.is_api_key_auth() {
+        return Err("API Key 账号不支持主动重置额度".to_string());
+    }
+
+    if !account.is_agent_identity_auth()
+        && crate::modules::codex_oauth::is_token_expired(&account.tokens.access_token)
+    {
+        refresh_account_tokens(&mut account, "查询主动重置记录前 Token 已过期").await?;
+        sync_subscription_expiry_from_current_id_token(&mut account);
+        normalize_subscription_retry_state(&mut account);
+        codex_account::save_account(&account)?;
+    }
+
+    match fetch_reset_credits(&account).await {
+        Ok(snapshot) => Ok(snapshot),
+        Err(error) if !account.is_agent_identity_auth() && is_unauthorized_error(&error) => {
+            refresh_account_tokens(&mut account, "主动重置记录接口返回 401").await?;
+            sync_subscription_expiry_from_current_id_token(&mut account);
+            normalize_subscription_retry_state(&mut account);
+            codex_account::save_account(&account)?;
+            fetch_reset_credits(&account).await
+        }
+        Err(error) => Err(error),
+    }
+}
+
+async fn post_reset_credit_once(
+    account: &CodexAccount,
+    redeem_request_id: &str,
+) -> Result<(), String> {
+    let request_body = json!({ "redeem_request_id": redeem_request_id });
+    let response = send_codex_api_request(
+        account,
+        Method::POST,
+        RESET_CREDITS_CONSUME_URL,
+        Some(&request_body),
+    )
+    .await
+    .map_err(|error| format!("请求主动重置失败: {}", error))?;
+    let status = response.status;
+    let headers = response.headers;
+    let body = response.body;
+
+    logger::log_info(&format!(
+        "Codex 主动重置响应: url={}, status={}, request-id={}, x-request-id={}, cf-ray={}, body_len={}",
+        RESET_CREDITS_CONSUME_URL,
+        status,
+        get_header_value(&headers, "request-id"),
+        get_header_value(&headers, "x-request-id"),
+        get_header_value(&headers, "cf-ray"),
+        body.len()
+    ));
+
+    if status.is_success() {
+        return Ok(());
+    }
+
+    let detail_code = extract_detail_code_from_body(&body);
+    let mut error_message = format!("主动重置接口返回错误 {}", status);
+    if let Some(code) = detail_code {
+        error_message.push_str(&format!(" [error_code:{}]", code));
+    }
+    error_message.push_str(&format!(" [body_len:{}]", body.len()));
+    append_http_error_diagnostics(&mut error_message, &headers, &body);
+    Err(error_message)
+}
+
+fn is_unauthorized_error(message: &str) -> bool {
+    message.contains("401") || message.contains(&StatusCode::UNAUTHORIZED.to_string())
+}
+
+pub async fn consume_reset_credit(account_id: &str) -> Result<(), String> {
+    let mut account = codex_account::prepare_account_for_injection(account_id).await?;
+    if account.is_api_key_auth() {
+        return Err("API Key 账号不支持主动重置额度".to_string());
+    }
+    if mock_reset_credits_payload().is_some() {
+        logger::log_info(&format!(
+            "Codex 主动重置使用显式 mock JSON 空操作: account_id={}",
+            account_id
+        ));
+        return Ok(());
+    }
+
+    if !account.is_agent_identity_auth()
+        && crate::modules::codex_oauth::is_token_expired(&account.tokens.access_token)
+    {
+        refresh_account_tokens(&mut account, "主动重置前 Token 已过期").await?;
+        sync_subscription_expiry_from_current_id_token(&mut account);
+        normalize_subscription_retry_state(&mut account);
+        codex_account::save_account(&account)?;
+    }
+
+    let redeem_request_id = uuid::Uuid::new_v4().to_string();
+    match post_reset_credit_once(&account, &redeem_request_id).await {
+        Ok(()) => Ok(()),
+        Err(error) if !account.is_agent_identity_auth() && is_unauthorized_error(&error) => {
+            refresh_account_tokens(&mut account, "主动重置接口返回 401").await?;
+            sync_subscription_expiry_from_current_id_token(&mut account);
+            normalize_subscription_retry_state(&mut account);
+            codex_account::save_account(&account)?;
+            post_reset_credit_once(&account, &redeem_request_id).await
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// 从 id_token 中提取订阅标识并同步更新账号和索引
@@ -996,7 +1539,21 @@ async fn refresh_account_quota_once(
     account_id: &str,
     options: RefreshQuotaOptions,
 ) -> Result<CodexQuota, String> {
-    let mut account = codex_account::prepare_account_for_injection(account_id).await?;
+    let mut account = match codex_account::prepare_account_for_injection(account_id).await {
+        Ok(account) => account,
+        Err(error) => {
+            if let Some(mut stored_account) = codex_account::load_account(account_id) {
+                write_quota_error(&mut stored_account, error.clone());
+                if let Err(save_error) = codex_account::save_account(&stored_account) {
+                    logger::log_warn(&format!(
+                        "准备 Codex 账号失败后写入配额错误失败: {}",
+                        save_error
+                    ));
+                }
+            }
+            return Err(error);
+        }
+    };
     if account.is_api_key_auth() {
         if is_new_api_account(&account) {
             let result = match fetch_new_api_quota(&account).await {
@@ -1024,6 +1581,27 @@ async fn refresh_account_quota_once(
         account.usage_updated_at = None;
         let _ = codex_account::save_account(&account);
         return Err("API Key 账号不支持刷新配额，请在网页端查看。".to_string());
+    }
+    if account.is_agent_identity_auth() {
+        let result = match fetch_quota(&account).await {
+            Ok(result) => result,
+            Err(error) => {
+                write_quota_error(&mut account, error.clone());
+                if let Err(save_error) = codex_account::save_account(&account) {
+                    logger::log_warn(&format!("写入 Agent Identity 配额错误失败: {}", save_error));
+                }
+                return Err(error);
+            }
+        };
+        account = codex_account::load_account(&account.id).unwrap_or(account);
+        if result.plan_type.is_some() {
+            sync_subscription_from_token(&mut account, result.plan_type.clone(), None);
+        }
+        account.quota = Some(result.quota.clone());
+        account.quota_error = None;
+        account.usage_updated_at = Some(now_timestamp());
+        codex_account::save_account(&account)?;
+        return Ok(result.quota);
     }
 
     // 检查 token 是否过期，如果过期则刷新
@@ -1094,14 +1672,46 @@ async fn refresh_account_quota_once(
 }
 
 pub async fn refresh_account_quota(account_id: &str) -> Result<CodexQuota, String> {
-    refresh_account_quota_once(account_id, RefreshQuotaOptions::default()).await
+    let result = refresh_account_quota_once(account_id, RefreshQuotaOptions::default()).await;
+    crate::modules::codex_local_access::reevaluate_bound_oauth_quota_reserve_after_refresh(
+        account_id,
+        result.is_ok(),
+    )
+    .await;
+    result
 }
 
 pub async fn refresh_account_quota_with_options(
     account_id: &str,
     options: RefreshQuotaOptions,
 ) -> Result<CodexQuota, String> {
-    refresh_account_quota_once(account_id, options).await
+    let result = refresh_account_quota_once(account_id, options).await;
+    crate::modules::codex_local_access::reevaluate_bound_oauth_quota_reserve_after_refresh(
+        account_id,
+        result.is_ok(),
+    )
+    .await;
+    result
+}
+
+pub async fn probe_import_account_quota(account: &CodexAccount) -> Result<CodexQuota, String> {
+    if account.is_agent_identity_auth() {
+        return fetch_quota(account).await.map(|result| result.quota);
+    }
+    if account.is_api_key_auth() {
+        if is_new_api_account(account) {
+            return fetch_new_api_quota(account)
+                .await
+                .map(|result| result.quota);
+        }
+        return Err("API Key 账号不支持自动查询额度".to_string());
+    }
+
+    if crate::modules::codex_oauth::is_token_expired(&account.tokens.access_token) {
+        return Err("access_token 已过期，无法在导入前查询额度".to_string());
+    }
+
+    fetch_quota(account).await.map(|result| result.quota)
 }
 
 pub async fn refresh_account_subscription_info(
@@ -1111,6 +1721,15 @@ pub async fn refresh_account_subscription_info(
     let mut account = codex_account::prepare_account_for_injection(account_id).await?;
     if account.is_api_key_auth() {
         return Err("API Key 账号不支持刷新订阅信息".to_string());
+    }
+    if account.is_agent_identity_auth() {
+        let quota = fetch_quota(&account).await?;
+        account = codex_account::load_account(&account.id).unwrap_or(account);
+        if quota.plan_type.is_some() {
+            sync_subscription_from_token(&mut account, quota.plan_type, None);
+            codex_account::save_account(&account)?;
+        }
+        return Ok(account);
     }
 
     if crate::modules::codex_oauth::is_token_expired(&account.tokens.access_token) {
@@ -1133,23 +1752,62 @@ pub async fn refresh_account_subscription_info(
     }
 }
 
-/// 刷新所有账号配额
-pub async fn refresh_all_quotas() -> Result<Vec<(String, Result<CodexQuota, String>)>, String> {
+const CODEX_QUOTA_REFRESH_MAX_CONCURRENT: usize = 5;
+
+/// 按账号 ID 列表限流并发刷新配额（分组/勾选批量共用）。
+///
+/// `respect_group_quota_refresh=true`：跳过分组策略为「不刷新」的账号。
+/// 显式「刷新分组」应传 `false`。
+pub async fn refresh_quotas_for_account_ids(
+    account_ids: &[String],
+) -> Result<Vec<(String, Result<CodexQuota, String>)>, String> {
+    refresh_quotas_for_account_ids_with_options(account_ids, true).await
+}
+
+pub async fn refresh_quotas_for_account_ids_with_options(
+    account_ids: &[String],
+    respect_group_quota_refresh: bool,
+) -> Result<Vec<(String, Result<CodexQuota, String>)>, String> {
     use futures::future::join_all;
+    use std::collections::HashSet;
     use std::sync::Arc;
     use tokio::sync::Semaphore;
 
-    const MAX_CONCURRENT: usize = 5;
-    let accounts: Vec<_> = codex_account::list_accounts()
+    if account_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let effective_ids: Vec<String> = if respect_group_quota_refresh {
+        codex_account::filter_account_ids_by_quota_refresh_policy(account_ids)
+    } else {
+        account_ids
+            .iter()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect()
+    };
+
+    // 去重并保持输入顺序，避免重复刷新同一账号
+    let mut seen = HashSet::new();
+    let unique_ids: Vec<String> = effective_ids
         .into_iter()
-        .filter(|account| !account.is_api_key_auth() || is_new_api_account(account))
+        .filter_map(|id| {
+            if seen.insert(id.clone()) {
+                Some(id)
+            } else {
+                None
+            }
+        })
         .collect();
 
-    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT));
-    let tasks: Vec<_> = accounts
+    if unique_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let semaphore = Arc::new(Semaphore::new(CODEX_QUOTA_REFRESH_MAX_CONCURRENT));
+    let tasks: Vec<_> = unique_ids
         .into_iter()
-        .map(|account| {
-            let account_id = account.id;
+        .map(|account_id| {
             let semaphore = semaphore.clone();
             async move {
                 let _permit = semaphore
@@ -1169,6 +1827,387 @@ pub async fn refresh_all_quotas() -> Result<Vec<(String, Result<CodexQuota, Stri
             Err(err) => return Err(err),
         }
     }
-
     Ok(results)
+}
+
+/// 刷新所有账号配额（自动跳过分组「不刷新」账号）
+pub async fn refresh_all_quotas() -> Result<Vec<(String, Result<CodexQuota, String>)>, String> {
+    let disabled = codex_account::load_quota_refresh_disabled_account_ids();
+    let account_ids: Vec<String> = codex_account::list_accounts()
+        .into_iter()
+        .filter(supports_quota_refresh)
+        .filter(|account| !disabled.contains(&account.id))
+        .map(|account| account.id)
+        .collect();
+    refresh_quotas_for_account_ids_with_options(&account_ids, false).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_codex_api_headers, normalize_http_error_body_for_display,
+        normalize_remaining_percentage, parse_account_check_snapshot, parse_reset_credits_snapshot,
+        send_codex_api_request_with_agent_auth_base_url, WindowInfo,
+        HTTP_ERROR_BODY_DISPLAY_MAX_CHARS,
+    };
+    use crate::models::codex::{CodexAccount, CodexAgentIdentity, CodexTokens};
+    use base64::{engine::general_purpose, Engine as _};
+    use ed25519_dalek::{pkcs8::EncodePrivateKey, SigningKey};
+    use rand::rngs::OsRng;
+    use reqwest::Method;
+    use serde_json::json;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    fn agent_identity_test_account() -> CodexAccount {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let private_key = signing_key.to_pkcs8_der().expect("encode PKCS#8");
+        let mut account = CodexAccount::new(
+            format!("agent-quota-{}", uuid::Uuid::new_v4()),
+            "agent@example.com".to_string(),
+            CodexTokens {
+                id_token: String::new(),
+                access_token: String::new(),
+                refresh_token: None,
+            },
+        );
+        account.account_id = Some("team-test".to_string());
+        account.agent_identity = Some(CodexAgentIdentity {
+            agent_runtime_id: "runtime-test".to_string(),
+            agent_private_key: general_purpose::STANDARD.encode(private_key.as_bytes()),
+            task_id: Some("task-old".to_string()),
+            account_id: "team-test".to_string(),
+            chatgpt_user_id: "user-test".to_string(),
+            email: Some(account.email.clone()),
+            plan_type: Some("k12".to_string()),
+            chatgpt_account_is_fedramp: true,
+        });
+        account
+    }
+
+    fn subscription_test_account() -> CodexAccount {
+        CodexAccount::new(
+            "subscription-test".to_string(),
+            "subscription@example.com".to_string(),
+            CodexTokens {
+                id_token: String::new(),
+                access_token: String::new(),
+                refresh_token: None,
+            },
+        )
+    }
+
+    fn assertion_task_id(request: &str) -> Option<String> {
+        let authorization = request.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("authorization")
+                .then(|| value.trim())
+        })?;
+        let encoded = authorization.strip_prefix("AgentAssertion ")?;
+        let payload = general_purpose::URL_SAFE_NO_PAD.decode(encoded).ok()?;
+        serde_json::from_slice::<serde_json::Value>(&payload)
+            .ok()?
+            .get("task_id")?
+            .as_str()
+            .map(str::to_string)
+    }
+
+    async fn read_test_http_request(stream: &mut tokio::net::TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut chunk = [0u8; 2048];
+        let header_end = loop {
+            let read = stream.read(&mut chunk).await.expect("read request");
+            assert!(read > 0, "connection closed before request headers");
+            bytes.extend_from_slice(&chunk[..read]);
+            if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break index + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&bytes[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+        while bytes.len() < header_end + content_length {
+            let read = stream.read(&mut chunk).await.expect("read request body");
+            assert!(read > 0, "connection closed before request body");
+            bytes.extend_from_slice(&chunk[..read]);
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    #[test]
+    fn displays_empty_http_error_body_explicitly() {
+        assert_eq!(normalize_http_error_body_for_display(" \n\t "), "<empty>");
+    }
+
+    #[test]
+    fn rejects_missing_or_invalid_window_usage_percent() {
+        let window = |used_percent| WindowInfo {
+            used_percent,
+            limit_window_seconds: Some(300),
+            reset_after_seconds: None,
+            reset_at: None,
+        };
+
+        assert!(normalize_remaining_percentage(&window(None)).is_err());
+        assert!(normalize_remaining_percentage(&window(Some(-1))).is_err());
+        assert!(normalize_remaining_percentage(&window(Some(101))).is_err());
+        assert_eq!(
+            normalize_remaining_percentage(&window(Some(37))).unwrap(),
+            63
+        );
+    }
+
+    #[test]
+    fn compacts_and_truncates_http_error_body_for_display() {
+        let body = format!(
+            " first\n\nsecond   {} ",
+            "x".repeat(HTTP_ERROR_BODY_DISPLAY_MAX_CHARS)
+        );
+        let display = normalize_http_error_body_for_display(&body);
+
+        assert!(display.starts_with("first second "));
+        assert!(display.ends_with("...(truncated)"));
+        assert!(display.chars().count() <= HTTP_ERROR_BODY_DISPLAY_MAX_CHARS + 14);
+    }
+
+    #[test]
+    fn parses_reset_credit_details_and_next_expiry() {
+        let snapshot = parse_reset_credits_snapshot(json!({
+            "available_count": 1,
+            "credits": [
+                {
+                    "id": "credit-1",
+                    "status": "available",
+                    "type": "rate_limit_reset",
+                    "granted_at": "2099-06-19T00:00:00Z",
+                    "expires_at": "2099-06-25T08:30:00Z"
+                },
+                {
+                    "id": "credit-2",
+                    "status": "redeemed",
+                    "granted_at": 1781846400,
+                    "expires_at": 1782451200,
+                    "redeemed_at": 1781900000
+                }
+            ]
+        }));
+
+        assert_eq!(snapshot.available_count, Some(1));
+        assert_eq!(snapshot.credits.len(), 2);
+        assert_eq!(snapshot.credits[0].id.as_deref(), Some("credit-1"));
+        assert_eq!(snapshot.credits[0].status.as_deref(), Some("available"));
+        assert_eq!(snapshot.credits[0].granted_at, Some(4085510400));
+        assert_eq!(snapshot.credits[0].expires_at, Some(4086059400));
+        assert_eq!(snapshot.next_expires_at, Some(4086059400));
+    }
+
+    #[test]
+    fn derives_reset_credit_count_when_available_count_missing() {
+        let future = chrono::Utc::now().timestamp() + 3600;
+        let past = chrono::Utc::now().timestamp() - 3600;
+        let snapshot = parse_reset_credits_snapshot(json!({
+            "credits": [
+                { "id": "available", "expires_at": future },
+                { "id": "expired", "expires_at": past },
+                { "id": "used", "status": "used", "expires_at": future }
+            ]
+        }));
+
+        assert_eq!(snapshot.available_count, Some(1));
+        assert_eq!(snapshot.next_expires_at, Some(future));
+        assert_eq!(snapshot.credits[1].status.as_deref(), Some("expired"));
+    }
+
+    #[test]
+    fn account_check_prefers_organization_key_for_subscription() {
+        let mut account = subscription_test_account();
+        account.organization_id = Some("org-team".to_string());
+        account.account_id = Some("account-personal".to_string());
+        let snapshot = parse_account_check_snapshot(
+            &json!({
+                "accounts": {
+                    "org-personal": {
+                        "account": {
+                            "account_id": "account-personal",
+                            "plan_type": "free",
+                            "is_default": true
+                        },
+                        "entitlement": {
+                            "subscription_plan": "free",
+                            "expires_at": "2027-01-01T00:00:00Z"
+                        }
+                    },
+                    "org-team": {
+                        "account": {
+                            "account_id": "account-team",
+                            "plan_type": "team"
+                        },
+                        "entitlement": {
+                            "subscription_plan": "team",
+                            "expires_at": "2027-06-01T00:00:00Z"
+                        }
+                    }
+                }
+            }),
+            &account,
+        )
+        .expect("parse accounts/check");
+
+        assert_eq!(snapshot.account_id.as_deref(), Some("account-team"));
+        assert_eq!(snapshot.plan_type.as_deref(), Some("team"));
+        assert_eq!(
+            snapshot.subscription_active_until.as_deref(),
+            Some("2027-06-01T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn account_check_fallback_prefers_default_then_paid() {
+        let account = subscription_test_account();
+        let default_snapshot = parse_account_check_snapshot(
+            &json!({
+                "accounts": {
+                    "org-paid": {
+                        "account": { "account_id": "paid", "plan_type": "plus" },
+                        "entitlement": {
+                            "subscription_plan": "plus",
+                            "expires_at": "2027-06-01T00:00:00Z"
+                        }
+                    },
+                    "org-default": {
+                        "account": {
+                            "account_id": "default",
+                            "plan_type": "free",
+                            "is_default": true
+                        },
+                        "entitlement": {
+                            "subscription_plan": "free",
+                            "expires_at": "2027-01-01T00:00:00Z"
+                        }
+                    }
+                }
+            }),
+            &account,
+        )
+        .expect("parse default account");
+        assert_eq!(default_snapshot.account_id.as_deref(), Some("default"));
+
+        let paid_snapshot = parse_account_check_snapshot(
+            &json!({
+                "accounts": [
+                    {
+                        "account": { "account_id": "free", "plan_type": "free" },
+                        "entitlement": { "subscription_plan": "free" }
+                    },
+                    {
+                        "account": { "account_id": "paid", "plan_type": "plus" },
+                        "entitlement": {
+                            "subscription_plan": "plus",
+                            "expires_at": "2027-06-01T00:00:00Z"
+                        }
+                    }
+                ]
+            }),
+            &account,
+        )
+        .expect("parse paid account");
+        assert_eq!(paid_snapshot.account_id.as_deref(), Some("paid"));
+        assert_eq!(paid_snapshot.plan_type.as_deref(), Some("plus"));
+    }
+
+    #[tokio::test]
+    async fn agent_identity_quota_request_uses_common_headers_and_recovers_task_once() {
+        let account = agent_identity_test_account();
+        let headers = build_codex_api_headers(&account, account.account_id.as_deref())
+            .expect("build common headers");
+        assert!(headers.get("authorization").is_none());
+        assert_eq!(headers.get("openai-beta").unwrap(), "codex-1");
+        assert_eq!(headers.get("originator").unwrap(), "Codex Desktop");
+        assert_eq!(headers.get("chatgpt-account-id").unwrap(), "team-test");
+        assert_eq!(headers.get("x-openai-fedramp").unwrap(), "true");
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock upstream");
+        let base_url = format!("http://{}", listener.local_addr().expect("local address"));
+        let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+        let captured = Arc::clone(&requests);
+        let server = tokio::spawn(async move {
+            let mut usage_calls = 0;
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().await.expect("accept request");
+                let request = read_test_http_request(&mut stream).await;
+                let request_line = request.lines().next().unwrap_or_default().to_string();
+                captured.lock().expect("capture request").push(request);
+                let (status, body) = if request_line.contains("/task/register") {
+                    ("200 OK", r#"{"task_id":"task-new"}"#)
+                } else if usage_calls == 0 {
+                    usage_calls += 1;
+                    (
+                        "401 Unauthorized",
+                        r#"{"error":{"code":"invalid_task_id"}}"#,
+                    )
+                } else {
+                    usage_calls += 1;
+                    ("200 OK", r#"{"ok":true}"#)
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write response");
+            }
+        });
+
+        let response = send_codex_api_request_with_agent_auth_base_url(
+            &account,
+            Method::GET,
+            &format!("{base_url}/usage"),
+            None,
+            &base_url,
+        )
+        .await
+        .expect("recover task and retry quota request");
+        assert!(response.status.is_success());
+        server.await.expect("mock server");
+
+        let requests = requests.lock().expect("captured requests");
+        assert_eq!(requests.len(), 3);
+        let usage_requests = requests
+            .iter()
+            .filter(|request| {
+                request
+                    .lines()
+                    .next()
+                    .is_some_and(|line| line.contains("/usage"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(usage_requests.len(), 2);
+        assert_eq!(
+            assertion_task_id(usage_requests[0]),
+            Some("task-old".to_string())
+        );
+        assert_eq!(
+            assertion_task_id(usage_requests[1]),
+            Some("task-new".to_string())
+        );
+        assert!(usage_requests.iter().all(|request| {
+            let lower = request.to_ascii_lowercase();
+            lower.contains("openai-beta: codex-1")
+                && lower.contains("originator: codex desktop")
+                && lower.contains("chatgpt-account-id: team-test")
+                && lower.contains("x-openai-fedramp: true")
+        }));
+    }
 }

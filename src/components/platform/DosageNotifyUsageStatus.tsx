@@ -19,7 +19,7 @@ interface DosageNotifyUsageStatusProps {
   accountText: string;
   confirmText: string;
   closeText: string;
-  classPrefix: 'codebuddy' | 'workbuddy';
+  classPrefix: string;
 }
 
 function resolveDosageNotifyDetailText(usage: DosageNotifyUsage, locale: string, fallbackText: string): string {
@@ -76,7 +76,7 @@ export function DosageNotifyUsageStatus({
         </button>
       </span>
       {showDetail && (
-        <div className="modal-overlay" onClick={() => setShowDetail(false)}>
+        <div className="modal-overlay">
           <div className={`modal confirm-modal ${classPrefix}-usage-detail-modal`} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2>{detailTitle}</h2>

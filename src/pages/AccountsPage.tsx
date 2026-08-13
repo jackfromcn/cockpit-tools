@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback, Fragment } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback, Fragment, MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Plus,
@@ -16,8 +16,6 @@ import {
   LayoutGrid,
   List,
   Search,
-  Fingerprint,
-  Link,
   Lock,
   AlertTriangle,
   CircleAlert,
@@ -25,6 +23,9 @@ import {
   RotateCw,
   History,
   ArrowDownWideNarrow,
+  ArrowUp,
+  ArrowDown,
+  Wrench,
   Rows3,
   GripVertical,
   Eye,
@@ -39,10 +40,10 @@ import {
   LogOut,
   Pencil
 } from 'lucide-react'
-import { useTranslation, Trans } from 'react-i18next'
+import { useTranslation } from 'react-i18next'
 import { useAccountStore } from '../stores/useAccountStore'
 import * as accountService from '../services/accountService'
-import { FingerprintWithStats, Account } from '../types/account'
+import { Account } from '../types/account'
 import { Page } from '../types/navigation'
 import {
   getAntigravityTierBadge,
@@ -62,6 +63,7 @@ import { GroupAccountPickerModal } from '../components/GroupAccountPickerModal'
 import { ModalErrorMessage, useModalErrorState } from '../components/ModalErrorMessage'
 import { MfaQuickCodeSelect } from '../components/MfaQuickCodeSelect'
 import { useEscClose } from '../hooks/useEscClose'
+import { useEnterConfirm } from '../hooks/useEnterConfirm'
 import {
   AccountGroup,
   getAccountGroups,
@@ -91,11 +93,13 @@ import {
 import { OverviewTabsHeader } from '../components/OverviewTabsHeader'
 import styles from '../styles/CompactView.module.css'
 import { FileCorruptedModal, parseFileCorruptedError, type FileCorruptedError } from '../components/FileCorruptedModal'
+import { AccountSelectionToolbar } from '../components/AccountSelectionToolbar'
 import { QuickSettingsPopover } from '../components/QuickSettingsPopover'
 import {
   isPrivacyModeEnabledByDefault,
   maskSensitiveValue,
-  persistPrivacyModeEnabled
+  persistPrivacyModeEnabled,
+  PRIVACY_MODE_CHANGED_EVENT
 } from '../utils/privacy'
 import { useExportJsonModal } from '../hooks/useExportJsonModal'
 import { MultiSelectFilterDropdown, type MultiSelectFilterOption } from '../components/MultiSelectFilterDropdown'
@@ -115,6 +119,7 @@ import {
   normalizeAccountTag,
   type AccountFilterType,
 } from '../utils/accountFilters'
+import { loadWakeupOfficialLsVersionMode } from '../utils/wakeupOfficialLsVersion'
 import {
   buildValidAccountsFilterOption,
   splitValidityFilterValues,
@@ -218,6 +223,51 @@ const ANTIGRAVITY_FILTER_FIELD_TAG_FILTER = 'tag_filter'
 const ANTIGRAVITY_FILTER_FIELD_GROUP_BY_TAG = 'group_by_tag'
 const ANTIGRAVITY_FILTER_FIELD_ACTIVE_GROUP_ID = 'active_group_id'
 
+const DEFAULT_FILTER_TYPES: AccountsFilterType[] = []
+const DEFAULT_TAG_FILTER: string[] = []
+
+const ANTIGRAVITY_CUSTOM_SORT_ORDER_KEY = 'agtools.antigravity.accounts.custom_sort_order.v1'
+const ANTIGRAVITY_CUSTOM_SORT_ACTIVE_KEY = 'agtools.antigravity.accounts.custom_sort_active.v1'
+
+function readAntigravityCustomSortOrder(): string[] {
+  try {
+    const raw = localStorage.getItem(ANTIGRAVITY_CUSTOM_SORT_ORDER_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is string =>
+        typeof item === 'string' && item.trim().length > 0
+    )
+  } catch {
+    return []
+  }
+}
+
+function writeAntigravityCustomSortOrder(accountIds: string[]): void {
+  try {
+    localStorage.setItem(ANTIGRAVITY_CUSTOM_SORT_ORDER_KEY, JSON.stringify(accountIds))
+  } catch {
+    // ignore persistence failures
+  }
+}
+
+function readAntigravityCustomSortActive(): boolean {
+  try {
+    return localStorage.getItem(ANTIGRAVITY_CUSTOM_SORT_ACTIVE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeAntigravityCustomSortActive(active: boolean): void {
+  try {
+    localStorage.setItem(ANTIGRAVITY_CUSTOM_SORT_ACTIVE_KEY, active ? '1' : '0')
+  } catch {
+    // ignore persistence failures
+  }
+}
+
 export function AccountsPage({ onNavigate }: AccountsPageProps) {
   const { t, i18n } = useTranslation()
   const antigravityRuntimeTarget = useAntigravityRuntimeTarget()
@@ -225,7 +275,7 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
   const untaggedKey = '__untagged__'
   const {
     accounts,
-    currentAccount,
+    currentAccountsByTarget,
     loading,
     error: storeError,
     fetchAccounts,
@@ -237,6 +287,7 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     switchAccount,
     updateAccountTags
   } = useAccountStore()
+  const currentAccount = currentAccountsByTarget[antigravityRuntimeTarget] ?? null
 
   const formatSwitchError = useCallback((error: unknown) => String(error), [])
 
@@ -297,11 +348,8 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     initialFilterPersistenceEnabled,
   )
 
-  // View mode
+  // View mode — always remember layout independently of filter-memory switch (#1200)
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
-    if (!initialFilterPersistenceEnabled) {
-      return 'grid'
-    }
     const saved = readAccountsOverviewFilterField<unknown>(
       ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
       ANTIGRAVITY_FILTER_FIELD_VIEW_MODE,
@@ -334,22 +382,38 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
 
   // 筛选
   const [searchQuery, setSearchQuery] = useState('')
-  const [filterTypes, setFilterTypes] = useState<AccountsFilterType[]>(() =>
-    initialFilterPersistenceEnabled
-      ? (readAccountsOverviewFilterStringArray(
+  const [filterTypes, setFilterTypes] = useState<AccountsFilterType[]>(() => {
+    if (initialFilterPersistenceEnabled) {
+      const saved = readAccountsOverviewFilterField<unknown>(
+        ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
+        ANTIGRAVITY_FILTER_FIELD_FILTER_TYPES,
+        null,
+      )
+      if (saved !== null) {
+        return readAccountsOverviewFilterStringArray(
           ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
           ANTIGRAVITY_FILTER_FIELD_FILTER_TYPES,
-        ) as AccountsFilterType[])
-      : [],
-  )
-  const [tagFilter, setTagFilter] = useState<string[]>(() =>
-    initialFilterPersistenceEnabled
-      ? readAccountsOverviewFilterStringArray(
+        ) as AccountsFilterType[]
+      }
+    }
+    return DEFAULT_FILTER_TYPES
+  })
+  const [tagFilter, setTagFilter] = useState<string[]>(() => {
+    if (initialFilterPersistenceEnabled) {
+      const saved = readAccountsOverviewFilterField<unknown>(
+        ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
+        ANTIGRAVITY_FILTER_FIELD_TAG_FILTER,
+        null,
+      )
+      if (saved !== null) {
+        return readAccountsOverviewFilterStringArray(
           ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
           ANTIGRAVITY_FILTER_FIELD_TAG_FILTER,
         )
-      : [],
-  )
+      }
+    }
+    return DEFAULT_TAG_FILTER
+  })
   const [groupByTag, setGroupByTag] = useState<boolean>(() =>
     initialFilterPersistenceEnabled
       ? Boolean(
@@ -380,6 +444,7 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
   const [addTab, setAddTab] = useState<'oauth' | 'token' | 'import'>('oauth')
   const [refreshing, setRefreshing] = useState<Set<string>>(new Set())
   const [refreshingAll, setRefreshingAll] = useState(false)
+  const [wakeupRunning, setWakeupRunning] = useState(false)
   const [switching, setSwitching] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const [refreshWarnings, setRefreshWarnings] = useState<
@@ -450,19 +515,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     set: setTagDeleteConfirmError,
   } = useModalErrorState()
   const [deletingTag, setDeletingTag] = useState(false)
-  // 指纹选择弹框
-  const [fingerprints, setFingerprints] = useState<FingerprintWithStats[]>([])
-  const [showFpSelectModal, setShowFpSelectModal] = useState<string | null>(
-    null
-  )
-  const [selectedFpId, setSelectedFpId] = useState<string | null>(null)
-  const {
-    message: fpSelectError,
-    scrollKey: fpSelectErrorScrollKey,
-    set: setFpSelectError,
-  } = useModalErrorState()
-  const originalFingerprint = fingerprints.find((fp) => fp.is_original)
-  const selectableFingerprints = fingerprints.filter((fp) => !fp.is_original)
 
   // Quota Detail Modal
   const [showQuotaModal, setShowQuotaModal] = useState<string | null>(null)
@@ -488,6 +540,7 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     )
     return typeof saved === 'string' && saved.trim() ? saved : null
   })
+  const [addTargetGroupId, setAddTargetGroupId] = useState<string | null>(null)
   const [showAccountGroupModal, setShowAccountGroupModal] = useState(false)
   const [showAddToGroupModal, setShowAddToGroupModal] = useState(false)
   const [groupAccountPickerGroupId, setGroupAccountPickerGroupId] = useState<string | null>(null)
@@ -505,6 +558,43 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     if (!activeGroupId) return null
     return accountGroups.find((g) => g.id === activeGroupId) || null
   }, [accountGroups, activeGroupId])
+
+  const addTargetGroup = useMemo(() => {
+    if (!addTargetGroupId) return null
+    return accountGroups.find((group) => group.id === addTargetGroupId) || null
+  }, [accountGroups, addTargetGroupId])
+
+  const resolveValidAccountGroupId = useCallback(
+    (groupId?: string | null) => {
+      const normalized = groupId?.trim()
+      if (!normalized) return null
+      return accountGroups.some((group) => group.id === normalized) ? normalized : null
+    },
+    [accountGroups],
+  )
+
+  const assignAccountsToAddTargetGroup = useCallback(
+    async (
+      targetAccounts: Array<Account | null | undefined>,
+      targetGroupId = addTargetGroupId,
+    ) => {
+      const resolvedGroupId = resolveValidAccountGroupId(targetGroupId)
+      if (!resolvedGroupId) return
+
+      const accountIds = Array.from(
+        new Set(
+          targetAccounts
+            .map((account) => account?.id?.trim())
+            .filter((id): id is string => Boolean(id)),
+        ),
+      )
+      if (accountIds.length === 0) return
+
+      await assignAccountsToGroup(resolvedGroupId, accountIds)
+      await reloadAccountGroups()
+    },
+    [addTargetGroupId, reloadAccountGroups, resolveValidAccountGroupId],
+  )
 
   const groupAccountPickerGroup = useMemo(() => {
     if (!groupAccountPickerGroupId) return null
@@ -529,6 +619,9 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     }
   }, [accountGroups, groupQuickAddGroupId])
   const [sortBy, setSortBy] = useState<string>(() => {
+    if (readAntigravityCustomSortActive()) {
+      return 'custom'
+    }
     if (!initialFilterPersistenceEnabled) {
       return DEFAULT_ANTIGRAVITY_SORT_BY
     }
@@ -552,6 +645,13 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
       ) as string | null,
     )
   })
+
+  const [customSortOrder, setCustomSortOrder] = useState<string[]>(
+    readAntigravityCustomSortOrder
+  )
+  const [showCustomSortModal, setShowCustomSortModal] = useState(false)
+  const [draggedCustomSortAccountId, setDraggedCustomSortAccountId] = useState<string | null>(null)
+  const [customSortDropTargetId, setCustomSortDropTargetId] = useState<string | null>(null)
 
   // Compact view model sorting
   const [compactGroupOrder, setCompactGroupOrder] = useState<string[]>([])
@@ -580,7 +680,7 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
   const addTabRef = useRef(addTab)
   const oauthUrlRef = useRef(oauthUrl)
   const addStatusRef = useRef(addStatus)
-  const activeGroupIdRef = useRef(activeGroupId)
+  const addTargetGroupIdRef = useRef<string | null>(null)
   const verificationHistoryRequestIdRef = useRef(0)
   const colorPickerRef = useRef<HTMLDivElement>(null)
 
@@ -589,8 +689,8 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     addTabRef.current = addTab
     oauthUrlRef.current = oauthUrl
     addStatusRef.current = addStatus
-    activeGroupIdRef.current = activeGroupId
-  }, [showAddModal, addTab, oauthUrl, addStatus, activeGroupId])
+    addTargetGroupIdRef.current = addTargetGroupId
+  }, [showAddModal, addTab, oauthUrl, addStatus, addTargetGroupId])
 
   useEffect(() => {
     const handleFeatureUnlockChanged = (event: Event) => {
@@ -655,7 +755,115 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     return total.toFixed(2).replace(/\.?0+$/, '')
   }
 
+  const loadPersistedOverviewFilters = useCallback(() => {
+    const savedViewMode = readAccountsOverviewFilterField<unknown>(
+      ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
+      ANTIGRAVITY_FILTER_FIELD_VIEW_MODE,
+      'grid',
+    )
+    if (savedViewMode === 'grid' || savedViewMode === 'list' || savedViewMode === 'compact') {
+      setViewMode(savedViewMode)
+    }
+
+    const savedFilterTypes = readAccountsOverviewFilterField<unknown>(
+      ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
+      ANTIGRAVITY_FILTER_FIELD_FILTER_TYPES,
+      null,
+    )
+    setFilterTypes(
+      savedFilterTypes !== null
+        ? (readAccountsOverviewFilterStringArray(
+            ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
+            ANTIGRAVITY_FILTER_FIELD_FILTER_TYPES,
+          ) as AccountsFilterType[])
+        : DEFAULT_FILTER_TYPES
+    )
+
+    const savedTagFilter = readAccountsOverviewFilterField<unknown>(
+      ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
+      ANTIGRAVITY_FILTER_FIELD_TAG_FILTER,
+      null,
+    )
+    setTagFilter(
+      savedTagFilter !== null
+        ? readAccountsOverviewFilterStringArray(
+            ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
+            ANTIGRAVITY_FILTER_FIELD_TAG_FILTER,
+          )
+        : DEFAULT_TAG_FILTER
+    )
+
+    setGroupByTag(
+      Boolean(
+        readAccountsOverviewFilterField<unknown>(
+          ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
+          ANTIGRAVITY_FILTER_FIELD_GROUP_BY_TAG,
+          false,
+        ),
+      ),
+    )
+
+    const savedActiveGroupId = readAccountsOverviewFilterField<string | null>(
+      ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
+      ANTIGRAVITY_FILTER_FIELD_ACTIVE_GROUP_ID,
+      null,
+    )
+    setActiveGroupId(
+      typeof savedActiveGroupId === 'string' && savedActiveGroupId.trim()
+        ? savedActiveGroupId
+        : null,
+    )
+
+    setSortBy(
+      normalizeAntigravitySortBy(
+        readAccountsOverviewFilterField<unknown>(
+          ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
+          ANTIGRAVITY_FILTER_FIELD_SORT_BY,
+          DEFAULT_ANTIGRAVITY_SORT_BY,
+        ) as string,
+      ),
+    )
+
+    setSortDirection(
+      normalizeAntigravitySortDirection(
+        readAccountsOverviewFilterField<unknown>(
+          ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
+          ANTIGRAVITY_FILTER_FIELD_SORT_DIRECTION,
+          'desc',
+        ) as string | null,
+      ),
+    )
+  }, [])
+
+  const resetOverviewFilters = useCallback(() => {
+    setViewMode('grid')
+    setFilterTypes([])
+    setTagFilter([])
+    setGroupByTag(false)
+    setActiveGroupId(null)
+    setSortBy(DEFAULT_ANTIGRAVITY_SORT_BY)
+    setSortDirection('desc')
+  }, [])
+
   useEffect(() => {
+    const handleConfigUpdated = () => {
+      const nextFilterPersistenceEnabled = readAccountsOverviewFilterPersistenceEnabled(
+        ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
+      )
+      setFilterPersistenceEnabled(nextFilterPersistenceEnabled)
+      if (nextFilterPersistenceEnabled) {
+        loadPersistedOverviewFilters()
+      } else {
+        resetOverviewFilters()
+      }
+      setPrivacyModeEnabled(isPrivacyModeEnabledByDefault())
+    }
+
+    const handlePrivacyModeChanged = (event: Event) => {
+      const isEnabled = (event as CustomEvent<boolean>).detail
+      setPrivacyModeEnabled(isEnabled)
+    }
+
     const handleFilterPersistenceChanged = (event: Event) => {
       const detail = (event as CustomEvent<AccountsOverviewFilterPersistenceChangedDetail>).detail
       if (!detail || detail.scope !== ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE) {
@@ -663,32 +871,30 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
       }
       setFilterPersistenceEnabled(Boolean(detail.enabled))
     }
+    window.addEventListener('config-updated', handleConfigUpdated)
+    window.addEventListener(PRIVACY_MODE_CHANGED_EVENT, handlePrivacyModeChanged as EventListener)
     window.addEventListener(
       ACCOUNTS_OVERVIEW_FILTER_PERSISTENCE_CHANGED_EVENT,
       handleFilterPersistenceChanged as EventListener,
     )
     return () => {
+      window.removeEventListener('config-updated', handleConfigUpdated)
+      window.removeEventListener(PRIVACY_MODE_CHANGED_EVENT, handlePrivacyModeChanged as EventListener)
       window.removeEventListener(
         ACCOUNTS_OVERVIEW_FILTER_PERSISTENCE_CHANGED_EVENT,
         handleFilterPersistenceChanged as EventListener,
       )
     }
-  }, [])
+  }, [loadPersistedOverviewFilters, resetOverviewFilters])
 
   useEffect(() => {
-    if (!filterPersistenceEnabled) {
-      removeAccountsOverviewFilterField(
-        ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
-        ANTIGRAVITY_FILTER_FIELD_VIEW_MODE,
-      )
-      return
-    }
+    // Always persist layout mode so switching tabs does not reset list/card view (#1200)
     writeAccountsOverviewFilterField(
       ANTIGRAVITY_FILTER_PERSISTENCE_SCOPE,
       ANTIGRAVITY_FILTER_FIELD_VIEW_MODE,
       viewMode,
     )
-  }, [filterPersistenceEnabled, viewMode])
+  }, [viewMode])
 
   useEffect(() => {
     if (!filterPersistenceEnabled) {
@@ -780,6 +986,149 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     )
   }, [activeGroupId, filterPersistenceEnabled])
 
+  // Sync customSortOrder when accounts load or change
+  useEffect(() => {
+    if (accounts.length === 0) {
+      return
+    }
+    const accountIds = accounts.map((account) => account.id)
+    const accountIdSet = new Set(accountIds)
+    setCustomSortOrder((prev) => {
+      const next = prev.filter((accountId) => accountIdSet.has(accountId))
+      const seen = new Set(next)
+      for (const accountId of accountIds) {
+        if (!seen.has(accountId)) {
+          next.push(accountId)
+          seen.add(accountId)
+        }
+      }
+      const unchanged =
+        next.length === prev.length &&
+        next.every((accountId, index) => accountId === prev[index])
+      return unchanged ? prev : next
+    })
+  }, [accounts])
+
+  useEffect(() => {
+    writeAntigravityCustomSortOrder(customSortOrder)
+  }, [customSortOrder])
+
+  useEffect(() => {
+    writeAntigravityCustomSortActive(sortBy === 'custom')
+  }, [sortBy])
+
+  useEffect(() => {
+    if (!showCustomSortModal || !draggedCustomSortAccountId) return
+    const handleMouseUp = () => {
+      setDraggedCustomSortAccountId(null)
+      setCustomSortDropTargetId(null)
+    }
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => window.removeEventListener('mouseup', handleMouseUp)
+  }, [showCustomSortModal, draggedCustomSortAccountId])
+
+  useEffect(() => {
+    if (!showCustomSortModal) {
+      setDraggedCustomSortAccountId(null)
+      setCustomSortDropTargetId(null)
+    }
+  }, [showCustomSortModal])
+
+  const isCustomSortActive = sortBy === 'custom'
+  const customSortAccounts = useMemo(() => {
+    const accountMap = new Map(
+      accounts.map((account) => [account.id, account])
+    )
+    const result: Account[] = []
+    const seen = new Set<string>()
+
+    customSortOrder.forEach((accountId) => {
+      const account = accountMap.get(accountId)
+      if (!account || seen.has(accountId)) return
+      result.push(account)
+      seen.add(accountId)
+    })
+
+    accounts.forEach((account) => {
+      if (seen.has(account.id)) return
+      result.push(account)
+      seen.add(account.id)
+    })
+
+    return result
+  }, [accounts, customSortOrder])
+
+  const customSortAccountIds = useMemo(
+    () => customSortAccounts.map((account) => account.id),
+    [customSortAccounts]
+  )
+
+  const moveCustomSortAccount = useCallback(
+    (accountId: string, direction: 'up' | 'down') => {
+      const currentIndex = customSortAccountIds.indexOf(accountId)
+      if (currentIndex < 0) return
+      const targetIndex =
+        direction === 'up' ? currentIndex - 1 : currentIndex + 1
+      if (targetIndex < 0 || targetIndex >= customSortAccountIds.length) return
+      const next = [...customSortAccountIds]
+      const [moved] = next.splice(currentIndex, 1)
+      next.splice(targetIndex, 0, moved)
+      setCustomSortOrder(next)
+    },
+    [customSortAccountIds]
+  )
+
+  const stopCustomSortDragging = useCallback(() => {
+    setDraggedCustomSortAccountId(null)
+    setCustomSortDropTargetId(null)
+  }, [])
+
+  const handleCustomSortDragStart = useCallback(
+    (event: ReactMouseEvent, accountId: string) => {
+      if (event.button !== 0) return
+      event.preventDefault()
+      event.stopPropagation()
+      setDraggedCustomSortAccountId(accountId)
+      setCustomSortDropTargetId(null)
+    },
+    []
+  )
+
+  const handleCustomSortDragMove = useCallback(
+    (targetAccountId: string) => {
+      if (!draggedCustomSortAccountId) return
+      if (draggedCustomSortAccountId === targetAccountId) {
+        setCustomSortDropTargetId(null)
+        return
+      }
+      const fromIndex = customSortAccountIds.indexOf(
+        draggedCustomSortAccountId
+      )
+      const toIndex = customSortAccountIds.indexOf(targetAccountId)
+      if (fromIndex < 0 || toIndex < 0) return
+      setCustomSortDropTargetId(targetAccountId)
+      const next = [...customSortAccountIds]
+      const [moved] = next.splice(fromIndex, 1)
+      next.splice(toIndex, 0, moved)
+      setCustomSortOrder(next)
+    },
+    [customSortAccountIds, draggedCustomSortAccountId]
+  )
+
+  const resetCustomSortOrder = useCallback(() => {
+    setCustomSortOrder(accounts.map((account) => account.id))
+  }, [accounts])
+
+  const handleSortByChange = useCallback(
+    (value: string) => {
+      setSortBy(value)
+      if (value === 'custom') {
+        setShowCustomSortModal(true)
+      }
+    },
+    [setSortBy]
+  )
+
   useEffect(() => {
     if (!displayGroupsLoaded) {
       return
@@ -788,7 +1137,8 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     if (
       normalizedSortBy === 'overall' ||
       normalizedSortBy === 'created_at' ||
-      normalizedSortBy === 'default'
+      normalizedSortBy === 'default' ||
+      normalizedSortBy === 'custom'
     ) {
       return
     }
@@ -807,6 +1157,14 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     }
   }, [displayGroups, displayGroupsLoaded, sortBy])
 
+  const customSortOrderIndex = useMemo(() => {
+    const map = new Map<string, number>()
+    customSortOrder.forEach((accountId, index) => {
+      map.set(accountId, index)
+    })
+    return map
+  }, [customSortOrder])
+
   const accountSortComparator = useMemo(
     () =>
       createAntigravityAccountComparator({
@@ -814,8 +1172,9 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
         sortDirection,
         displayGroups,
         currentAccountId: currentAccount?.id ?? null,
+        customSortOrderIndex,
       }),
-    [currentAccount?.id, displayGroups, sortBy, sortDirection]
+    [currentAccount?.id, displayGroups, sortBy, sortDirection, customSortOrderIndex]
   )
 
   const availableTags = useMemo(() => collectAvailableAccountTags(accounts), [accounts])
@@ -978,15 +1337,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     ]
   )
 
-  const loadFingerprints = async () => {
-    try {
-      const list = await accountService.listFingerprints()
-      setFingerprints(list)
-    } catch (e) {
-      console.error(e)
-    }
-  }
-
   // 加载显示用分组配置
   const loadDisplayGroups = async () => {
     try {
@@ -1136,8 +1486,7 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
 
   useEffect(() => {
     fetchAccounts()
-    fetchCurrentAccount()
-    loadFingerprints()
+    fetchCurrentAccount(antigravityRuntimeTarget)
     loadDisplayGroups()
     loadVerificationHistory()
 
@@ -1145,14 +1494,14 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
 
     listen<string>('accounts:refresh', async () => {
       await fetchAccounts()
-      await fetchCurrentAccount()
+      await fetchCurrentAccount(antigravityRuntimeTarget)
       const latestAccounts = useAccountStore.getState().accounts
       const accountsWithoutQuota = latestAccounts.filter(
         (acc) => !acc.quota?.models?.length
       )
       if (accountsWithoutQuota.length > 0) {
         await Promise.allSettled(
-          accountsWithoutQuota.map((acc) => refreshQuota(acc.id))
+          accountsWithoutQuota.map((acc) => refreshQuota(acc.id, antigravityRuntimeTarget))
         )
         await fetchAccounts()
       }
@@ -1207,12 +1556,8 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
       try {
         const newAccount = await accountService.completeOAuthLogin()
         await fetchAccounts()
-        await fetchCurrentAccount()
-        // 如果在文件夹内添加，自动归入当前文件夹
-        if (activeGroupIdRef.current && newAccount?.id) {
-          await assignAccountsToGroup(activeGroupIdRef.current, [newAccount.id])
-          await reloadAccountGroups()
-        }
+        await fetchCurrentAccount(antigravityRuntimeTarget)
+        await assignAccountsToAddTargetGroup([newAccount], addTargetGroupIdRef.current)
         setAddStatus('success')
         setAddMessage(t('accounts.oauth.success'))
         setTimeout(() => {
@@ -1233,7 +1578,7 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
       if (unlistenUrl) unlistenUrl()
       if (unlistenCallback) unlistenCallback()
     }
-  }, [fetchAccounts, fetchCurrentAccount])
+  }, [assignAccountsToAddTargetGroup, fetchAccounts, fetchCurrentAccount])
 
   useEffect(() => {
     if (!showAddModal || addTab !== 'oauth' || oauthUrl) return
@@ -1268,7 +1613,7 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
   const handleRefresh = async (accountId: string) => {
     setRefreshing((prev) => new Set(prev).add(accountId))
     try {
-      await refreshQuota(accountId)
+      await refreshQuota(accountId, antigravityRuntimeTarget)
       setRefreshResult((prev) => ({ ...prev, [accountId]: 'success' }))
       setTimeout(() => setRefreshResult((prev) => { const next = { ...prev }; delete next[accountId]; return next }), 2000)
     } catch (e) {
@@ -1289,7 +1634,7 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
         const groupAccountIds = new Set(activeGroup.accountIds)
         const groupAccounts = accounts.filter((acc) => groupAccountIds.has(acc.id))
         await Promise.allSettled(
-          groupAccounts.map((acc) => refreshQuota(acc.id))
+          groupAccounts.map((acc) => refreshQuota(acc.id, antigravityRuntimeTarget))
         )
       } else {
         const stats = await refreshAllQuotas()
@@ -1300,6 +1645,56 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     } finally {
       await loadVerificationHistory()
       setRefreshingAll(false)
+    }
+  }
+
+  const handleWakeupSelected = async () => {
+    if (selected.size === 0 || wakeupRunning) return
+    setWakeupRunning(true)
+    setMessage(null)
+    const selectedIdSet = new Set(selected)
+    const selectedAccounts = accounts.filter((account) => selectedIdSet.has(account.id))
+    try {
+      const models = await invoke<Array<{ id: string }>>('fetch_available_models')
+      const model = models.find((item) => item.id)?.id
+      if (!model) {
+        throw new Error(t('wakeup.notice.testMissingModel'))
+      }
+      const officialLsVersionMode = loadWakeupOfficialLsVersionMode()
+      const results = await Promise.allSettled(
+        selectedAccounts.map((account) =>
+          invoke('trigger_wakeup', {
+            accountId: account.id,
+            model,
+            prompt: undefined,
+            maxOutputTokens: 0,
+            cancelScopeId: undefined,
+            officialLsVersionMode,
+          }),
+        ),
+      )
+      const failed = results.filter((result) => result.status === 'rejected').length
+      const success = results.length - failed
+      setMessage({
+        text:
+          failed > 0
+            ? t('messages.actionFailed', {
+                action: t('wakeup.runTest'),
+                error: `${success}/${results.length}`,
+              })
+            : t('messages.actionSuccess', { action: t('wakeup.runTest') }),
+        tone: failed > 0 ? 'error' : undefined,
+      })
+    } catch (error) {
+      setMessage({
+        text: t('messages.actionFailed', {
+          action: t('wakeup.runTest'),
+          error: String(error).replace(/^Error:\s*/, ''),
+        }),
+        tone: 'error',
+      })
+    } finally {
+      setWakeupRunning(false)
     }
   }
 
@@ -1334,6 +1729,8 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
       })
       setDeleteConfirm(null)
       setDeleteConfirmError(null)
+      // 删除成功后清掉页顶红色报错（#1160）
+      setMessage(null)
     } catch (error) {
       setDeleteConfirmError(
         t('messages.actionFailed', {
@@ -1357,10 +1754,11 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
   }, [])
 
   const openAddModal = useCallback((tab: 'oauth' | 'token' | 'import') => {
+    setAddTargetGroupId(resolveValidAccountGroupId(activeGroupId))
     setAddTab(tab)
     setShowAddModal(true)
     resetAddModalState()
-  }, [resetAddModalState])
+  }, [activeGroupId, resetAddModalState, resolveValidAccountGroupId])
 
   const consumeExternalProviderImport = useCallback(() => {
     const request = consumeQueuedExternalProviderImportForPlatform('antigravity')
@@ -1403,12 +1801,34 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
       accountService.cancelOAuthLogin().catch(() => { })
     }
     setShowAddModal(false)
+    setAddTargetGroupId(null)
     resetAddModalState()
     setOauthUrl('')
   }
 
   useEscClose(showAddModal, closeAddModal);
   useEscClose(showSwitchHistoryModal, () => setShowSwitchHistoryModal(false));
+  useEscClose(Boolean(deleteConfirm) && !deleting, () => {
+    setDeleteConfirm(null)
+    setDeleteConfirmError(null)
+  });
+  useEnterConfirm(Boolean(deleteConfirm) && !deleting, () => {
+    void confirmDelete()
+  });
+  useEscClose(Boolean(groupDeleteConfirm) && !deletingGroup, () => {
+    setGroupDeleteConfirm(null)
+    setGroupDeleteError(null)
+  });
+  useEnterConfirm(Boolean(groupDeleteConfirm) && !deletingGroup, () => {
+    void confirmDeleteGroup()
+  });
+  useEscClose(Boolean(tagDeleteConfirm) && !deletingTag, () => {
+    setTagDeleteConfirm(null)
+    setTagDeleteConfirmError(null)
+  });
+  useEnterConfirm(Boolean(tagDeleteConfirm) && !deletingTag, () => {
+    void confirmDeleteTag()
+  });
 
   const runModalAction = async (
     label: string,
@@ -1437,17 +1857,19 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
 
   const handleOAuthStart = async () => {
     await runModalAction(t('modals.import.oauthAction'), async () => {
-      await startOAuthLogin()
+      const account = await startOAuthLogin()
       await fetchAccounts()
-      await fetchCurrentAccount()
+      await fetchCurrentAccount(antigravityRuntimeTarget)
+      await assignAccountsToAddTargetGroup([account])
     })
   }
 
   const handleOAuthComplete = async () => {
     await runModalAction(t('modals.import.oauthAction'), async () => {
-      await accountService.completeOAuthLogin()
+      const account = await accountService.completeOAuthLogin()
       await fetchAccounts()
-      await fetchCurrentAccount()
+      await fetchCurrentAccount(antigravityRuntimeTarget)
+      await assignAccountsToAddTargetGroup([account])
     })
   }
 
@@ -1456,7 +1878,7 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     setSwitching(accountId)
     try {
       const account = await switchAccount(accountId, antigravityRuntimeTarget)
-      await fetchCurrentAccount()
+      await fetchCurrentAccount(antigravityRuntimeTarget)
       setMessage({ text: t('messages.switched', { email: maskAccountText(account.email) }) })
     } catch (e) {
       const raw = formatSwitchError(e)
@@ -1622,9 +2044,9 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     try {
       const imported = await accountService.importFromOldTools()
       await fetchAccounts()
-      await loadFingerprints()
-      await Promise.allSettled(imported.map((acc) => refreshQuota(acc.id)))
+      await Promise.allSettled(imported.map((acc) => refreshQuota(acc.id, antigravityRuntimeTarget)))
       await fetchAccounts()
+      await assignAccountsToAddTargetGroup(imported)
       if (imported.length === 0) {
         setAddStatus('error')
         setAddMessage(t('modals.import.noAccountsFound'))
@@ -1652,8 +2074,9 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
       await fetchAccounts()
       await new Promise((resolve) => setTimeout(resolve, 180))
       await fetchAccounts()
-      await refreshQuota(imported.id)
+      await refreshQuota(imported.id, antigravityRuntimeTarget)
       await fetchAccounts()
+      await assignAccountsToAddTargetGroup([imported])
       setAddStatus('success')
       setAddMessage(
         t('messages.importLocalSuccess', { email: maskAccountText(imported.email) })
@@ -1696,8 +2119,9 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
       const result = await accountService.importFromFiles(paths)
       const { imported, failed } = result
       await fetchAccounts()
-      await Promise.allSettled(imported.map((acc) => refreshQuota(acc.id)))
+      await Promise.allSettled(imported.map((acc) => refreshQuota(acc.id, antigravityRuntimeTarget)))
       await fetchAccounts()
+      await assignAccountsToAddTargetGroup(imported)
       if (imported.length === 0 && failed.length === 0) {
         setAddStatus('error')
         setAddMessage(t('modals.import.noAccountsFound'))
@@ -1733,6 +2157,7 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     setAddMessage(t('modals.import.importingExtension'))
     let unlistenProgress: UnlistenFn | undefined
     try {
+      const knownAccountIds = new Set(accounts.map((account) => account.id))
       unlistenProgress = await listen<ExtensionImportProgressPayload>(
         'accounts:extension-import-progress',
         (event) => {
@@ -1751,7 +2176,13 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
       )
       const count = await accountService.syncFromExtension()
       await fetchAccounts()
-      await fetchCurrentAccount()
+      await fetchCurrentAccount(antigravityRuntimeTarget)
+      if (count > 0) {
+        const imported = (await accountService.listAccounts()).filter(
+          (account) => !knownAccountIds.has(account.id),
+        )
+        await assignAccountsToAddTargetGroup(imported)
+      }
       if (count === 0) {
         setAddStatus('error')
         setAddMessage(t('modals.import.noAccountsFound'))
@@ -1856,14 +2287,10 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
 
     if (importedAccounts.length > 0) {
       await Promise.allSettled(
-        importedAccounts.map((acc) => refreshQuota(acc.id))
+        importedAccounts.map((acc) => refreshQuota(acc.id, antigravityRuntimeTarget))
       )
       await fetchAccounts()
-      // 如果在文件夹内添加，自动归入当前文件夹
-      if (activeGroupId) {
-        await assignAccountsToGroup(activeGroupId, importedAccounts.map((acc) => acc.id))
-        await reloadAccountGroups()
-      }
+      await assignAccountsToAddTargetGroup(importedAccounts)
     }
 
     if (success === tokens.length) {
@@ -2135,34 +2562,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     await reloadAccountGroups()
   }
 
-  const openFpSelectModal = (accountId: string) => {
-    const account = accounts.find((a) => a.id === accountId)
-    setSelectedFpId(account?.fingerprint_id || 'original')
-    setFpSelectError(null)
-    setShowFpSelectModal(accountId)
-  }
-
-  const handleBindFingerprint = async () => {
-    if (!showFpSelectModal || !selectedFpId) return
-    try {
-      setFpSelectError(null)
-      await accountService.bindAccountFingerprint(
-        showFpSelectModal,
-        selectedFpId
-      )
-      await fetchAccounts()
-      setShowFpSelectModal(null)
-    } catch (e) {
-      setFpSelectError(t('messages.bindFailed', { error: String(e) }))
-    }
-  }
-
-  const getFingerprintName = (fpId?: string) => {
-    if (!fpId || fpId === 'original') return t('modals.fingerprint.original')
-    const fp = fingerprints.find((f) => f.id === fpId)
-    return fp?.name || fpId
-  }
-
   const formatDate = (timestamp: number) => {
     const d = new Date(timestamp * 1000)
     return (
@@ -2267,11 +2666,76 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
   const resolveGroupLabel = (groupKey: string) =>
     groupKey === untaggedKey ? t('accounts.untagged', '未分组') : groupKey
 
+  const renderCustomQuotaSection = (account: Account, isList: boolean = false) => {
+    const quotaDisplayItems = getQuotaDisplayItems(account);
+    const hasModels = account.quota?.models && account.quota.models.length > 0;
+    
+    if (!hasModels) {
+      return (
+        <div className="quota-empty" style={{ gridColumn: '1 / -1', textAlign: 'center' }}>
+          {t('overview.noQuotaData')}
+        </div>
+      );
+    }
+
+    const claude5h = quotaDisplayItems.find(item => item.key === 'claude:5h');
+    const claudeWeekly = quotaDisplayItems.find(item => item.key === 'claude:weekly');
+    const gemini5h = quotaDisplayItems.find(item => item.key === 'gemini:5h');
+    const geminiWeekly = quotaDisplayItems.find(item => item.key === 'gemini:weekly');
+
+    const renderBar = (label: string, item: any) => {
+      const percentage = item ? item.percentage : 100;
+      const resetTime = item ? item.resetTime : '';
+      const resetLabel = resetTime ? formatResetTimeDisplay(resetTime, t) : '';
+      
+      return (
+        <div className={isList ? "quota-item" : "quota-compact-item"}>
+          <div className={isList ? "quota-header" : "quota-compact-header"}>
+            <span className={isList ? "quota-name" : "model-label"}>{label}</span>
+            <span className={`${isList ? "quota-value" : "model-pct"} ${getQuotaClass(percentage)}`}>
+              {percentage}%
+            </span>
+          </div>
+          <div className={isList ? "quota-progress-track" : "quota-compact-bar-track"}>
+            <div
+              className={`${isList ? "quota-progress-bar" : "quota-compact-bar"} ${getQuotaClass(percentage)}`}
+              style={{ width: `${percentage}%` }}
+            />
+          </div>
+          {(isList || resetLabel) && (
+            <div className={isList ? "quota-footer" : undefined}>
+              <span
+                className={isList ? "quota-reset" : "quota-compact-reset"}
+                title={resetLabel || undefined}
+              >
+                {resetLabel || '\u00A0'}
+              </span>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    return (
+      <>
+        <div className="quota-column">
+          <div className="quota-column-title">Claude</div>
+          {renderBar("5h", claude5h)}
+          {renderBar(t('common.weekly', 'Weekly'), claudeWeekly)}
+        </div>
+        <div className="quota-column">
+          <div className="quota-column-title">Gemini</div>
+          {renderBar("5h", gemini5h)}
+          {renderBar(t('common.weekly', 'Weekly'), geminiWeekly)}
+        </div>
+      </>
+    );
+  };
+
   const renderGridCards = (items: Account[], groupKey?: string) =>
     items.map((account) => {
       const isCurrent = currentAccount?.id === account.id
       const tierBadge = getAntigravityTierBadge(account.quota)
-      const quotaDisplayItems = getQuotaDisplayItems(account)
       const availableCreditsDisplay = getAvailableAICreditsDisplay(account)
       const isDisabled = account.disabled
       const isForbidden = Boolean(account.quota?.is_forbidden)
@@ -2294,7 +2758,8 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
       const verificationReason = account.disabled_reason || verificationStatusMap[account.id]
       const hasVerificationIssue = verificationReason === 'verification_required' || verificationReason === 'tos_violation'
 
-      if (quotaDisplayItems.length === 0) {
+      const hasModels = account.quota?.models && account.quota.models.length > 0
+      if (!hasModels) {
         console.log('[AccountsPage] 账号无配额数据:', {
           email: account.email,
           isCurrent,
@@ -2374,33 +2839,7 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
                     {t('common.shared.quota.queryFailed', '配额查询失败')}
                   </div>
                 )}
-                {quotaDisplayItems.map((item) => {
-                  const resetLabel = formatResetTimeDisplay(item.resetTime, t)
-                  return (
-                    <div key={item.key} className="quota-compact-item">
-                      <div className="quota-compact-header">
-                        <span className="model-label">{item.label}</span>
-                        <span
-                          className={`model-pct ${getQuotaClass(item.percentage)}`}
-                        >
-                          {item.percentage}%
-                        </span>
-                      </div>
-                      <div className="quota-compact-bar-track">
-                        <div
-                          className={`quota-compact-bar ${getQuotaClass(item.percentage)}`}
-                          style={{ width: `${item.percentage}%` }}
-                        />
-                      </div>
-                      {resetLabel && (
-                        <span className="quota-compact-reset">{resetLabel}</span>
-                      )}
-                    </div>
-                  )
-                })}
-                {quotaDisplayItems.length === 0 && (
-                  <div className="quota-empty">{t('overview.noQuotaData')}</div>
-                )}
+                {renderCustomQuotaSection(account, false)}
               </>
             )}
             <div className="quota-credits-field">
@@ -2442,13 +2881,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
                 title={t('accounts.actions.viewDetails')}
               >
                 <CircleAlert size={14} />
-              </button>
-              <button
-                className="card-action-btn"
-                onClick={() => openFpSelectModal(account.id)}
-                title={t('accounts.actions.fingerprint')}
-              >
-                <Fingerprint size={14} />
               </button>
               <button
                 className="card-action-btn"
@@ -2600,18 +3032,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
   const renderGridView = () => {
     return (
       <div className="grid-view-container">
-        {paginatedAccounts.length > 0 && (
-          <div className="grid-view-header" style={{ marginBottom: '12px', paddingLeft: '4px' }}>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: 'var(--text-color)' }}>
-              <input
-                type="checkbox"
-                checked={allPaginatedSelected}
-                onChange={toggleSelectAll}
-              />
-              {t('common.selectAll', '全选')}
-            </label>
-          </div>
-        )}
         {!groupByTag ? (
           <div className="accounts-grid">
             {renderInlineFolderCards()}
@@ -2936,7 +3356,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
     items.map((account) => {
       const isCurrent = currentAccount?.id === account.id
       const tierBadge = getAntigravityTierBadge(account.quota)
-      const quotaDisplayItems = getQuotaDisplayItems(account)
       const availableCreditsDisplay = getAvailableAICreditsDisplay(account)
       const isForbidden = Boolean(account.quota?.is_forbidden)
       const quotaError = account.quota_error
@@ -3012,19 +3431,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
             </div>
           </td>
           <td>
-            <button
-              className="fp-select-btn"
-              onClick={() => openFpSelectModal(account.id)}
-              title={t('accounts.actions.selectFingerprint')}
-            >
-              <Fingerprint size={14} />
-              <span className="fp-select-name">
-                {getFingerprintName(account.fingerprint_id)}
-              </span>
-              <Link size={12} />
-            </button>
-          </td>
-          <td>
             <div className="quota-grid">
               {isForbidden ? (
                 <div className="quota-forbidden" title={forbiddenTitle}>
@@ -3038,34 +3444,7 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
                       {t('common.shared.quota.queryFailed', '配额查询失败')}
                     </div>
                   )}
-                  {quotaDisplayItems.map((item) => (
-                    <div className="quota-item" key={item.key}>
-                      <div className="quota-header">
-                        <span className="quota-name">{item.label}</span>
-                        <span
-                          className={`quota-value ${getQuotaClass(item.percentage)}`}
-                        >
-                          {item.percentage}%
-                        </span>
-                      </div>
-                      <div className="quota-progress-track">
-                        <div
-                          className={`quota-progress-bar ${getQuotaClass(item.percentage)}`}
-                          style={{ width: `${item.percentage}%` }}
-                        />
-                      </div>
-                      <div className="quota-footer">
-                        <span className="quota-reset">
-                          {formatResetTimeDisplay(item.resetTime, t)}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                  {quotaDisplayItems.length === 0 && (
-                    <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>
-                      {t('overview.noQuotaData')}
-                    </span>
-                  )}
+                  {renderCustomQuotaSection(account, true)}
                 </>
               )}
               <div className="quota-credits-field">
@@ -3170,7 +3549,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
               />
             </th>
             <th style={{ width: 220 }}>{t('accounts.columns.email')}</th>
-            <th style={{ width: 130 }}>{t('accounts.columns.fingerprint')}</th>
             <th>{t('accounts.columns.quota')}</th>
             <th className="sticky-action-header table-action-header">
               {t('accounts.columns.actions')}
@@ -3414,27 +3792,42 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
                     defaultValue: `按 ${group.name} 重置时间`,
                   }),
                 })),
+                {
+                  value: 'custom',
+                  label: t('accounts.sort.custom', '自定义顺序'),
+                },
               ]}
               ariaLabel={t('accounts.sortLabel', '排序')}
               icon={<ArrowDownWideNarrow size={14} />}
-              onChange={setSortBy}
+              onChange={handleSortByChange}
             />
 
-            {/* 排序方向切换按钮 */}
-            <button
-              className="sort-direction-btn"
-              onClick={() =>
-                setSortDirection((prev) => (prev === 'desc' ? 'asc' : 'desc'))
-              }
-              title={
-                sortDirection === 'desc'
-                  ? t('accounts.sort.descTooltip', '当前：降序，点击切换为升序')
-                  : t('accounts.sort.ascTooltip', '当前：升序，点击切换为降序')
-              }
-              aria-label={t('accounts.sort.toggleDirection', '切换排序方向')}
-            >
-              {sortDirection === 'desc' ? '⬇' : '⬆'}
-            </button>
+            {/* 排序方向切换按钮 / 自定义排序配置按钮 */}
+            {!isCustomSortActive ? (
+              <button
+                className="sort-direction-btn"
+                onClick={() =>
+                  setSortDirection((prev) => (prev === 'desc' ? 'asc' : 'desc'))
+                }
+                title={
+                  sortDirection === 'desc'
+                    ? t('accounts.sort.descTooltip', '当前：降序，点击切换为升序')
+                    : t('accounts.sort.ascTooltip', '当前：升序，点击切换为降序')
+                }
+                aria-label={t('accounts.sort.toggleDirection', '切换排序方向')}
+              >
+                {sortDirection === 'desc' ? '⬇' : '⬆'}
+              </button>
+            ) : (
+              <button
+                className="sort-direction-btn"
+                onClick={() => setShowCustomSortModal(true)}
+                title={t('accounts.sort.customSettingsTooltip', '配置自定义顺序')}
+                aria-label={t('accounts.sort.customSettingsTooltip', '配置自定义顺序')}
+              >
+                <Wrench size={14} />
+              </button>
+            )}
           </div>
 
           <div className="toolbar-right">
@@ -3501,8 +3894,42 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
             >
               <Upload size={14} />
             </button>
-            {selected.size > 0 && (
+            {!activeGroupId && (
+              <button
+                className="btn btn-secondary icon-only"
+                onClick={() => setShowAccountGroupModal(true)}
+                title={t('accounts.groups.manageTitle')}
+                aria-label={t('accounts.groups.manageTitle')}
+              >
+                <FolderOpen size={14} />
+              </button>
+            )}
+            <QuickSettingsPopover type="antigravity" />
+          </div>
+        </div>
+
+        {filteredAccounts.length > 0 && (
+          <AccountSelectionToolbar
+            selectedCount={selected.size}
+            allSelected={allPaginatedSelected}
+            disabled={paginatedIds.length === 0}
+            onToggleSelectAll={toggleSelectAll}
+            onClearSelection={() => setSelected(new Set())}
+            actions={(
               <>
+                <button
+                  className="btn btn-secondary icon-only"
+                  onClick={() => void handleWakeupSelected()}
+                  disabled={wakeupRunning || selected.size === 0}
+                  title={`${t('wakeup.runTest')} (${selected.size})`}
+                  aria-label={`${t('wakeup.runTest')} (${selected.size})`}
+                >
+                  {wakeupRunning ? (
+                    <RefreshCw size={14} className="loading-spinner" />
+                  ) : (
+                    <Rocket size={14} />
+                  )}
+                </button>
                 <button
                   className="btn btn-secondary icon-only"
                   onClick={() => setShowAddToGroupModal(true)}
@@ -3521,19 +3948,8 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
                 </button>
               </>
             )}
-            {!activeGroupId && (
-              <button
-                className="btn btn-secondary icon-only"
-                onClick={() => setShowAccountGroupModal(true)}
-                title={t('accounts.groups.manageTitle')}
-                aria-label={t('accounts.groups.manageTitle')}
-              >
-                <FolderOpen size={14} />
-              </button>
-            )}
-            <QuickSettingsPopover type="antigravity" />
-          </div>
-        </div>
+          />
+        )}
 
         {message && (
           <div
@@ -3613,7 +4029,7 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
 
       {/* Add Account Modal */}
       {showAddModal && (
-        <div className="modal-overlay" onClick={closeAddModal}>
+        <div className="modal-overlay">
           <div
             className="modal modal-lg add-account-modal"
             onClick={(e) => e.stopPropagation()}
@@ -3626,6 +4042,17 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
             </div>
             <div className="modal-body">
               <MfaQuickCodeSelect />
+              {addTargetGroup && (
+                <div className="accounts-add-target-group-hint">
+                  <FolderPlus size={14} />
+                  <span>
+                    {t('accounts.addModal.targetGroup', {
+                      defaultValue: '将添加到分组：{{group}}',
+                      group: addTargetGroup.name,
+                    })}
+                  </span>
+                </div>
+              )}
               <div className="add-tabs">
                 <button
                   className={`add-tab ${addTab === 'oauth' ? 'active' : ''}`}
@@ -3874,14 +4301,186 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
         onCopySavedPath={exportModal.copySavedPath}
       />
 
+      {showCustomSortModal && (
+        <div className="modal-overlay">
+          <div
+            className="modal codex-custom-sort-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <h2>
+                  {t('accounts.sort.customModalTitle', '自定义账号排序')}
+                </h2>
+                <p className="codex-custom-sort-modal-desc">
+                  {t(
+                    'accounts.sort.customModalDesc',
+                    '拖动账号或使用上下按钮调整展示顺序。'
+                  )}
+                </p>
+              </div>
+              <button
+                className="modal-close"
+                onClick={() => setShowCustomSortModal(false)}
+                aria-label={t('common.close', '关闭')}
+              >
+                <X />
+              </button>
+            </div>
+            <div className="modal-body">
+              <div
+                className={`codex-custom-sort-list ${
+                  draggedCustomSortAccountId ? 'is-sorting' : ''
+                }`}
+                onMouseUp={stopCustomSortDragging}
+                onMouseLeave={stopCustomSortDragging}
+              >
+                {customSortAccounts.map((account, index) => {
+                  const isCurrent = currentAccount?.id === account.id
+                  const tierBadge = getAntigravityTierBadge(account.quota)
+                  const quotaDisplayItems = getQuotaDisplayItems(account)
+                  const rowClass = [
+                    'codex-custom-sort-row',
+                    draggedCustomSortAccountId === account.id
+                      ? 'is-dragging'
+                      : '',
+                    draggedCustomSortAccountId &&
+                    draggedCustomSortAccountId !== account.id
+                      ? 'is-drop-candidate'
+                      : '',
+                    draggedCustomSortAccountId &&
+                    draggedCustomSortAccountId !== account.id &&
+                    customSortDropTargetId === account.id
+                      ? 'is-drop-target'
+                      : '',
+                  ]
+                    .join(' ')
+                    .trim()
+
+                  return (
+                    <div
+                      key={account.id}
+                      className={rowClass}
+                      onMouseEnter={() =>
+                        handleCustomSortDragMove(account.id)
+                      }
+                    >
+                      <div className="codex-custom-sort-row-main">
+                        <button
+                          type="button"
+                          className="codex-custom-sort-drag-handle"
+                          onMouseDown={(event) =>
+                            handleCustomSortDragStart(event, account.id)
+                          }
+                          title={t(
+                            'accounts.sort.customDragHandle',
+                            '拖拽排序'
+                          )}
+                          aria-label={t(
+                            'accounts.sort.customDragHandle',
+                            '拖拽排序'
+                          )}
+                        >
+                          <GripVertical size={16} />
+                        </button>
+                        <span className="codex-custom-sort-index">
+                          {index + 1}
+                        </span>
+                        <div className="codex-custom-sort-account">
+                          <div className="codex-custom-sort-account-title">
+                            <span
+                              title={maskAccountText(account.email)}
+                            >
+                              {maskAccountText(account.email)}
+                            </span>
+                            {isCurrent && (
+                              <span className="mini-tag current">
+                                {t('accounts.status.current', '当前')}
+                              </span>
+                            )}
+                            <span
+                              className={`tier-badge ${tierBadge.className}`}
+                            >
+                              {tierBadge.label}
+                            </span>
+                          </div>
+                          <div className="codex-custom-sort-quota-line">
+                            {quotaDisplayItems.length > 0 ? (
+                              quotaDisplayItems.slice(0, 2).map((item) => (
+                                <span
+                                  key={`${account.id}-${item.key}`}
+                                  className="codex-custom-sort-quota"
+                                >
+                                  <span>{item.key.includes('claude') ? 'Claude' : 'Gemini'} {item.key.includes('5h') ? '5h' : 'Weekly'}:</span>
+                                  <strong className={getQuotaClass(item.percentage)}>
+                                    {item.percentage}%
+                                  </strong>
+                                </span>
+                              ))
+                            ) : (
+                              <span className="codex-custom-sort-quota-empty">
+                                {t('common.shared.quota.noData', '暂无配额数据')}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="codex-custom-sort-row-actions">
+                        <button
+                          type="button"
+                          className="folder-icon-btn"
+                          onClick={() =>
+                            moveCustomSortAccount(account.id, 'up')
+                          }
+                          disabled={index === 0}
+                          title={t('accounts.sort.customMoveUp', '上移')}
+                          aria-label={t('accounts.sort.customMoveUp', '上移')}
+                        >
+                          <ArrowUp size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="folder-icon-btn"
+                          onClick={() =>
+                            moveCustomSortAccount(account.id, 'down')
+                          }
+                          disabled={index === customSortAccounts.length - 1}
+                          title={t('accounts.sort.customMoveDown', '下移')}
+                          aria-label={t(
+                            'accounts.sort.customMoveDown',
+                            '下移'
+                          )}
+                        >
+                          <ArrowDown size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="btn btn-secondary"
+                onClick={resetCustomSortOrder}
+              >
+                <RotateCw size={14} />
+                {t('accounts.sort.customReset', '重置自定义顺序')}
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => setShowCustomSortModal(false)}
+              >
+                {t('common.confirm', '确认')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {antigravitySeamlessSwitchUnlocked && showSwitchHistoryModal && (
         <div
           className="modal-overlay"
-          onClick={() => {
-            if (switchHistoryClearing || switchHistoryClearConfirmOpen) return
-            setShowSwitchHistoryModal(false)
-            setSwitchHistoryClearConfirmOpen(false)
-          }}
         >
           <div className="modal modal-lg" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
@@ -4030,10 +4629,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
       {antigravitySeamlessSwitchUnlocked && showSwitchHistoryModal && switchHistoryClearConfirmOpen && (
         <div
           className="modal-overlay"
-          onClick={() => {
-            if (switchHistoryClearing) return
-            setSwitchHistoryClearConfirmOpen(false)
-          }}
         >
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
@@ -4077,11 +4672,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
       {deleteConfirm && (
         <div
           className="modal-overlay"
-          onClick={() => {
-            if (deleting) return
-            setDeleteConfirm(null)
-            setDeleteConfirmError(null)
-          }}
         >
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
@@ -4128,11 +4718,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
       {groupDeleteConfirm && (
         <div
           className="modal-overlay"
-          onClick={() => {
-            if (deletingGroup) return
-            setGroupDeleteConfirm(null)
-            setGroupDeleteError(null)
-          }}
         >
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
@@ -4183,11 +4768,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
       {tagDeleteConfirm && (
         <div
           className="modal-overlay"
-          onClick={() => {
-            if (deletingTag) return
-            setTagDeleteConfirm(null)
-            setTagDeleteConfirmError(null)
-          }}
         >
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
@@ -4237,119 +4817,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
         </div>
       )}
 
-      {/* Fingerprint Selection Modal */}
-      {showFpSelectModal && (
-        <div
-          className="modal-overlay"
-          onClick={() => {
-            setShowFpSelectModal(null)
-            setFpSelectError(null)
-          }}
-        >
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('modals.fingerprint.title')}</h2>
-              <button
-                className="close-btn"
-                onClick={() => {
-                  setShowFpSelectModal(null)
-                  setFpSelectError(null)
-                }}
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <ModalErrorMessage message={fpSelectError} scrollKey={fpSelectErrorScrollKey} />
-              <p>
-                <Trans
-                  i18nKey="modals.fingerprint.desc"
-                  values={{
-                    email: maskAccountText(
-                      accounts.find((a) => a.id === showFpSelectModal)?.email
-                    )
-                  }}
-                  components={{ 1: <strong></strong> }}
-                />
-              </p>
-              <div className="form-group">
-                <label>{t('modals.fingerprint.selectLabel')}</label>
-                <div className="fp-select-list">
-                  <label
-                    className={`fp-select-item ${selectedFpId === 'original' ? 'selected' : ''}`}
-                  >
-                    <input
-                      type="radio"
-                      name="fingerprint"
-                      checked={selectedFpId === 'original'}
-                      onChange={() => setSelectedFpId('original')}
-                    />
-                    <div className="fp-select-info">
-                      <span className="fp-select-item-name">
-                        📌 {t('modals.fingerprint.original')}
-                      </span>
-                      <span className="fp-select-item-id">
-                        {t('modals.fingerprint.original')} ·{' '}
-                        {originalFingerprint?.bound_account_count ?? 0}{' '}
-                        {t('modals.fingerprint.boundCount')}
-                      </span>
-                    </div>
-                  </label>
-                  {selectableFingerprints.map((fp) => (
-                    <label
-                      key={fp.id}
-                      className={`fp-select-item ${selectedFpId === fp.id ? 'selected' : ''}`}
-                    >
-                      <input
-                        type="radio"
-                        name="fingerprint"
-                        checked={selectedFpId === fp.id}
-                        onChange={() => setSelectedFpId(fp.id)}
-                      />
-                      <div className="fp-select-info">
-                        <span className="fp-select-item-name">{fp.name}</span>
-                        <span className="fp-select-item-id">
-                          {fp.id.substring(0, 8)} · {fp.bound_account_count}{' '}
-                          {t('modals.fingerprint.boundCount')}
-                        </span>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div className="modal-actions">
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => {
-                    setShowFpSelectModal(null)
-                    setFpSelectError(null)
-                    onNavigate?.('fingerprints')
-                  }}
-                >
-                  <Plus size={14} /> {t('modals.fingerprint.new')}
-                </button>
-                <div style={{ flex: 1 }}></div>
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => {
-                    setShowFpSelectModal(null)
-                    setFpSelectError(null)
-                  }}
-                >
-                  {t('common.cancel')}
-                </button>
-                <button
-                  className="btn btn-primary"
-                  onClick={handleBindFingerprint}
-                >
-                  {t('common.confirm')}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Quota Details Modal */}
       {showQuotaModal &&
         (() => {
@@ -4364,7 +4831,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
           return (
             <div
               className="modal-overlay"
-              onClick={() => setShowQuotaModal(null)}
             >
               <div
                 className="modal modal-lg"
@@ -4461,7 +4927,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
           return (
             <div
               className="modal-overlay"
-              onClick={() => setShowErrorModal(null)}
             >
               <div
                 className="modal modal-lg"
@@ -4550,7 +5015,6 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
           return (
             <div
               className="modal-overlay"
-              onClick={() => setShowVerificationErrorModal(null)}
             >
               <div
                 className="modal modal-lg"

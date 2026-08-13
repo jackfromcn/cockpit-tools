@@ -102,6 +102,7 @@ export interface AntigravityAccountSortOptions {
   sortDirection: AntigravitySortDirection;
   displayGroups: DisplayGroup[];
   currentAccountId?: string | null;
+  customSortOrderIndex?: Map<string, number> | null;
 }
 
 export const normalizeAntigravitySortBy = (sortBy: string | null | undefined) => {
@@ -118,10 +119,20 @@ export const createAntigravityAccountComparator = ({
   sortDirection,
   displayGroups,
   currentAccountId,
+  customSortOrderIndex,
 }: AntigravityAccountSortOptions) => {
   const normalizedSortBy = normalizeAntigravitySortBy(sortBy);
 
   return (a: Account, b: Account) => {
+    if (normalizedSortBy === 'custom') {
+      const aIndex = customSortOrderIndex?.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+      const bIndex = customSortOrderIndex?.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+      if (aIndex !== bIndex) {
+        return aIndex - bIndex;
+      }
+      return b.created_at - a.created_at;
+    }
+
     const currentFirstDiff = compareCurrentAccountFirst(a.id, b.id, currentAccountId);
     if (currentFirstDiff !== 0) {
       return currentFirstDiff;

@@ -10,7 +10,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use url::Url;
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -22,6 +22,7 @@ const ORIGINATOR: &str = "codex_vscode";
 const OAUTH_CALLBACK_PORT: u16 = 1455;
 const OAUTH_PORT_IN_USE_CODE: &str = "CODEX_OAUTH_PORT_IN_USE";
 const OAUTH_STATE_FILE: &str = "codex_oauth_pending.json";
+const OAUTH_WINDOW_LABEL: &str = "codex-oauth-incognito";
 const OAUTH_TIMEOUT_SECONDS: i64 = 300;
 const TOKEN_REFRESH_SKEW_SECONDS: i64 = 300;
 const TOKEN_REFRESH_TIMEOUT: Duration = Duration::from_secs(25);
@@ -276,6 +277,83 @@ fn build_auth_url(redirect_uri: &str, code_challenge: &str, state: &str) -> Stri
     )
 }
 
+fn authorize_url_matches_pending(url: &Url, pending: &OAuthState) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some("auth.openai.com")
+        && url.path() == "/oauth/authorize"
+        && Url::parse(&pending.auth_url).is_ok_and(|expected| expected == *url)
+}
+
+fn is_callback_navigation(url: &Url, callback_port: u16) -> bool {
+    url.scheme() == "http"
+        && url.host_str() == Some("localhost")
+        && url.port() == Some(callback_port)
+        && url.path() == "/auth/callback"
+}
+
+pub fn open_incognito_oauth_window(app: &AppHandle, auth_url: &str) -> Result<(), String> {
+    hydrate_oauth_state_if_missing();
+    let parsed = Url::parse(auth_url.trim())
+        .map_err(|error| format!("Codex OAuth 授权地址无效: {}", error))?;
+    let pending = OAUTH_STATE
+        .lock()
+        .map_err(|_| "获取 Codex OAuth 状态锁失败".to_string())?
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| "Codex OAuth 登录会话不存在或已结束".to_string())?;
+    if pending.expires_at <= now_timestamp() {
+        return Err("Codex OAuth 登录已超时，请重新发起授权".to_string());
+    }
+    if !authorize_url_matches_pending(&parsed, &pending) {
+        return Err("Codex OAuth 授权地址与当前登录会话不匹配".to_string());
+    }
+
+    if let Some(window) = app.get_webview_window(OAUTH_WINDOW_LABEL) {
+        window
+            .destroy()
+            .map_err(|error| format!("重置 Codex OAuth 无痕窗口失败: {}", error))?;
+    }
+
+    let callback_port = pending.port;
+    WebviewWindowBuilder::new(app, OAUTH_WINDOW_LABEL, WebviewUrl::External(parsed))
+        .title("Codex OAuth")
+        .inner_size(920.0, 720.0)
+        .min_inner_size(640.0, 560.0)
+        .center()
+        .incognito(true)
+        .on_navigation(move |url| {
+            if is_callback_navigation(url, callback_port) {
+                logger::log_info("Codex OAuth 无痕窗口正在访问本地回调地址");
+                return true;
+            }
+            let allowed = matches!(url.scheme(), "https" | "about");
+            if !allowed {
+                logger::log_warn(&format!(
+                    "Codex OAuth 无痕窗口已阻止非 HTTPS 导航: scheme={}",
+                    url.scheme()
+                ));
+            }
+            allowed
+        })
+        .build()
+        .map_err(|error| format!("创建 Codex OAuth 无痕窗口失败: {}", error))?;
+
+    logger::log_info(&format!(
+        "Codex OAuth 无痕窗口已打开: login_id={}, port={}",
+        pending.login_id, pending.port
+    ));
+    Ok(())
+}
+
+pub fn close_oauth_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(OAUTH_WINDOW_LABEL) {
+        window
+            .destroy()
+            .map_err(|error| format!("关闭 Codex OAuth 无痕窗口失败: {}", error))?;
+    }
+    Ok(())
+}
+
 fn to_start_response(state: &OAuthState) -> CodexOAuthLoginStartResponse {
     CodexOAuthLoginStartResponse {
         login_id: state.login_id.clone(),
@@ -521,6 +599,9 @@ async fn start_callback_server(
                         "Codex OAuth 回调校验通过并已通知前端: login_id={}",
                         expected_login_id
                     ));
+                    if let Err(error) = close_oauth_window(&app_handle) {
+                        logger::log_warn(&error);
+                    }
                 }
 
                 break;
@@ -570,6 +651,9 @@ async fn start_callback_server(
             callback_url,
             timeout.as_secs()
         ));
+        if let Err(error) = close_oauth_window(&app_handle) {
+            logger::log_warn(&error);
+        }
     }
 
     Ok(())
@@ -809,38 +893,57 @@ pub fn restore_pending_oauth_listener(app_handle: AppHandle) {
 }
 
 pub fn is_jwt_token_expired(token: &str) -> bool {
-    let parts: Vec<&str> = token.split('.').collect();
-    if parts.len() != 3 {
+    let Some(exp) = jwt_token_expiration_timestamp(token) else {
         return true;
-    }
-
-    let payload_base64 = parts[1];
-    let payload_bytes = match URL_SAFE_NO_PAD.decode(payload_base64) {
-        Ok(bytes) => bytes,
-        Err(_) => return true,
-    };
-
-    let payload_str = match String::from_utf8(payload_bytes) {
-        Ok(s) => s,
-        Err(_) => return true,
-    };
-
-    let payload: serde_json::Value = match serde_json::from_str(&payload_str) {
-        Ok(v) => v,
-        Err(_) => return true,
-    };
-
-    let exp = match payload.get("exp").and_then(|e| e.as_i64()) {
-        Some(e) => e,
-        None => return true,
     };
 
     let now = chrono::Utc::now().timestamp();
     exp < now + TOKEN_REFRESH_SKEW_SECONDS
 }
 
+pub fn jwt_token_expiration_timestamp(token: &str) -> Option<i64> {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+
+    let payload_base64 = parts[1];
+    let payload_bytes = match URL_SAFE_NO_PAD.decode(payload_base64) {
+        Ok(bytes) => bytes,
+        Err(_) => return None,
+    };
+
+    let payload_str = match String::from_utf8(payload_bytes) {
+        Ok(s) => s,
+        Err(_) => return None,
+    };
+
+    let payload: serde_json::Value = match serde_json::from_str(&payload_str) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+
+    payload.get("exp").and_then(|e| e.as_i64())
+}
+
 pub fn is_token_expired(access_token: &str) -> bool {
-    is_jwt_token_expired(access_token)
+    let token = access_token.trim();
+    if token.is_empty() {
+        return true;
+    }
+
+    // Some short-lived Codex credentials are opaque ChatGPT access tokens
+    // (`at-...`) rather than JWTs. They do not carry a local `exp` claim, so
+    // treating them as expired makes Cockpit immediately force an OAuth refresh
+    // and reject access-token-only imports. Let the first real upstream request
+    // decide whether the opaque token is still accepted; 401 handling will mark
+    // it invalid when it actually dies. Other malformed/non-JWT values still
+    // fail closed instead of being treated as valid.
+    if token.split('.').count() != 3 {
+        return !token.starts_with("at-");
+    }
+
+    is_jwt_token_expired(token)
 }
 
 pub async fn refresh_access_token(refresh_token: &str) -> Result<CodexTokens, String> {
@@ -926,4 +1029,103 @@ pub async fn refresh_access_token_with_fallback(
         access_token,
         refresh_token: new_refresh_token,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        authorize_url_matches_pending, is_callback_navigation, is_token_expired, OAuthState,
+        TOKEN_REFRESH_SKEW_SECONDS,
+    };
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+    fn make_jwt(exp: i64) -> String {
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::json!({ "exp": exp }).to_string());
+        format!("{}.{}.sig", header, payload)
+    }
+
+    fn pending(auth_url: &str) -> OAuthState {
+        OAuthState {
+            login_id: "login-1".to_string(),
+            auth_url: auth_url.to_string(),
+            redirect_uri: "http://localhost:1455/auth/callback".to_string(),
+            code_verifier: "verifier".to_string(),
+            state: "state-1".to_string(),
+            port: 1455,
+            expires_at: chrono::Utc::now().timestamp() + 60,
+            code: None,
+        }
+    }
+
+    #[test]
+    fn incognito_window_accepts_only_current_official_authorize_url() {
+        let url = "https://auth.openai.com/oauth/authorize?state=state-1";
+        let pending = pending(url);
+        assert!(authorize_url_matches_pending(
+            &url::Url::parse(url).unwrap(),
+            &pending
+        ));
+        assert!(!authorize_url_matches_pending(
+            &url::Url::parse("https://example.com/oauth/authorize?state=state-1").unwrap(),
+            &pending
+        ));
+        assert!(!authorize_url_matches_pending(
+            &url::Url::parse("https://auth.openai.com/oauth/authorize?state=other").unwrap(),
+            &pending
+        ));
+    }
+
+    #[test]
+    fn incognito_window_allows_only_exact_local_callback_route() {
+        assert!(is_callback_navigation(
+            &url::Url::parse("http://localhost:1455/auth/callback?code=x&state=y").unwrap(),
+            1455
+        ));
+        assert!(!is_callback_navigation(
+            &url::Url::parse("http://localhost:1456/auth/callback?code=x&state=y").unwrap(),
+            1455
+        ));
+        assert!(!is_callback_navigation(
+            &url::Url::parse("http://localhost:1455/other").unwrap(),
+            1455
+        ));
+    }
+
+    #[test]
+    fn opaque_access_token_is_not_locally_expired() {
+        assert!(!is_token_expired("at-short-lived-opaque-token"));
+    }
+
+    #[test]
+    fn unknown_non_jwt_access_token_is_expired() {
+        assert!(is_token_expired("opaque-without-known-prefix"));
+    }
+
+    #[test]
+    fn empty_access_token_is_expired() {
+        assert!(is_token_expired("   "));
+    }
+
+    #[test]
+    fn malformed_jwt_access_token_is_expired() {
+        assert!(is_token_expired("not-valid.jwt.token"));
+    }
+
+    #[test]
+    fn jwt_shaped_at_access_token_is_expired_when_malformed() {
+        assert!(is_token_expired("at-not.valid.jwt"));
+    }
+
+    #[test]
+    fn expired_jwt_access_token_is_expired() {
+        let expired = chrono::Utc::now().timestamp() - 3600;
+        assert!(is_token_expired(&make_jwt(expired)));
+    }
+
+    #[test]
+    fn fresh_jwt_access_token_is_not_expired() {
+        let fresh = chrono::Utc::now().timestamp() + TOKEN_REFRESH_SKEW_SECONDS + 3600;
+        assert!(!is_token_expired(&make_jwt(fresh)));
+    }
 }

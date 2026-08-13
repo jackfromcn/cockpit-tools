@@ -556,12 +556,22 @@ fn extract_premium_metric(account: &GitHubCopilotAccount) -> Option<(String, i32
         .and_then(|value| value.as_object())?;
 
     let premium = snapshots
-        .get("premium_interactions")
-        .or_else(|| snapshots.get("premium_models"))
+        .get("premium_models")
+        .or_else(|| snapshots.get("premium_interactions"))
         .and_then(|value| value.as_object())?;
 
     if premium.get("unlimited").and_then(|value| value.as_bool()) == Some(true) {
         return Some(("Premium Interactions".to_string(), 100));
+    }
+
+    let entitlement = premium.get("entitlement").and_then(get_json_number);
+    if entitlement.map(|value| value < 0.0).unwrap_or(false) {
+        return Some(("Premium Interactions".to_string(), 100));
+    }
+    if entitlement.map(|value| value <= 0.0).unwrap_or_else(|| {
+        premium.get("has_quota").and_then(|value| value.as_bool()) == Some(false)
+    }) {
+        return None;
     }
 
     let percent_remaining = premium
@@ -717,4 +727,75 @@ pub fn run_quota_alert_if_needed(
 
     crate::modules::account::dispatch_quota_alert(&payload);
     Ok(Some(payload))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn account_with_snapshots(snapshots: serde_json::Value) -> GitHubCopilotAccount {
+        GitHubCopilotAccount {
+            id: "ghcp_test".to_string(),
+            github_login: "tester".to_string(),
+            github_id: 1,
+            github_name: None,
+            github_email: None,
+            tags: None,
+            github_access_token: "github-token".to_string(),
+            github_token_type: None,
+            github_scope: None,
+            copilot_token: "sku=individual;tq=500;cq=2000".to_string(),
+            copilot_plan: Some("individual".to_string()),
+            copilot_chat_enabled: Some(true),
+            copilot_expires_at: None,
+            copilot_refresh_in: None,
+            copilot_quota_snapshots: Some(snapshots),
+            copilot_quota_reset_date: Some("2026-07-01".to_string()),
+            copilot_limited_user_quotas: None,
+            copilot_limited_user_reset_date: None,
+            quota_query_last_error: None,
+            quota_query_last_error_at: None,
+            usage_updated_at: None,
+            created_at: 0,
+            last_used: 0,
+        }
+    }
+
+    #[test]
+    fn premium_metric_prefers_premium_models() {
+        let account = account_with_snapshots(json!({
+            "premium_interactions": {
+                "entitlement": 100,
+                "percent_remaining": 5,
+                "remaining": 5,
+                "has_quota": true
+            },
+            "premium_models": {
+                "entitlement": 100,
+                "percent_remaining": 70,
+                "remaining": 70,
+                "has_quota": true
+            }
+        }));
+
+        let metric = extract_premium_metric(&account).expect("premium metric");
+
+        assert_eq!(metric.1, 70);
+    }
+
+    #[test]
+    fn premium_metric_ignores_zero_entitlement_without_quota() {
+        let account = account_with_snapshots(json!({
+            "premium_interactions": {
+                "entitlement": 0,
+                "percent_remaining": 0,
+                "remaining": 0,
+                "has_quota": false
+            }
+        }));
+
+        assert!(extract_premium_metric(&account).is_none());
+        assert!(extract_quota_metrics(&account).is_empty());
+    }
 }

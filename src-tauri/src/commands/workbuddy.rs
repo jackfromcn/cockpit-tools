@@ -282,8 +282,6 @@ pub async fn inject_workbuddy_to_vscode(
     let account = workbuddy_account::load_account(&account_id)
         .ok_or_else(|| format!("WorkBuddy account not found: {}", account_id))?;
 
-    workbuddy_account::write_account_to_default_client(&account)?;
-
     if let Err(err) = crate::modules::workbuddy_instance::update_default_settings(
         Some(Some(account_id.clone())),
         None,
@@ -305,6 +303,9 @@ pub async fn inject_workbuddy_to_vscode(
         Err(err) => {
             if err.starts_with("APP_PATH_NOT_FOUND:") || err.contains("启动 WorkBuddy 失败") {
                 logger::log_warn(&format!("WorkBuddy 默认实例启动失败：{}", err));
+                // 保持既有行为：即使应用路径异常，认证切换仍然落盘。由于此时无法
+                // 确认官方进程已退出，不在这里执行可能较慢的会话目录合并。
+                workbuddy_account::write_account_to_default_client(&account)?;
                 if err.starts_with("APP_PATH_NOT_FOUND:") || err.contains("APP_PATH_NOT_FOUND:") {
                     let _ = app.emit(
                         "app:path_missing",
@@ -400,20 +401,23 @@ pub async fn checkin_workbuddy(
 
     if response.success {
         let now = chrono::Utc::now().timestamp();
-        let streak = account.checkin_streak.unwrap_or(0).saturating_add(1);
-        workbuddy_account::update_checkin_info(
-            &account_id,
-            Some(now),
-            streak,
-            response.reward.clone(),
-        )
-        .map_err(|e| {
-            logger::log_warn(&format!(
-                "[WorkBuddy Checkin] 更新签到信息失败: account_id={}, error={}",
-                account_id, e
-            ));
-            format!("签到成功但更新状态失败: {}", e)
-        })?;
+        let streak = response
+            .streak_days
+            .and_then(|value| i32::try_from(value).ok())
+            .unwrap_or_else(|| account.checkin_streak.unwrap_or(0).saturating_add(1));
+        let reward = response.reward.clone().or_else(|| {
+            response
+                .credit
+                .map(|credit| serde_json::json!({ "credit": credit }))
+        });
+        workbuddy_account::update_checkin_info(&account_id, Some(now), streak, reward.clone())
+            .map_err(|e| {
+                logger::log_warn(&format!(
+                    "[WorkBuddy Checkin] 更新签到信息失败: account_id={}, error={}",
+                    account_id, e
+                ));
+                format!("签到成功但更新状态失败: {}", e)
+            })?;
 
         let _ = crate::modules::tray::update_tray_menu(&app);
         let _ = app.emit(
@@ -421,7 +425,10 @@ pub async fn checkin_workbuddy(
             serde_json::json!({
                 "accountId": account_id,
                 "success": true,
-                "reward": response.reward,
+                "reward": reward,
+                "credit": response.credit,
+                "streakDays": response.streak_days,
+                "isStreakDay": response.is_streak_day,
                 "streak": streak,
             }),
         );
@@ -435,4 +442,47 @@ pub async fn checkin_workbuddy(
     ));
 
     Ok(response)
+}
+
+#[tauri::command]
+pub fn get_workbuddy_auto_checkin_config(
+) -> Result<crate::modules::workbuddy_auto_checkin::WorkbuddyAutoCheckinConfig, String> {
+    crate::modules::workbuddy_auto_checkin::get_config_checked()
+}
+
+#[tauri::command]
+pub fn migrate_workbuddy_auto_checkin_config(
+    legacy_config: crate::modules::workbuddy_auto_checkin::WorkbuddyAutoCheckinConfig,
+) -> Result<crate::modules::workbuddy_auto_checkin::WorkbuddyAutoCheckinConfig, String> {
+    crate::modules::workbuddy_auto_checkin::migrate_config_if_missing(&legacy_config)
+}
+
+#[tauri::command]
+pub fn save_workbuddy_auto_checkin_config(
+    config: crate::modules::workbuddy_auto_checkin::WorkbuddyAutoCheckinConfig,
+) -> Result<(), String> {
+    crate::modules::workbuddy_auto_checkin::save_config(&config)
+}
+
+#[tauri::command]
+pub fn get_workbuddy_auto_checkin_logs(
+) -> Result<Vec<crate::modules::workbuddy_auto_checkin::WorkbuddyAutoCheckinLogRecord>, String> {
+    crate::modules::workbuddy_auto_checkin::get_logs_checked()
+}
+
+#[tauri::command]
+pub fn clear_workbuddy_auto_checkin_logs() -> Result<(), String> {
+    crate::modules::workbuddy_auto_checkin::save_logs(&[])
+}
+
+#[tauri::command]
+pub async fn run_workbuddy_auto_checkin_now(
+    app: AppHandle,
+    force: Option<bool>,
+) -> Result<String, String> {
+    crate::modules::workbuddy_auto_checkin::run_workbuddy_auto_checkin_cycle_if_needed(
+        &app,
+        force.unwrap_or(false),
+    )
+    .await
 }

@@ -151,6 +151,7 @@ function isAllowedEnglishReuse(key, value) {
   const allowedBrandKeys = new Set([
     'nav.codebuddy',
     'nav.codebuddyCn',
+    'nav.claude',
     'nav.gemini',
     'nav.qoder',
   ]);
@@ -174,7 +175,11 @@ function isAllowedEnglishReuse(key, value) {
     'WeChat',
     'WeChat Pay',
     'Windsurf',
+    'Devin',
     'Trae',
+    'TRAE SOLO',
+    'Trae CN',
+    'TRAE SOLO CN',
     'Codex CLI',
     '2FA',
     'Crontab',
@@ -193,6 +198,19 @@ function isAllowedEnglishReuse(key, value) {
     'DMXAPI',
     'Compshare',
     'OpenRouter',
+    // 主题色套件名（配色方案品牌）跨语言保留原文
+    'Nord',
+    'Tokyo Night',
+    'Catppuccin',
+    'Gruvbox',
+    'Everforest',
+    'Host',
+    'Port',
+    'Sync',
+    'Codex access token',
+    'OpenCode Go / Zen',
+    'OpenRouter',
+    'OpenCode',
     'AICodeMirror',
     'AICoding',
     'CrazyRouter',
@@ -208,6 +226,7 @@ function isAllowedEnglishReuse(key, value) {
     '{{days}}d {{hours}}h',
     '{{hours}}h {{minutes}}m',
     '5h',
+    'Weekly',
   ]);
 
   if (allowedExactValues.has(normalized)) {
@@ -262,6 +281,11 @@ function isAllowedEnglishReuse(key, value) {
     'windsurf.credits.title',
     'breakout.historyLevelShort',
     'settings.general.minutes',
+    'settings.webdav.retentionTitle',
+    'settings.webdav.retentionDesc',
+    'settings.webdav.retentionUnit',
+    'settings.webdav.collapseAll',
+    'settings.webdav.expandAll',
   ]);
 
   return allowedKeys.has(key);

@@ -103,6 +103,8 @@ disable-image-generation: false
 # Core auth auto-refresh worker pool size (OAuth/file-based auth token refresh).
 # When > 0, overrides the default worker count (16).
 # auth-auto-refresh-workers: 16
+# Set true to disable background OAuth/file-based auth token refresh.
+# disable-auth-auto-refresh: false
 
 # Quota exceeded behavior
 quota-exceeded:

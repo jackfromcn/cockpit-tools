@@ -12,7 +12,7 @@ import {
 } from '../presentation/platformAccountPresentation';
 
 /**
- * Kiro 多开实例内容组件（不包含 header）
+ * Kiro 应用多开内容组件（不包含 header）
  * 用于嵌入到 KiroAccountsPage 中
  */
 interface KiroInstancesContentProps {
@@ -74,7 +74,7 @@ export function KiroInstancesContent({
       unsupportedTitleKey="common.shared.instances.unsupported.title"
       unsupportedTitleDefault="暂不支持当前系统"
       unsupportedDescKey="kiro.instances.unsupported.descPlatform"
-      unsupportedDescDefault="Kiro 多开实例仅支持 macOS、Windows 和 Linux。"
+      unsupportedDescDefault="Kiro 应用多开仅支持 macOS、Windows 和 Linux。"
     />
   );
 }

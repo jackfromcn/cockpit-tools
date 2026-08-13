@@ -5,7 +5,7 @@ use crate::modules;
 
 const DEFAULT_INSTANCE_ID: &str = "__default__";
 
-fn inject_bound_account_for_instance_start(
+async fn inject_bound_account_for_instance_start(
     user_data_dir: &str,
     bind_account_id: Option<&str>,
 ) -> Result<(), String> {
@@ -16,6 +16,19 @@ fn inject_bound_account_for_instance_start(
         return Ok(());
     };
 
+    let user_data_dir = user_data_dir.to_string();
+    let bind_id = bind_id.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        inject_bound_account_for_instance_start_blocking(&user_data_dir, &bind_id)
+    })
+    .await
+    .map_err(|error| format!("WorkBuddy 账号切换后台任务失败: {}", error))?
+}
+
+fn inject_bound_account_for_instance_start_blocking(
+    user_data_dir: &str,
+    bind_id: &str,
+) -> Result<(), String> {
     let account = modules::workbuddy_account::load_account(bind_id)
         .ok_or_else(|| format!("绑定账号不存在: {}", bind_id))?;
     modules::logger::log_info(&format!(
@@ -23,7 +36,10 @@ fn inject_bound_account_for_instance_start(
         bind_id, account.email, user_data_dir
     ));
 
-    modules::workbuddy_account::write_account_to_default_client(&account)?;
+    modules::workbuddy_session_transfer::prepare_account_switch(
+        Path::new(user_data_dir),
+        &account,
+    )?;
 
     modules::logger::log_info(&format!(
         "[WorkBuddy Instance] 账号注入完成: email={}, user_data_dir={}",
@@ -197,11 +213,14 @@ pub async fn workbuddy_start_instance(instance_id: String) -> Result<InstancePro
             modules::process::close_pid(pid, 20)?;
             let _ = modules::workbuddy_instance::update_default_pid(None)?;
         }
+        modules::process::close_workbuddy_instances(&[default_dir_str.clone()], 20)?;
+        let _ = modules::workbuddy_instance::update_default_pid(None)?;
 
         inject_bound_account_for_instance_start(
             &default_dir_str,
             default_settings.bind_account_id.as_deref(),
-        )?;
+        )
+        .await?;
 
         let extra_args = modules::process::parse_extra_args(&default_settings.extra_args);
         let pid =
@@ -237,11 +256,14 @@ pub async fn workbuddy_start_instance(instance_id: String) -> Result<InstancePro
         modules::process::close_pid(pid, 20)?;
         let _ = modules::workbuddy_instance::update_instance_pid(&instance.id, None)?;
     }
+    modules::process::close_workbuddy_instances(&[instance.user_data_dir.clone()], 20)?;
+    let _ = modules::workbuddy_instance::update_instance_pid(&instance.id, None)?;
 
     inject_bound_account_for_instance_start(
         &instance.user_data_dir,
         instance.bind_account_id.as_deref(),
-    )?;
+    )
+    .await?;
 
     let extra_args = modules::process::parse_extra_args(&instance.extra_args);
     let pid = modules::process::start_workbuddy_with_args_with_new_window(
@@ -267,6 +289,7 @@ pub async fn workbuddy_stop_instance(instance_id: String) -> Result<InstanceProf
         if let Some(pid) = resolve_running_pid(default_settings.last_pid, None) {
             modules::process::close_pid(pid, 20)?;
         }
+        modules::process::close_workbuddy_instances(&[default_dir_str.clone()], 20)?;
         let _ = modules::workbuddy_instance::update_default_pid(None)?;
         return Ok(InstanceProfileView {
             id: DEFAULT_INSTANCE_ID.to_string(),
@@ -295,6 +318,7 @@ pub async fn workbuddy_stop_instance(instance_id: String) -> Result<InstanceProf
     if let Some(pid) = resolve_running_pid(instance.last_pid, Some(&instance.user_data_dir)) {
         modules::process::close_pid(pid, 20)?;
     }
+    modules::process::close_workbuddy_instances(&[instance.user_data_dir.clone()], 20)?;
     let updated = modules::workbuddy_instance::update_instance_pid(&instance.id, None)?;
     let initialized = is_profile_initialized(&updated.user_data_dir);
     Ok(InstanceProfileView::from_profile(
@@ -335,18 +359,17 @@ pub async fn workbuddy_open_instance_window(instance_id: String) -> Result<(), S
 #[tauri::command]
 pub async fn workbuddy_close_all_instances() -> Result<(), String> {
     let store = modules::workbuddy_instance::load_instance_store()?;
-    let default_settings = modules::workbuddy_instance::load_default_settings()?;
-
-    if let Some(pid) = resolve_running_pid(default_settings.last_pid, None) {
-        let _ = modules::process::close_pid(pid, 20);
-    }
-
+    let default_dir = modules::workbuddy_instance::get_default_workbuddy_user_data_dir()?;
+    let mut target_dirs: Vec<String> = Vec::new();
+    target_dirs.push(default_dir.to_string_lossy().to_string());
     for instance in &store.instances {
-        if let Some(pid) = resolve_running_pid(instance.last_pid, Some(&instance.user_data_dir)) {
-            let _ = modules::process::close_pid(pid, 20);
+        let dir = instance.user_data_dir.trim();
+        if !dir.is_empty() {
+            target_dirs.push(dir.to_string());
         }
     }
 
+    modules::process::close_workbuddy_instances(&target_dirs, 20)?;
     let _ = modules::workbuddy_instance::clear_all_pids();
     Ok(())
 }

@@ -66,32 +66,50 @@ pub fn update_default_settings(
     Ok(updated)
 }
 
+/// Official WorkBuddy config root (`dataFolderName`).
+/// Desktop sets `WORKBUDDY_CONFIG_DIR` to this directory (default `~/.workbuddy`).
+pub fn get_default_workbuddy_config_dir() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or("无法获取用户主目录")?;
+    Ok(home.join(".workbuddy"))
+}
+
+/// Electron `userData` path used by official WorkBuddy.
+///
+/// Official main process does:
+/// `app.setPath("userData", WORKBUDDY_USER_DATA_DIR || join(WORKBUDDY_CONFIG_DIR, "app"))`
+/// so the real default is `~/.workbuddy/app`, **not** `~/Library/Application Support/WorkBuddy`.
 pub fn get_default_workbuddy_user_data_dir() -> Result<PathBuf, String> {
     if let Some(path) = modules::workbuddy_account::get_default_workbuddy_data_dir() {
         return Ok(path);
     }
+    Ok(get_default_workbuddy_config_dir()?.join("app"))
+}
 
-    #[cfg(target_os = "macos")]
-    {
-        let home = dirs::home_dir().ok_or("无法获取用户主目录")?;
-        return Ok(home.join("Library/Application Support/WorkBuddy"));
+/// Resolve `(config_dir, electron_user_data_dir)` for an instance path.
+///
+/// - Path ending with `app` → treat as Electron userData; config is parent.
+/// - Otherwise treat as `WORKBUDDY_CONFIG_DIR`; Electron userData is `{path}/app`.
+pub fn resolve_workbuddy_runtime_dirs(user_data_dir: &str) -> Result<(PathBuf, PathBuf), String> {
+    let raw = user_data_dir.trim();
+    if raw.is_empty() {
+        return Err("实例目录为空".to_string());
+    }
+    let path = PathBuf::from(raw);
+    let is_app_leaf = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("app"));
+
+    if is_app_leaf {
+        let config_dir = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(PathBuf::from)
+            .ok_or_else(|| "无法从 Electron 目录推导 WorkBuddy 配置目录".to_string())?;
+        return Ok((config_dir, path));
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        let appdata =
-            std::env::var("APPDATA").map_err(|_| "无法获取 APPDATA 环境变量".to_string())?;
-        return Ok(PathBuf::from(appdata).join("WorkBuddy"));
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let home = dirs::home_dir().ok_or("无法获取用户主目录")?;
-        return Ok(home.join(".config/WorkBuddy"));
-    }
-
-    #[allow(unreachable_code)]
-    Err("WorkBuddy 多开实例仅支持 macOS、Windows 和 Linux".to_string())
+    Ok((path.clone(), path.join("app")))
 }
 
 pub fn get_default_instances_root_dir() -> Result<PathBuf, String> {
@@ -115,7 +133,7 @@ pub fn get_default_instances_root_dir() -> Result<PathBuf, String> {
     }
 
     #[allow(unreachable_code)]
-    Err("WorkBuddy 多开实例仅支持 macOS、Windows 和 Linux".to_string())
+    Err("WorkBuddy 应用多开仅支持 macOS、Windows 和 Linux".to_string())
 }
 
 pub fn get_instance_defaults() -> Result<InstanceDefaults, String> {
@@ -159,31 +177,42 @@ pub fn create_instance(params: CreateInstanceParams) -> Result<InstanceProfile, 
             return Err("所选路径不是目录".to_string());
         }
     } else if create_empty {
-        if user_dir_path.exists() {
+        let (config_dir, electron_dir) = resolve_workbuddy_runtime_dirs(&user_data_dir)?;
+        if config_dir.exists() {
             let mut has_entries = false;
-            if let Ok(mut iter) = fs::read_dir(&user_dir_path) {
+            if let Ok(mut iter) = fs::read_dir(&config_dir) {
                 if iter.next().is_some() {
                     has_entries = true;
                 }
             }
             if has_entries {
-                let resolved_path = instance_store::display_path(&user_dir_path);
+                let resolved_path = instance_store::display_path(&config_dir);
                 return Err(format!("空白实例需要目标目录为空：{}", resolved_path));
             }
         }
-        fs::create_dir_all(&user_dir_path).map_err(|e| format!("创建实例目录失败：{}", e))?;
+        fs::create_dir_all(&config_dir).map_err(|e| format!("创建实例目录失败：{}", e))?;
+        fs::create_dir_all(&electron_dir)
+            .map_err(|e| format!("创建 WorkBuddy Electron 数据目录失败：{}", e))?;
     } else {
+        // Official layout is config_root/.workbuddy + config_root/app.
+        // Copy the whole config root so multi-instance keeps sessions/settings.
         let source_dir = match params.copy_source_instance_id.as_deref() {
-            Some("__default__") | None => get_default_workbuddy_user_data_dir()?,
+            Some("__default__") | None => get_default_workbuddy_config_dir()?,
             Some(source_id) => {
                 let source_instance = store
                     .instances
                     .iter()
                     .find(|item| item.id == source_id)
                     .ok_or("复制来源实例不存在")?;
-                PathBuf::from(&source_instance.user_data_dir)
+                let (config_dir, _) =
+                    resolve_workbuddy_runtime_dirs(&source_instance.user_data_dir)?;
+                config_dir
             }
         };
+        // Persist instance path as config root when UI points at a non-app leaf.
+        // Launch code derives `{user_data_dir}/app` as Electron userData.
+        let (dest_config_dir, _) = resolve_workbuddy_runtime_dirs(&user_data_dir)?;
+        let user_dir_path = dest_config_dir;
 
         if user_dir_path.exists() {
             let mut has_entries = false;

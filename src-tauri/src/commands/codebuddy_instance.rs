@@ -60,7 +60,7 @@ fn build_session_json(account: &crate::models::codebuddy::CodebuddyAccount) -> S
     session.to_string()
 }
 
-fn inject_bound_account_for_instance_start(
+async fn inject_bound_account_for_instance_start(
     user_data_dir: &str,
     bind_account_id: Option<&str>,
 ) -> Result<(), String> {
@@ -71,6 +71,19 @@ fn inject_bound_account_for_instance_start(
         return Ok(());
     };
 
+    let user_data_dir = user_data_dir.to_string();
+    let bind_id = bind_id.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        inject_bound_account_for_instance_start_blocking(&user_data_dir, &bind_id)
+    })
+    .await
+    .map_err(|error| format!("CodeBuddy 账号切换后台任务失败: {}", error))?
+}
+
+fn inject_bound_account_for_instance_start_blocking(
+    user_data_dir: &str,
+    bind_id: &str,
+) -> Result<(), String> {
     let account = modules::codebuddy_account::load_account(bind_id)
         .ok_or_else(|| format!("绑定账号不存在: {}", bind_id))?;
     modules::logger::log_info(&format!(
@@ -79,6 +92,45 @@ fn inject_bound_account_for_instance_start(
     ));
 
     let state_db_path = ensure_codebuddy_state_db_path(user_data_dir)?;
+
+    if modules::config::get_user_config().codebuddy_share_sessions_on_switch {
+        let target_uid = account
+            .uid
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or("目标 CodeBuddy 账号缺少 UID，无法共享本地会话")?;
+        let current_session = if state_db_path.is_file() {
+            modules::vscode_inject::read_codebuddy_secret_storage_value(
+                "tencent-cloud.coding-copilot",
+                "planning-genie.new.accessToken",
+                Some(user_data_dir),
+            )
+            .map_err(|error| format!("读取当前 CodeBuddy 登录状态失败: {}", error))?
+        } else {
+            None
+        };
+        if let Some(source_uid) = current_session
+            .as_deref()
+            .and_then(modules::codebuddy_session_transfer::extract_codebuddy_uid)
+        {
+            if source_uid != target_uid {
+                modules::logger::log_info(&format!(
+                    "[CodeBuddy Session Transfer] 账号切换前开始合并本地会话: source_uid={}, target_uid={}, user_data_dir={}",
+                    source_uid, target_uid, user_data_dir
+                ));
+                modules::codebuddy_session_transfer::transfer_local_sessions(
+                    Path::new(user_data_dir),
+                    &source_uid,
+                    target_uid,
+                )?;
+            }
+        } else if current_session.is_some() {
+            modules::logger::log_warn(
+                "[CodeBuddy Session Transfer] 当前登录信息中未找到 UID，已跳过来源会话合并",
+            );
+        }
+    }
 
     let session_json = build_session_json(&account);
     let secret_key =
@@ -353,7 +405,23 @@ pub async fn codebuddy_delete_instance(instance_id: String) -> Result<(), String
 
 #[tauri::command]
 pub async fn codebuddy_start_instance(instance_id: String) -> Result<InstanceProfileView, String> {
-    modules::process::ensure_codebuddy_launch_path_configured()?;
+    codebuddy_start_instance_internal(instance_id, false).await
+}
+
+pub(crate) async fn codebuddy_switch_default_account_and_start(
+) -> Result<InstanceProfileView, String> {
+    codebuddy_start_instance_internal(DEFAULT_INSTANCE_ID.to_string(), true).await
+}
+
+async fn codebuddy_start_instance_internal(
+    instance_id: String,
+    prepare_account_when_launch_path_missing: bool,
+) -> Result<InstanceProfileView, String> {
+    let launch_path_error = match modules::process::ensure_codebuddy_launch_path_configured() {
+        Ok(()) => None,
+        Err(error) if prepare_account_when_launch_path_missing => Some(error),
+        Err(error) => return Err(error),
+    };
 
     if instance_id == DEFAULT_INSTANCE_ID {
         let default_dir = modules::codebuddy_instance::get_default_codebuddy_user_data_dir()?;
@@ -364,10 +432,16 @@ pub async fn codebuddy_start_instance(instance_id: String) -> Result<InstancePro
             modules::process::close_pid(pid, 20)?;
             let _ = modules::codebuddy_instance::update_default_pid(None)?;
         }
+        modules::process::close_codebuddy_instances(&[default_dir_str.clone()], 20)?;
+        let _ = modules::codebuddy_instance::update_default_pid(None)?;
         inject_bound_account_for_instance_start(
             &default_dir_str,
             default_settings.bind_account_id.as_deref(),
-        )?;
+        )
+        .await?;
+        if let Some(error) = launch_path_error.as_ref() {
+            return Err(error.clone());
+        }
         let extra_args = modules::process::parse_extra_args(&default_settings.extra_args);
         let pid =
             modules::process::start_codebuddy_default_with_args_with_new_window(&extra_args, true)?;
@@ -403,11 +477,17 @@ pub async fn codebuddy_start_instance(instance_id: String) -> Result<InstancePro
         modules::process::close_pid(pid, 20)?;
         let _ = modules::codebuddy_instance::update_instance_pid(&instance.id, None)?;
     }
+    modules::process::close_codebuddy_instances(&[instance.user_data_dir.clone()], 20)?;
+    let _ = modules::codebuddy_instance::update_instance_pid(&instance.id, None)?;
 
     inject_bound_account_for_instance_start(
         &instance.user_data_dir,
         instance.bind_account_id.as_deref(),
-    )?;
+    )
+    .await?;
+    if let Some(error) = launch_path_error.as_ref() {
+        return Err(error.clone());
+    }
     let extra_args = modules::process::parse_extra_args(&instance.extra_args);
     let pid = modules::process::start_codebuddy_with_args_with_new_window(
         &instance.user_data_dir,
@@ -436,6 +516,7 @@ pub async fn codebuddy_stop_instance(instance_id: String) -> Result<InstanceProf
         {
             modules::process::close_pid(pid, 20)?;
         }
+        modules::process::close_codebuddy_instances(&[default_dir_str.clone()], 20)?;
         let _ = modules::codebuddy_instance::update_default_pid(None)?;
         return Ok(InstanceProfileView {
             id: DEFAULT_INSTANCE_ID.to_string(),
@@ -466,6 +547,7 @@ pub async fn codebuddy_stop_instance(instance_id: String) -> Result<InstanceProf
     {
         modules::process::close_pid(pid, 20)?;
     }
+    modules::process::close_codebuddy_instances(&[instance.user_data_dir.clone()], 20)?;
     let updated = modules::codebuddy_instance::update_instance_pid(&instance.id, None)?;
     let initialized = is_profile_initialized(&updated.user_data_dir);
     Ok(InstanceProfileView::from_profile(
@@ -508,21 +590,17 @@ pub async fn codebuddy_open_instance_window(instance_id: String) -> Result<(), S
 #[tauri::command]
 pub async fn codebuddy_close_all_instances() -> Result<(), String> {
     let store = modules::codebuddy_instance::load_instance_store()?;
-    let default_settings = modules::codebuddy_instance::load_default_settings()?;
-
-    if let Some(pid) = modules::process::resolve_codebuddy_pid(default_settings.last_pid, None) {
-        let _ = modules::process::close_pid(pid, 20);
-    }
-
+    let default_dir = modules::codebuddy_instance::get_default_codebuddy_user_data_dir()?;
+    let mut target_dirs: Vec<String> = Vec::new();
+    target_dirs.push(default_dir.to_string_lossy().to_string());
     for instance in &store.instances {
-        if let Some(pid) = modules::process::resolve_codebuddy_pid(
-            instance.last_pid,
-            Some(&instance.user_data_dir),
-        ) {
-            let _ = modules::process::close_pid(pid, 20);
+        let dir = instance.user_data_dir.trim();
+        if !dir.is_empty() {
+            target_dirs.push(dir.to_string());
         }
     }
 
+    modules::process::close_codebuddy_instances(&target_dirs, 20)?;
     let _ = modules::codebuddy_instance::clear_all_pids();
     Ok(())
 }

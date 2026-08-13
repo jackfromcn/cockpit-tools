@@ -9,17 +9,20 @@ import type { CodexAppSpeed } from "../../types/codex";
 
 type PlatformInstanceCommandPrefix =
   | ""
+  | "antigravity_legacy"
   | "codex"
+  | "claude"
   | "github_copilot"
   | "windsurf"
   | "kiro"
   | "cursor"
-  | "gemini"
+  | "grok"
   | "codebuddy"
   | "codebuddy_cn"
   | "qoder"
   | "trae"
-  | "workbuddy";
+  | "workbuddy"
+  | "zcode";
 
 type InstancePayload = {
   name: string;
@@ -42,6 +45,7 @@ type UpdateInstancePayload = {
   followLocalAccount?: boolean;
   launchMode?: InstanceLaunchMode;
   appSpeed?: CodexAppSpeed;
+  autoSyncThreads?: boolean;
 };
 
 export type PlatformInstanceService = {
@@ -78,6 +82,7 @@ export function createPlatformInstanceService(
         workingDir: payload.workingDir ?? null,
         extraArgs: payload.extraArgs ?? "",
         bindAccountId: payload.bindAccountId ?? null,
+        launchMode: payload.launchMode ?? null,
         appSpeed: payload.appSpeed ?? "standard",
         copySourceInstanceId: payload.copySourceInstanceId,
         initMode: payload.initMode ?? "copy",
@@ -105,6 +110,9 @@ export function createPlatformInstanceService(
       }
       if (payload.appSpeed !== undefined) {
         body.appSpeed = payload.appSpeed;
+      }
+      if (payload.autoSyncThreads !== undefined) {
+        body.autoSyncThreads = payload.autoSyncThreads;
       }
       return await invoke(commandFor(prefix, "update_instance"), body);
     },

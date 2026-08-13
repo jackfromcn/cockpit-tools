@@ -172,6 +172,7 @@
 
 /* Main Content */
 .main-wrapper {
+  position: relative;
   flex: 1;
   margin-inline-start: 120px; /* 增加起始侧留白，主要避开 Sidebar */
   padding: 40px 32px 32px 0;
@@ -182,6 +183,20 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.app-global-promo-layer {
+  position: absolute;
+  top: 70px;
+  left: 0;
+  right: 32px;
+  height: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+
+.app-global-promo-layer .global-promo-center {
+  top: 0;
 }
 
 .main-content {
@@ -693,6 +708,11 @@
   color: var(--primary);
 }
 
+html[data-reduced-motion="true"] .platform-group-switcher-trigger:hover,
+html[data-reduced-motion="true"] .platform-group-switcher-trigger.is-open .platform-group-switcher-trigger-caret {
+  transform: none;
+}
+
 .platform-group-switcher-dropdown {
   position: fixed;
   top: 0;
@@ -1098,13 +1118,6 @@
   background: rgba(29, 78, 216, 0.06);
 }
 
-.account-table.fingerprint-table tr.current {
-  background: transparent;
-}
-
-.account-table.fingerprint-table tr.current:hover {
-  background: var(--bg-hover);
-}
 
 /* Account Row - Dashboard Style */
 .account-cell {
@@ -2055,6 +2068,11 @@
   justify-content: center;
   padding: 0;
   cursor: pointer;
+}
+
+.platform-layout-expand-trigger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .platform-layout-main .drag-handle {

@@ -1,7 +1,7 @@
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
-use crate::models::kiro::{KiroAccount, KiroOAuthStartResponse};
+use crate::models::kiro::{KiroAccount, KiroOAuthLoginStartOptions, KiroOAuthStartResponse};
 use crate::models::kiro_local_access::{KiroLocalAccessState, KiroLocalAccessTestResult};
 use crate::modules::{kiro_account, kiro_local_access, kiro_oauth, logger};
 
@@ -114,9 +114,11 @@ pub async fn refresh_all_kiro_tokens(app: AppHandle) -> Result<i32, String> {
 }
 
 #[tauri::command]
-pub async fn kiro_oauth_login_start() -> Result<KiroOAuthStartResponse, String> {
+pub async fn kiro_oauth_login_start(
+    options: Option<KiroOAuthLoginStartOptions>,
+) -> Result<KiroOAuthStartResponse, String> {
     logger::log_info("Kiro OAuth start 命令触发");
-    kiro_oauth::start_login().await
+    kiro_oauth::start_login(options).await
 }
 
 #[tauri::command]

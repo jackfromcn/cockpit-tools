@@ -1,10 +1,11 @@
 {
   "name": "cockpit-tools",
   "private": true,
-  "version": "0.24.9",
+  "version": "1.3.16",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test:codex-api-key-scope": "node --test src/utils/codexApiKeyAccountScope.test.ts",
     "typecheck": "tsc --noEmit",
     "prebuild": "npm run typecheck",
     "build": "npm run sync-version && tsc && vite build",
@@ -13,7 +14,7 @@
     "pretauri:dev": "npm run typecheck",
     "tauri:dev": "node scripts/tauri-dev.cjs",
     "pretauri": "npm run typecheck",
-    "tauri": "npm run sync-version && tauri",
+    "tauri": "node scripts/tauri.cjs",
     "sync-version": "node scripts/sync-version.js",
     "sync:upstream:check": "node scripts/check-upstream-sync.cjs",
     "verify:local-access-sync": "node scripts/verify-local-access-sync.cjs"
@@ -34,6 +35,7 @@
     "lucide-react": "^0.562.0",
     "otpauth": "^9.5.0",
     "otplib": "^13.4.0",
+    "protobufjs": "^8.7.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-i18next": "^16.5.3",
@@ -48,6 +50,7 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "autoprefixer": "^10.4.23",
+    "electron": "^42.4.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.19",
     "typescript": "~5.8.3",

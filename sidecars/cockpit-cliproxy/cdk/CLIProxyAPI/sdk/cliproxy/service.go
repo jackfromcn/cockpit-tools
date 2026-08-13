@@ -930,7 +930,7 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 
 	// Prefer core auth manager auto refresh if available.
-	if s.coreManager != nil && !homeEnabled {
+	if s.coreManager != nil && !homeEnabled && !s.cfg.DisableAuthAutoRefresh {
 		interval := 15 * time.Minute
 		s.coreManager.StartAutoRefresh(context.Background(), interval)
 		log.Infof("core auth auto-refresh started (interval=%s)", interval)
@@ -1856,7 +1856,7 @@ func (s *Service) StartRuntime(ctx context.Context) error {
 		s.hooks.OnAfterStart(s)
 	}
 
-	if s.coreManager != nil {
+	if s.coreManager != nil && !s.cfg.DisableAuthAutoRefresh {
 		interval := 15 * time.Minute
 		s.coreManager.StartAutoRefresh(context.Background(), interval)
 		log.Infof("core auth auto-refresh started (interval=%s)", interval)

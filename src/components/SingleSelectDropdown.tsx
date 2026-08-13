@@ -55,7 +55,15 @@ export function SingleSelectDropdown({
   useEffect(() => {
     if (!open) return;
 
-    const updateMenuPosition = () => {
+    const updateMenuPosition = (event?: Event) => {
+      const eventTarget = event?.target;
+      if (
+        event?.type === "scroll" &&
+        eventTarget instanceof Node &&
+        menuRef.current?.contains(eventTarget)
+      ) {
+        return;
+      }
       const rect = triggerRef.current?.getBoundingClientRect();
       if (!rect) return;
       const width = menuWidth ? Math.max(rect.width, menuWidth) : rect.width;
@@ -63,24 +71,33 @@ export function SingleSelectDropdown({
         rect.left,
         Math.max(12, window.innerWidth - width - 12),
       );
-      if (menuPlacement === "up") {
-        const availableHeight = Math.max(160, rect.top - 20);
-        setMenuStyle({
-          bottom: window.innerHeight - rect.top + 10,
-          left,
-          width,
-          maxHeight: Math.min(menuMaxHeight, availableHeight),
-        });
-        return;
-      }
-
-      const availableHeight = Math.max(160, window.innerHeight - rect.bottom - 20);
-      setMenuStyle({
-        top: rect.bottom + 10,
-        left,
-        width,
-        maxHeight: Math.min(menuMaxHeight, availableHeight),
-      });
+      const nextStyle =
+        menuPlacement === "up"
+          ? {
+              bottom: Math.round(window.innerHeight - rect.top + 10),
+              left: Math.round(left),
+              width: Math.round(width),
+              maxHeight: Math.min(menuMaxHeight, Math.max(160, rect.top - 20)),
+            }
+          : {
+              top: Math.round(rect.bottom + 10),
+              left: Math.round(left),
+              width: Math.round(width),
+              maxHeight: Math.min(
+                menuMaxHeight,
+                Math.max(160, window.innerHeight - rect.bottom - 20),
+              ),
+            };
+      setMenuStyle((prev) =>
+        prev &&
+        prev.top === nextStyle.top &&
+        prev.bottom === nextStyle.bottom &&
+        prev.left === nextStyle.left &&
+        prev.width === nextStyle.width &&
+        prev.maxHeight === nextStyle.maxHeight
+          ? prev
+          : nextStyle,
+      );
     };
 
     const handlePointerDown = (event: MouseEvent) => {
@@ -92,11 +109,15 @@ export function SingleSelectDropdown({
     };
 
     updateMenuPosition();
-    document.addEventListener("mousedown", handlePointerDown);
+    // 延迟绑定，避免与打开触发器同一次 pointer/click 立刻关掉菜单。
+    const timer = window.setTimeout(() => {
+      document.addEventListener("mousedown", handlePointerDown);
+    }, 0);
     window.addEventListener("resize", updateMenuPosition);
     window.addEventListener("scroll", updateMenuPosition, true);
 
     return () => {
+      window.clearTimeout(timer);
       document.removeEventListener("mousedown", handlePointerDown);
       window.removeEventListener("resize", updateMenuPosition);
       window.removeEventListener("scroll", updateMenuPosition, true);

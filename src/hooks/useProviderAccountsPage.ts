@@ -41,6 +41,7 @@ import {
 } from '../utils/externalProviderImport';
 import { useDropdownPanelPlacement } from './useDropdownPanelPlacement';
 import { useEscClose } from './useEscClose';
+import { useEnterConfirm } from './useEnterConfirm';
 import {
   ACCOUNTS_OVERVIEW_FILTER_PERSISTENCE_CHANGED_EVENT,
   type AccountsOverviewFilterPersistenceChangedDetail,
@@ -52,6 +53,7 @@ import {
   setAccountsOverviewFilterPersistenceEnabled,
   writeAccountsOverviewFilterField,
 } from '../utils/accountsOverviewFilterPersistence';
+import { normalizeTimestamp } from '../utils/dataExtract';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -90,12 +92,16 @@ export type ViewMode = 'grid' | 'list';
 export type SortDirection = 'asc' | 'desc';
 
 /** 各平台需要提供的 OAuth 服务函数 */
+export interface OAuthStartOptions {
+  tabKey: string;
+}
+
 export interface OAuthService {
-  startLogin: () => Promise<OAuthStartResponse>;
+  startLogin: (options?: OAuthStartOptions) => Promise<OAuthStartResponse>;
   completeLogin: (loginId: string) => Promise<unknown>;
   cancelLogin: (loginId?: string) => Promise<void>;
   submitCallbackUrl?: (loginId: string, callbackUrl: string) => Promise<void>;
-  openAuthUrl?: (url: string) => Promise<void>;
+  openAuthUrl?: (url: string, incognito?: boolean) => Promise<void>;
 }
 
 export interface OAuthStartResponse {
@@ -117,6 +123,7 @@ export interface ProviderDataService {
   addWithToken?: (token: string) => Promise<unknown>;
   exportAccounts: (ids: string[]) => Promise<string>;
   injectToVSCode?: (accountId: string) => Promise<unknown>;
+  openWebview?: (accountId: string) => Promise<unknown>;
 }
 
 /** 各平台 store 需要提供的操作 */
@@ -153,6 +160,8 @@ export interface ProviderPageConfig<TAccount extends ProviderAccountBase> {
   oauthService?: OAuthService;
   /** 触发 OAuth 流程的 addTab key，默认 ['oauth'] */
   oauthTabKeys?: string[];
+  /** 是否在进入 OAuth 标签后自动开始；可用于需要先填写登录参数的平台。 */
+  oauthAutoPrepare?: boolean | ((tabKey: string) => boolean);
   /** 数据服务 */
   dataService: ProviderDataService;
   /** 获取展示用 email/displayName */
@@ -165,7 +174,20 @@ export interface ProviderPageConfig<TAccount extends ProviderAccountBase> {
   }) => void | Promise<void>;
   /** OAuth 成功后的提示文案（可选） */
   resolveOauthSuccessMessage?: () => string;
+  /** 外部浏览器导入完成后的扩展处理（可选） */
+  onExternalImportCompleted?: (accountIds: string[]) => void | Promise<void>;
+  /** 首次渲染时使用的搜索内容 */
+  initialSearchQuery?: string;
   defaultSortBy?: string;
+  /**
+   * 自定义删除确认的 Enter 行为（例如 Codex 批量删除）。
+   * 未提供时 Enter 调用内置 confirmDelete。
+   */
+  onEnterConfirmDelete?: () => void | Promise<void>;
+  /** 额外的删除确认忙碌态（与 deleting 叠加，为 true 时禁用 Enter） */
+  isDeleteConfirmBusy?: boolean;
+  /** 关闭内置删除确认的 Enter 绑定（页面自行 useEnterConfirm 时使用） */
+  disableEnterConfirmDelete?: boolean;
 }
 
 export interface ProviderAccountBase {
@@ -691,9 +713,11 @@ export interface UseProviderAccountsPageReturn {
   setAddStatus: (s: AddModalStatus) => void;
   addMessage: string | null;
   setAddMessage: (msg: string | null) => void;
+  addErrorScrollKey: number;
   tokenInput: string;
   setTokenInput: (v: string) => void;
   importing: boolean;
+  setImporting: (v: boolean) => void;
   openAddModal: (tab: string) => void;
   closeAddModal: () => void;
   resetAddModalState: () => void;
@@ -721,15 +745,21 @@ export interface UseProviderAccountsPageReturn {
   oauthManualCallbackSubmitting: boolean;
   oauthManualCallbackError: string | null;
   oauthSupportsManualCallback: boolean;
+  prepareOauthUrl: () => void;
   handleCopyOauthUrl: () => Promise<void>;
   handleCopyOauthUserCode: () => Promise<void>;
   handleRetryOauth: () => void;
   handleRetryOauthComplete: () => void;
   handleOpenOauthUrl: () => Promise<void>;
+  handleOpenOauthUrlWithMode: (incognito: boolean) => Promise<void>;
   handleSubmitOauthCallbackUrl: () => Promise<void>;
 
   // Inject / Switch
   handleInjectToVSCode: ((accountId: string) => Promise<void>) | null;
+
+  // WebView（网页会话）
+  handleOpenWebview: ((accountId: string) => Promise<void>) | null;
+  webviewing: string | null;
 
   // Flow notice
   isFlowNoticeCollapsed: boolean;
@@ -766,8 +796,11 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
     store,
     oauthService,
     oauthTabKeys: oauthTabKeysConfig,
+    oauthAutoPrepare: oauthAutoPrepareConfig,
     dataService,
+    initialSearchQuery: initialSearchQueryConfig,
     defaultSortBy: defaultSortByConfig,
+    onExternalImportCompleted,
   } = config;
   const defaultSortBy = defaultSortByConfig?.trim() || DEFAULT_SORT_BY;
 
@@ -787,6 +820,7 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
     currentAccountId: storeCurrentAccountId,
     error: storeError,
     fetchAccounts,
+    fetchCurrentAccountId: storeFetchCurrentAccountId,
     deleteAccounts,
     refreshToken,
     refreshAllTokens,
@@ -863,7 +897,9 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
   });
 
   // ─── Search & Filter ──────────────────────────────────────────────────
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState(
+    () => initialSearchQueryConfig ?? '',
+  );
   const [filterType, setFilterType] = useState<string>(() => {
     if (!readAccountsOverviewFilterPersistenceEnabled(filterPersistenceScope)) {
       return 'all';
@@ -878,6 +914,10 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
 
   // ─── Sort ─────────────────────────────────────────────────────────────
   const [sortBy, setSortBy] = useState<string>(() => {
+    // Explicit default (e.g. Codex custom-sort active flag) wins over stale saved sort (#1123).
+    if (defaultSortBy === 'custom') {
+      return 'custom';
+    }
     if (!readAccountsOverviewFilterPersistenceEnabled(filterPersistenceScope)) {
       return defaultSortBy;
     }
@@ -1225,6 +1265,8 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
         return next;
       });
       setDeleteConfirm(null);
+      // 删除成功后清掉页顶红色报错，避免旧错误残留（#1160）
+      setMessage(null);
     } catch (error) {
       setDeleteConfirmError(
         t('messages.actionFailed', {
@@ -1248,11 +1290,18 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
       const displayEmail = account ? config.getDisplayEmail(account) : accountId;
       try {
         await injectFn(accountId);
-        setCurrentAccountId(accountId);
+        // Grok：以后端为准（关闭「切号同步官方登录」时不应有「当前账号」）。
+        // 其他平台仍乐观标记当前账号，避免 resolver 短暂为空导致标识闪烁。
+        let resolvedCurrentAccountId: string | null = accountId;
+        if (platformKey === 'grok' && storeFetchCurrentAccountId) {
+          resolvedCurrentAccountId = await storeFetchCurrentAccountId();
+        } else {
+          setCurrentAccountId(accountId);
+        }
         if (platformId) {
           await emitCurrentAccountChanged({
             platformId,
-            accountId,
+            accountId: resolvedCurrentAccountId,
             reason: 'switch',
           });
         }
@@ -1278,7 +1327,46 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
       }
       setInjecting(null);
     };
-  }, [accounts, config, dataService.injectToVSCode, maskAccountText, platformId, platformKey, t]);
+  }, [
+    accounts,
+    config,
+    dataService.injectToVSCode,
+    maskAccountText,
+    platformId,
+    platformKey,
+    storeFetchCurrentAccountId,
+    t,
+  ]);
+
+  // ─── WebView（网页会话） ───────────────────────────────────────────────
+  const [webviewing, setWebviewing] = useState<string | null>(null);
+  const handleOpenWebview = useMemo(() => {
+    if (!dataService.openWebview) return null;
+    const openFn = dataService.openWebview;
+    return async (accountId: string) => {
+      setMessage(null);
+      setWebviewing(accountId);
+      const account = accounts.find((item) => item.id === accountId);
+      const displayEmail = account ? config.getDisplayEmail(account) : accountId;
+      try {
+        await openFn(accountId);
+        setMessage({
+          text: t('workbuddy.webview.opened', '已打开网页会话：{{email}}', {
+            email: maskAccountText(displayEmail),
+          }),
+          tone: 'success',
+        });
+      } catch (e: unknown) {
+        setMessage({
+          text: t('workbuddy.webview.openFailed', '打开网页会话失败：{{error}}', {
+            error: String(e) || t('common.failed', 'Failed'),
+          }),
+          tone: 'error',
+        });
+      }
+      setWebviewing(null);
+    };
+  }, [accounts, config, dataService.openWebview, maskAccountText, t]);
 
   // ─── Export ───────────────────────────────────────────────────────────
   const handleExportError = useCallback(
@@ -1338,8 +1426,9 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
   // ─── Add Modal ────────────────────────────────────────────────────────
   const [showAddModal, setShowAddModal] = useState(false);
   const [addTab, setAddTab] = useState<string>('oauth');
-  const [addStatus, setAddStatus] = useState<AddModalStatus>('idle');
+  const [addStatus, setAddStatusState] = useState<AddModalStatus>('idle');
   const [addMessage, setAddMessage] = useState<string | null>(null);
+  const [addErrorScrollKey, setAddErrorScrollKey] = useState(0);
   const [tokenInput, setTokenInput] = useState('');
   const [importing, setImporting] = useState(false);
   const [externalAutoImportNonce, setExternalAutoImportNonce] = useState(0);
@@ -1353,12 +1442,40 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
   const oauthServiceRef = useRef(oauthService);
 
+  const setAddStatus = useCallback((nextStatus: AddModalStatus) => {
+    setAddStatusState(nextStatus);
+    if (nextStatus === 'error') {
+      setAddErrorScrollKey((current) => current + 1);
+    }
+  }, []);
+
   useEffect(() => {
     showAddModalRef.current = showAddModal;
     addTabRef.current = addTab;
     addStatusRef.current = addStatus;
     oauthServiceRef.current = oauthService;
   }, [showAddModal, addTab, addStatus, oauthService]);
+
+  const cancelPendingOauthLogin = useCallback(
+    (force = false) => {
+      const loginId = oauthLoginIdRef.current ?? undefined;
+      if (
+        !force
+        && !loginId
+        && !oauthActiveRef.current
+        && !oauthCompletingRef.current
+      ) {
+        return;
+      }
+      oauthServiceRef.current?.cancelLogin(loginId).catch((error) => {
+        console.error(`[${oauthLogPrefix}] 取消 OAuth 授权失败`, {
+          loginId,
+          error: String(error),
+        });
+      });
+    },
+    [oauthLogPrefix],
+  );
 
   const resetAddModalState = useCallback(() => {
     oauthAttemptSeqRef.current += 1;
@@ -1385,19 +1502,38 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
 
   const openAddModal = useCallback(
     (tab: string) => {
+      cancelPendingOauthLogin();
       setAddTab(tab);
       setShowAddModal(true);
       resetAddModalState();
     },
-    [resetAddModalState],
+    [cancelPendingOauthLogin, resetAddModalState],
   );
 
   const closeAddModal = useCallback(() => {
+    cancelPendingOauthLogin(true);
     setShowAddModal(false);
     resetAddModalState();
-  }, [resetAddModalState]);
+  }, [cancelPendingOauthLogin, resetAddModalState]);
 
   useEscClose(showAddModal, closeAddModal);
+  // Delete / tag-delete secondary confirms: Enter = confirm (stack-safe with nested dialogs)
+  const deleteConfirmBusy = deleting || Boolean(config.isDeleteConfirmBusy);
+  useEscClose(Boolean(deleteConfirm) && !deleteConfirmBusy, () => setDeleteConfirm(null));
+  useEnterConfirm(
+    Boolean(deleteConfirm) && !deleteConfirmBusy && !config.disableEnterConfirmDelete,
+    () => {
+      if (config.onEnterConfirmDelete) {
+        void config.onEnterConfirmDelete();
+        return;
+      }
+      void confirmDelete();
+    },
+  );
+  useEscClose(Boolean(tagDeleteConfirm) && !deletingTag, () => setTagDeleteConfirm(null));
+  useEnterConfirm(Boolean(tagDeleteConfirm) && !deletingTag, () => {
+    void confirmDeleteTag();
+  });
 
   const closeExternalImportProgressModal = useCallback(() => {
     setExternalImportProgress((current) => {
@@ -1607,6 +1743,9 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
               reason: 'import',
             });
           }
+          if (importedAccountIds.length > 0 && onExternalImportCompleted) {
+            await onExternalImportCompleted([...new Set(importedAccountIds)]);
+          }
 
           const status: ExternalImportProgressStatus =
             failures.length === 0 ? 'success' : success > 0 ? 'partial' : 'error';
@@ -1633,7 +1772,15 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
         }
       })();
     },
-    [dataService, fetchAccounts, platformId, refreshToken, switchAccount, t],
+    [
+      dataService,
+      fetchAccounts,
+      onExternalImportCompleted,
+      platformId,
+      refreshToken,
+      switchAccount,
+      t,
+    ],
   );
 
   const consumeExternalProviderImport = useCallback(() => {
@@ -1773,7 +1920,9 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
 
     try {
       let importedCount = 0;
-      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      // 「粘贴 JSON」页签只走 JSON 导入；Token/API Key 页签仍兼容 JSON 与纯 token
+      const preferJsonOnly = addTab === 'paste';
+      if (preferJsonOnly || trimmed.startsWith('{') || trimmed.startsWith('[')) {
         const imported = await dataService.importFromJson(trimmed);
         importedCount = imported.length;
       } else if (dataService.addWithToken) {
@@ -1812,7 +1961,7 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
       );
     }
     setImporting(false);
-  }, [dataService, fetchAccounts, platformId, resetAddModalState, t, tokenInput]);
+  }, [addTab, dataService, fetchAccounts, platformId, resetAddModalState, t, tokenInput]);
 
   useEffect(() => {
     if (
@@ -1966,7 +2115,7 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
 
     void (async () => {
       try {
-        const resp = await oauthService.startLogin();
+        const resp = await oauthService.startLogin({ tabKey: addTabRef.current });
         started = true;
 
         if (attemptSeq !== oauthAttemptSeqRef.current) {
@@ -2044,9 +2193,13 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
 
   // Auto-prepare OAuth when modal opens on oauth tab
   useEffect(() => {
-    if (!showAddModal || !oauthTabKeys.includes(addTab) || oauthUrl) return;
+    const shouldAutoPrepare =
+      typeof oauthAutoPrepareConfig === 'function'
+        ? oauthAutoPrepareConfig(addTab)
+        : oauthAutoPrepareConfig !== false;
+    if (!showAddModal || !oauthTabKeys.includes(addTab) || oauthUrl || !shouldAutoPrepare) return;
     prepareOauthUrl();
-  }, [showAddModal, addTab, oauthUrl, prepareOauthUrl, oauthTabKeys]);
+  }, [showAddModal, addTab, oauthUrl, prepareOauthUrl, oauthTabKeys, oauthAutoPrepareConfig]);
 
   // Cancel OAuth when modal closes or tab changes
   useEffect(() => {
@@ -2125,6 +2278,8 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
 
   const handleCopyOauthUrl = useCallback(async () => {
     if (!oauthUrl) return;
+    setAddStatus('idle');
+    setAddMessage(null);
     try {
       await navigator.clipboard.writeText(oauthUrl);
       oauthLog('已复制授权链接', {
@@ -2135,11 +2290,17 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
       window.setTimeout(() => setOauthUrlCopied(false), 1200);
     } catch (e) {
       console.error('复制失败:', e);
+      setAddStatus('error');
+      setAddMessage(
+        t('common.shared.export.copyFailed', '复制失败，请手动复制'),
+      );
     }
-  }, [oauthUrl, oauthLog]);
+  }, [oauthUrl, oauthLog, setAddStatus, t]);
 
   const handleCopyOauthUserCode = useCallback(async () => {
     if (!oauthUserCode) return;
+    setAddStatus('idle');
+    setAddMessage(null);
     try {
       await navigator.clipboard.writeText(oauthUserCode);
       oauthLog('已复制 user_code', { loginId: oauthLoginIdRef.current });
@@ -2147,8 +2308,12 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
       window.setTimeout(() => setOauthUserCodeCopied(false), 1200);
     } catch (e) {
       console.error('复制失败:', e);
+      setAddStatus('error');
+      setAddMessage(
+        t('common.shared.export.copyFailed', '复制失败，请手动复制'),
+      );
     }
-  }, [oauthUserCode, oauthLog]);
+  }, [oauthUserCode, oauthLog, setAddStatus, t]);
 
   const handleRetryOauth = useCallback(() => {
     const previousLoginId = oauthLoginIdRef.current ?? undefined;
@@ -2233,25 +2398,34 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
     handleOauthCompleteError,
   ]);
 
-  const handleOpenOauthUrl = useCallback(async () => {
+  const handleOpenOauthUrlWithMode = useCallback(async (incognito: boolean) => {
     if (!oauthUrl) return;
+    setOauthCompleteError(null);
     oauthLog('用户点击打开授权链接', {
       loginId: oauthLoginIdRef.current,
       authUrl: oauthUrl,
+      incognito,
     });
     try {
       if (oauthService?.openAuthUrl) {
-        await oauthService.openAuthUrl(oauthUrl);
+        await oauthService.openAuthUrl(oauthUrl, incognito);
       } else {
         await openUrl(oauthUrl);
       }
     } catch (e) {
       console.error('打开授权链接失败:', e);
+      const msg = String(e).replace(/^Error:\s*/, '');
+      setOauthCompleteError(`${t('common.shared.oauth.failed', '授权失败')}: ${msg}`);
       await navigator.clipboard.writeText(oauthUrl).catch(() => {});
       setOauthUrlCopied(true);
       setTimeout(() => setOauthUrlCopied(false), 1200);
     }
-  }, [oauthUrl, oauthLog, oauthService]);
+  }, [oauthUrl, oauthLog, oauthService, t]);
+
+  const handleOpenOauthUrl = useCallback(
+    () => handleOpenOauthUrlWithMode(false),
+    [handleOpenOauthUrlWithMode],
+  );
 
   const oauthSupportsManualCallback = useMemo(
     () => Boolean(oauthService?.submitCallbackUrl && oauthCallbackUrl),
@@ -2359,7 +2533,9 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
   // ─── Utilities ────────────────────────────────────────────────────────
   const formatDate = useCallback(
     (timestamp: number) => {
-      const d = new Date(timestamp * 1000);
+      const normalized = normalizeTimestamp(timestamp);
+      const d = new Date((normalized ?? 0) * 1000);
+      // 固定 24 小时制，避免 en-US 等 locale 显示 12 小时制分不清上下午（#859）
       return (
         d.toLocaleDateString(locale, {
           year: 'numeric',
@@ -2367,7 +2543,11 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
           day: '2-digit',
         }) +
         ' ' +
-        d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
+        d.toLocaleTimeString(locale, {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        })
       );
     },
     [locale],
@@ -2462,9 +2642,11 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
     setAddStatus,
     addMessage,
     setAddMessage,
+    addErrorScrollKey,
     tokenInput,
     setTokenInput,
     importing,
+    setImporting,
     openAddModal,
     closeAddModal,
     resetAddModalState,
@@ -2490,13 +2672,17 @@ export function useProviderAccountsPage<TAccount extends ProviderAccountBase>(
     oauthManualCallbackSubmitting,
     oauthManualCallbackError,
     oauthSupportsManualCallback,
+    prepareOauthUrl,
     handleCopyOauthUrl,
     handleCopyOauthUserCode,
     handleRetryOauth,
     handleRetryOauthComplete,
     handleOpenOauthUrl,
+    handleOpenOauthUrlWithMode,
     handleSubmitOauthCallbackUrl,
     handleInjectToVSCode,
+    handleOpenWebview,
+    webviewing,
     isFlowNoticeCollapsed,
     setIsFlowNoticeCollapsed,
     currentAccountId,

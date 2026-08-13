@@ -98,7 +98,9 @@ function getPremiumSnapshot(account: GitHubCopilotAccount): Record<string, unkno
   const raw = account.copilot_quota_snapshots as unknown;
   if (!raw || typeof raw !== 'object') return null;
   const snapshots = raw as Record<string, unknown>;
-  const snapshot = snapshots['premium_interactions'] ?? snapshots['premium_models'];
+  // VS Code Copilot uses premium_models as the current quota key and keeps
+  // premium_interactions as a legacy fallback.
+  const snapshot = snapshots['premium_models'] ?? snapshots['premium_interactions'];
   return snapshot && typeof snapshot === 'object' ? (snapshot as Record<string, unknown>) : null;
 }
 
@@ -289,6 +291,9 @@ function calcUsedPercentFromSnapshot(snapshot: Record<string, unknown>): number 
   if (entitlement != null && entitlement < 0) {
     return 0;
   }
+  if (isSnapshotWithoutDisplayableQuota(snapshot)) {
+    return null;
+  }
 
   const percentRemaining = getNumber(snapshot['percent_remaining']);
   if (percentRemaining != null) {
@@ -305,7 +310,20 @@ function isIncludedFromSnapshot(snapshot: Record<string, unknown> | null): boole
   return entitlement != null && entitlement < 0;
 }
 
+function isSnapshotWithoutDisplayableQuota(snapshot: Record<string, unknown>): boolean {
+  const entitlement = getNumber(snapshot['entitlement']);
+  if (snapshot['unlimited'] === true || (entitlement != null && entitlement < 0)) {
+    return false;
+  }
+  if (entitlement != null) {
+    return entitlement <= 0;
+  }
+  return snapshot['has_quota'] === false;
+}
+
 function calcRemainingFromSnapshot(snapshot: Record<string, unknown>): number | null {
+  if (isSnapshotWithoutDisplayableQuota(snapshot)) return null;
+
   const remaining = getNumber(snapshot['remaining']);
   if (remaining != null) return remaining;
 
@@ -348,9 +366,10 @@ export function getGitHubCopilotUsage(account: GitHubCopilotAccount): GitHubCopi
   const remainingPremiumFromSnapshot = premiumSnapshot
     ? calcRemainingFromSnapshot(premiumSnapshot)
     : null;
-  const exactRemainingPremiumFromSnapshot = premiumSnapshot
-    ? getNumber(premiumSnapshot['remaining'])
-    : null;
+  const exactRemainingPremiumFromSnapshot =
+    premiumSnapshot && !isSnapshotWithoutDisplayableQuota(premiumSnapshot)
+      ? getNumber(premiumSnapshot['remaining'])
+      : null;
 
   const remainingCompletions = remainingCompletionsFromSnapshot ?? getLimitedQuota(account, 'completions');
   const remainingChat = remainingChatFromSnapshot ?? getLimitedQuota(account, 'chat');

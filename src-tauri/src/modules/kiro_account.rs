@@ -2,7 +2,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -12,6 +12,7 @@ use crate::modules::{account, kiro_oauth, logger};
 const ACCOUNTS_INDEX_FILE: &str = "kiro_accounts.json";
 const ACCOUNTS_DIR: &str = "kiro_accounts";
 const LOCAL_AUTH_TOKEN_FILE_NAME: &str = "kiro-auth-token.json";
+const AWS_SSO_CLIENT_ID_HASH_LENGTH: usize = 40;
 const LOCAL_USAGE_DB_KEY: &str = "kiro.kiroAgent";
 const KIRO_QUOTA_ALERT_COOLDOWN_SECONDS: i64 = 10 * 60;
 
@@ -112,13 +113,35 @@ pub fn load_account(account_id: &str) -> Option<KiroAccount> {
         return None;
     }
     let content = fs::read_to_string(&account_path).ok()?;
-    crate::modules::atomic_write::parse_json_with_auto_restore(&account_path, &content).ok()
+    match crate::modules::secure_account_storage::deserialize_account_file::<KiroAccount>(
+        &account_path,
+        &content,
+    ) {
+        Ok((account, needs_rotation)) => {
+            if needs_rotation {
+                let account_for_rewrite = account.clone();
+                crate::modules::deferred_account_rewrite::schedule_account_rewrite_if_unchanged(
+                    "kiro",
+                    account_for_rewrite.id.clone(),
+                    account_path.clone(),
+                    content.as_bytes(),
+                    move || {
+                        crate::modules::secure_account_storage::serialize_account_file(
+                            "kiro",
+                            &account_for_rewrite,
+                        )
+                    },
+                );
+            }
+            Some(account)
+        }
+        Err(_) => None,
+    }
 }
 
 fn save_account_file(account: &KiroAccount) -> Result<(), String> {
     let path = resolve_account_file_path(account.id.as_str())?;
-    let content =
-        serde_json::to_string_pretty(account).map_err(|e| format!("序列化账号失败: {}", e))?;
+    let content = crate::modules::secure_account_storage::serialize_account_file("kiro", account)?;
     crate::modules::atomic_write::write_string_atomic(&path, &content)
         .map_err(|e| format!("保存账号失败: {}", e))
 }
@@ -126,7 +149,8 @@ fn save_account_file(account: &KiroAccount) -> Result<(), String> {
 fn delete_account_file(account_id: &str) -> Result<(), String> {
     let path = resolve_account_file_path(account_id)?;
     if path.exists() {
-        fs::remove_file(path).map_err(|e| format!("删除账号文件失败: {}", e))?;
+        crate::modules::atomic_write::remove_file_locked(&path)
+            .map_err(|e| format!("删除账号文件失败: {}", e))?;
     }
     Ok(())
 }
@@ -658,6 +682,7 @@ fn normalize_account_index(index: &mut KiroAccountIndex) -> Vec<KiroAccount> {
 pub fn list_accounts() -> Vec<KiroAccount> {
     let mut index = load_account_index();
     let had_index_accounts = !index.accounts.is_empty();
+    let index_before_normalize = serde_json::to_vec(&index).ok();
     let accounts = normalize_account_index(&mut index);
     if had_index_accounts && accounts.is_empty() {
         logger::log_warn(
@@ -665,8 +690,14 @@ pub fn list_accounts() -> Vec<KiroAccount> {
         );
         return accounts;
     }
-    if let Err(err) = save_account_index(&index) {
-        logger::log_warn(&format!("[Kiro Account] 保存账号索引失败: {}", err));
+    let index_changed = index_before_normalize
+        .as_ref()
+        .map(|before| Some(before.as_slice()) != serde_json::to_vec(&index).ok().as_deref())
+        .unwrap_or(true);
+    if index_changed {
+        if let Err(err) = save_account_index(&index) {
+            logger::log_warn(&format!("[Kiro Account] 保存账号索引失败: {}", err));
+        }
     }
     accounts
 }
@@ -674,12 +705,19 @@ pub fn list_accounts() -> Vec<KiroAccount> {
 pub fn list_accounts_checked() -> Result<Vec<KiroAccount>, String> {
     let mut index = load_account_index_checked()?;
     let had_index_accounts = !index.accounts.is_empty();
+    let index_before_normalize = serde_json::to_vec(&index).ok();
     let accounts = normalize_account_index(&mut index);
     if had_index_accounts && accounts.is_empty() {
         return Err("Kiro 账号索引中存在账号，但详情文件均无法读取；已保留前端缓存，请从账号备份或本地账号文件恢复。".to_string());
     }
-    if let Err(err) = save_account_index(&index) {
-        logger::log_warn(&format!("[Kiro Account] 保存账号索引失败: {}", err));
+    let index_changed = index_before_normalize
+        .as_ref()
+        .map(|before| Some(before.as_slice()) != serde_json::to_vec(&index).ok().as_deref())
+        .unwrap_or(true);
+    if index_changed {
+        if let Err(err) = save_account_index(&index) {
+            logger::log_warn(&format!("[Kiro Account] 保存账号索引失败: {}", err));
+        }
     }
     Ok(accounts)
 }
@@ -1215,10 +1253,53 @@ fn average_quota_percentage(metrics: &[(String, i32)]) -> f64 {
 }
 
 pub(crate) fn resolve_current_account_id(accounts: &[KiroAccount]) -> Option<String> {
+    if let Ok(local_payload) = crate::modules::kiro_oauth::build_payload_from_local_files() {
+        let incoming_user_id = normalize_user_identity(local_payload.user_id.as_deref());
+        let incoming_email = normalize_email_identity(Some(local_payload.email.as_str()));
+        let incoming_refresh_token =
+            normalize_token_identity(local_payload.refresh_token.as_deref());
+
+        if let Some(account_id) = accounts
+            .iter()
+            .find(|account| {
+                let existing_user = normalize_user_identity(account.user_id.as_deref());
+                let existing_email = normalize_email_identity(Some(account.email.as_str()));
+                let existing_refresh_token =
+                    normalize_token_identity(account.refresh_token.as_deref());
+                account_matches_payload_identity(
+                    existing_user.as_ref(),
+                    existing_email.as_ref(),
+                    existing_refresh_token.as_ref(),
+                    incoming_user_id.as_ref(),
+                    incoming_email.as_ref(),
+                    incoming_refresh_token.as_ref(),
+                )
+            })
+            .map(|account| account.id.clone())
+        {
+            return Some(account_id);
+        }
+    }
+
+    if let Ok(settings) = crate::modules::kiro_instance::load_default_settings() {
+        if let Some(bind_id) = settings.bind_account_id {
+            let trimmed = bind_id.trim();
+            if !trimmed.is_empty() && accounts.iter().any(|account| account.id == trimmed) {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
     crate::modules::provider_current_state::resolve_existing_current_account_id(
         "kiro",
         accounts.iter().map(|account| account.id.as_str()),
     )
+    .or_else(|| {
+        accounts
+            .iter()
+            .max_by_key(|account| account.last_used)
+            .map(|account| account.id.clone())
+    })
 }
 
 fn display_email(account: &KiroAccount) -> String {
@@ -1389,6 +1470,66 @@ pub fn get_default_kiro_auth_token_path() -> Result<PathBuf, String> {
         .join(LOCAL_AUTH_TOKEN_FILE_NAME))
 }
 
+fn idc_client_registration_path(cache_dir: &Path, client_id_hash: &str) -> Result<PathBuf, String> {
+    let hash = client_id_hash;
+    let is_lower_hex = hash
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if hash.len() != AWS_SSO_CLIENT_ID_HASH_LENGTH || !is_lower_hex {
+        return Err("Kiro 本地授权文件中的 clientIdHash 格式无效".to_string());
+    }
+
+    Ok(cache_dir.join(format!("{}.json", hash)))
+}
+
+pub(crate) fn read_idc_client_registration_from_cache_dir(
+    auth_token: &Value,
+    cache_dir: &Path,
+) -> Result<Option<Value>, String> {
+    let Some(client_id_hash) = auth_token.get("clientIdHash") else {
+        return Ok(None);
+    };
+    let client_id_hash = client_id_hash
+        .as_str()
+        .ok_or_else(|| "Kiro 本地授权文件中的 clientIdHash 必须是字符串".to_string())?;
+    let path = idc_client_registration_path(cache_dir, client_id_hash)?;
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(format!(
+                "读取 Kiro IdC 客户端注册文件失败({}): {}",
+                path.display(),
+                err
+            ));
+        }
+    };
+    let parsed = serde_json::from_str::<Value>(&raw).map_err(|err| {
+        format!(
+            "解析 Kiro IdC 客户端注册文件失败({}): {}",
+            path.display(),
+            err
+        )
+    })?;
+    if !parsed.is_object() {
+        return Err(format!(
+            "解析 Kiro IdC 客户端注册文件失败({}): 根节点必须是对象",
+            path.display()
+        ));
+    }
+    Ok(Some(parsed))
+}
+
+pub(crate) fn read_local_idc_client_registration(
+    auth_token: &Value,
+) -> Result<Option<Value>, String> {
+    let auth_token_path = get_default_kiro_auth_token_path()?;
+    let cache_dir = auth_token_path
+        .parent()
+        .ok_or_else(|| "无法解析 AWS SSO 缓存目录".to_string())?;
+    read_idc_client_registration_from_cache_dir(auth_token, cache_dir)
+}
+
 pub fn read_local_auth_token_json() -> Result<Option<Value>, String> {
     let path = get_default_kiro_auth_token_path()?;
     if !path.exists() {
@@ -1440,5 +1581,95 @@ pub fn read_local_usage_snapshot() -> Result<Option<Value>, String> {
             Ok(Some(parsed))
         }
         None => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const CLIENT_ID_HASH: &str = "eb04fe0de39241e4fa17bec175f7540138ad1bd8";
+
+    fn create_cache_fixture(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "cockpit-tools-kiro-idc-{}-{}",
+            name,
+            std::process::id()
+        ));
+        if path.exists() {
+            fs::remove_dir_all(&path).expect("remove stale Kiro IdC fixture");
+        }
+        fs::create_dir_all(&path).expect("create Kiro IdC fixture");
+        path
+    }
+
+    #[test]
+    fn idc_registration_reads_only_the_file_named_by_client_id_hash() {
+        let cache_dir = create_cache_fixture("exact-hash");
+        fs::write(
+            cache_dir.join(format!("{}.json", CLIENT_ID_HASH)),
+            r#"{"clientId":"expected-client","clientSecret":"expected-secret"}"#,
+        )
+        .expect("write expected registration");
+        fs::write(
+            cache_dir.join("unrelated.json"),
+            r#"{"clientId":"wrong-client","clientSecret":"wrong-secret"}"#,
+        )
+        .expect("write decoy registration");
+
+        let registration = read_idc_client_registration_from_cache_dir(
+            &json!({"clientIdHash": CLIENT_ID_HASH}),
+            &cache_dir,
+        )
+        .expect("read registration")
+        .expect("registration should exist");
+
+        assert_eq!(
+            registration.get("clientId").and_then(Value::as_str),
+            Some("expected-client")
+        );
+        fs::remove_dir_all(cache_dir).expect("remove Kiro IdC fixture");
+    }
+
+    #[test]
+    fn idc_registration_does_not_scan_when_exact_hash_is_missing() {
+        let cache_dir = create_cache_fixture("no-scan");
+        fs::write(
+            cache_dir.join("unrelated.json"),
+            r#"{"clientId":"wrong-client","clientSecret":"wrong-secret"}"#,
+        )
+        .expect("write decoy registration");
+
+        let registration = read_idc_client_registration_from_cache_dir(
+            &json!({"clientIdHash": CLIENT_ID_HASH}),
+            &cache_dir,
+        )
+        .expect("missing exact registration is allowed");
+
+        assert!(registration.is_none());
+        fs::remove_dir_all(cache_dir).expect("remove Kiro IdC fixture");
+    }
+
+    #[test]
+    fn idc_registration_rejects_noncanonical_client_id_hashes() {
+        let cache_dir = create_cache_fixture("invalid-hash");
+        let invalid_hashes = [
+            "../eb04fe0de39241e4fa17bec175f7540138ad1bd8",
+            "EB04FE0DE39241E4FA17BEC175F7540138AD1BD8",
+            "eb04fe0de39241e4fa17bec175f7540138ad1bd8 ",
+            "eb04fe0de39241e4fa17bec175f7540138ad1bd",
+            "gb04fe0de39241e4fa17bec175f7540138ad1bd8",
+        ];
+
+        for hash in invalid_hashes {
+            let result = read_idc_client_registration_from_cache_dir(
+                &json!({"clientIdHash": hash}),
+                &cache_dir,
+            );
+            assert!(result.is_err(), "hash should be rejected: {}", hash);
+        }
+
+        fs::remove_dir_all(cache_dir).expect("remove Kiro IdC fixture");
     }
 }

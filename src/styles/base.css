@@ -103,6 +103,59 @@
   color-scheme: dark;
 }
 
+/* Theme color packs (#1399) — layered on light/dark base */
+[data-theme-color="nord"] {
+  --primary: #5e81ac;
+  --primary-hover: #81a1c1;
+  --accent: #88c0d0;
+}
+[data-theme-color="nord"][data-theme="dark"] {
+  --bg-primary: #2e3440;
+  --bg-secondary: #3b4252;
+  --bg-tertiary: #434c5e;
+  --text-primary: #eceff4;
+  --text-secondary: #d8dee9;
+}
+[data-theme-color="tokyo-night"] {
+  --primary: #7aa2f7;
+  --primary-hover: #89b4fa;
+  --accent: #bb9af7;
+}
+[data-theme-color="tokyo-night"][data-theme="dark"] {
+  --bg-primary: #1a1b26;
+  --bg-secondary: #24283b;
+  --bg-tertiary: #414868;
+  --text-primary: #c0caf5;
+  --text-secondary: #a9b1d6;
+}
+[data-theme-color="catppuccin"] {
+  --primary: #89b4fa;
+  --accent: #cba6f7;
+}
+[data-theme-color="catppuccin"][data-theme="dark"] {
+  --bg-primary: #1e1e2e;
+  --bg-secondary: #313244;
+  --text-primary: #cdd6f4;
+}
+[data-theme-color="gruvbox"] {
+  --primary: #d79921;
+  --accent: #689d6a;
+}
+[data-theme-color="gruvbox"][data-theme="dark"] {
+  --bg-primary: #282828;
+  --bg-secondary: #3c3836;
+  --text-primary: #ebdbb2;
+}
+[data-theme-color="everforest"] {
+  --primary: #a7c080;
+  --accent: #7fbbb3;
+}
+[data-theme-color="everforest"][data-theme="dark"] {
+  --bg-primary: #2d353b;
+  --bg-secondary: #343f44;
+  --text-primary: #d3c6aa;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -127,4 +180,23 @@ html[data-theme="dark"] body {
     radial-gradient(circle at 90% 5%, rgba(20, 184, 166, 0.12), transparent 40%),
     linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
   color-scheme: dark;
+}
+
+html[data-reduced-motion="true"] {
+  scroll-behavior: auto !important;
+}
+
+html[data-reduced-motion="true"] body {
+  background: var(--bg-primary) !important;
+}
+
+/* Keep essential loading spinners; disable decorative motion/glass. */
+html[data-reduced-motion="true"] *:not(.loading-spinner):not(.spin):not(.icon-spin):not(.floating-card-spin):not(.animate-spin),
+html[data-reduced-motion="true"] *:not(.loading-spinner):not(.spin):not(.icon-spin):not(.floating-card-spin):not(.animate-spin)::before,
+html[data-reduced-motion="true"] *:not(.loading-spinner):not(.spin):not(.icon-spin):not(.floating-card-spin):not(.animate-spin)::after {
+  animation: none !important;
+  transition: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  scroll-behavior: auto !important;
 }

@@ -2,18 +2,20 @@ import { ReactNode } from 'react';
 import { Github } from 'lucide-react';
 import { TFunction } from 'i18next';
 import { PlatformId } from '../types/platform';
-import { RobotIcon } from '../components/icons/RobotIcon';
+import { AntigravityIcon } from '../components/icons/AntigravityIcon';
+import { AntigravityIdeIcon } from '../components/icons/AntigravityIdeIcon';
 import { CodexIcon } from '../components/icons/CodexIcon';
+import { ClaudeIcon } from '../components/icons/ClaudeIcon';
 import { WindsurfIcon } from '../components/icons/WindsurfIcon';
 import { KiroIcon } from '../components/icons/KiroIcon';
 import { CursorIcon } from '../components/icons/CursorIcon';
-import { GeminiIcon } from '../components/icons/GeminiIcon';
+import { GrokIcon } from '../components/icons/GrokIcon';
 import { CodebuddyIcon } from '../components/icons/CodebuddyIcon';
 import { QoderIcon } from '../components/icons/QoderIcon';
-import { TraeIcon } from '../components/icons/TraeIcon';
+import { TraeCnIcon, TraeIcon, TraeSoloCnIcon, TraeSoloIcon } from '../components/icons/TraeIcon';
 import { WorkbuddyIcon } from '../components/icons/WorkbuddyIcon';
 import { ZedIcon } from '../components/icons/ZedIcon';
-
+import { ZcodeIcon } from '../components/icons/ZcodeIcon';
 export function getPlatformLabel(platformId: PlatformId, _t: TFunction): string {
   switch (platformId) {
     case 'antigravity':
@@ -22,26 +24,38 @@ export function getPlatformLabel(platformId: PlatformId, _t: TFunction): string 
       return 'Antigravity IDE';
     case 'codex':
       return 'Codex';
+    case 'codex_api_service':
+      return _t('codex.apiService.navTitle', 'Codex API Service');
+    case 'claude_manager':
+      return 'Claude';
     case 'zed':
       return 'Zed';
     case 'github-copilot':
       return 'GitHub Copilot';
     case 'windsurf':
-      return 'Windsurf';
+      return 'Devin';
     case 'kiro':
       return 'Kiro';
     case 'cursor':
       return 'Cursor';
-    case 'gemini':
-      return 'Gemini Cli';
+    case 'grok':
+      return 'Grok CLI';
     case 'codebuddy':
       return 'CodeBuddy';
     case 'codebuddy_cn':
       return _t('nav.codebuddyCn', 'CodeBuddy CN');
     case 'qoder':
       return _t('nav.qoder', 'Qoder');
+    case 'zcode':
+      return 'ZCode';
     case 'trae':
       return _t('nav.trae', 'Trae');
+    case 'trae_solo':
+      return _t('nav.traeSolo', 'TRAE SOLO');
+    case 'trae_cn':
+      return _t('nav.traeCn', 'Trae CN');
+    case 'trae_solo_cn':
+      return _t('nav.traeSoloCn', 'TRAE SOLO CN');
     case 'workbuddy':
       return 'WorkBuddy';
     default:
@@ -52,10 +66,15 @@ export function getPlatformLabel(platformId: PlatformId, _t: TFunction): string 
 export function renderPlatformIcon(platformId: PlatformId, size = 20): ReactNode {
   switch (platformId) {
     case 'antigravity':
+      return <AntigravityIcon style={{ width: size, height: size }} />;
     case 'antigravity_ide':
-      return <RobotIcon style={{ width: size, height: size }} />;
+      return <AntigravityIdeIcon style={{ width: size, height: size }} />;
     case 'codex':
       return <CodexIcon size={size} />;
+    case 'codex_api_service':
+      return <CodexIcon size={size} />;
+    case 'claude_manager':
+      return <ClaudeIcon size={size} />;
     case 'zed':
       return <ZedIcon size={size} />;
     case 'github-copilot':
@@ -66,16 +85,24 @@ export function renderPlatformIcon(platformId: PlatformId, size = 20): ReactNode
       return <KiroIcon style={{ width: size, height: size }} />;
     case 'cursor':
       return <CursorIcon style={{ width: size, height: size }} />;
-    case 'gemini':
-      return <GeminiIcon style={{ width: size, height: size }} />;
+    case 'grok':
+      return <GrokIcon style={{ width: size, height: size }} />;
     case 'codebuddy':
       return <CodebuddyIcon style={{ width: size, height: size }} />;
     case 'codebuddy_cn':
       return <CodebuddyIcon style={{ width: size, height: size }} />;
     case 'qoder':
       return <QoderIcon style={{ width: size, height: size }} />;
+    case 'zcode':
+      return <ZcodeIcon size={size} />;
     case 'trae':
       return <TraeIcon style={{ width: size, height: size }} />;
+    case 'trae_solo':
+      return <TraeSoloIcon style={{ width: size, height: size }} />;
+    case 'trae_cn':
+      return <TraeCnIcon style={{ width: size, height: size }} />;
+    case 'trae_solo_cn':
+      return <TraeSoloCnIcon style={{ width: size, height: size }} />;
     case 'workbuddy':
       return <WorkbuddyIcon style={{ width: size, height: size }} />;
     default:

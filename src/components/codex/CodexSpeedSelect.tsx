@@ -139,11 +139,15 @@ export function CodexSpeedSelect({
       }
     };
 
-    document.addEventListener("mousedown", handlePointerDown);
+    // 延迟绑定，避免与打开触发器的同一次点击立刻关闭
+    const timer = window.setTimeout(() => {
+      document.addEventListener("mousedown", handlePointerDown);
+    }, 0);
     document.addEventListener("keydown", handleKeyDown);
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);
     return () => {
+      window.clearTimeout(timer);
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("resize", updatePosition);

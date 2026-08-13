@@ -31,7 +31,7 @@ export function CloseConfirmDialog({ onClose }: CloseConfirmDialogProps) {
   };
 
   return (
-    <div className="close-dialog-overlay" onClick={onClose}>
+    <div className="close-dialog-overlay">
       <div className="close-dialog" onClick={(e) => e.stopPropagation()}>
         <button className="close-dialog-x" onClick={onClose}>
           <X size={18} />

@@ -100,7 +100,7 @@ pub async fn refresh_all_github_copilot_tokens(app: AppHandle) -> Result<i32, St
     Ok(success_count as i32)
 }
 
-/// OAuth（Device Flow）：开始登录（返回 user_code + verification_uri 等）
+/// OAuth（VS Code GitHub Authentication）：开始登录（返回授权 URL）
 #[tauri::command]
 pub async fn github_copilot_oauth_login_start() -> Result<GitHubCopilotOAuthStartResponse, String> {
     logger::log_info("GitHub Copilot OAuth start 命令触发");
@@ -112,7 +112,7 @@ pub async fn github_copilot_oauth_login_start() -> Result<GitHubCopilotOAuthStar
     Ok(response)
 }
 
-/// OAuth（Device Flow）：轮询并完成登录（返回保存后的账号）
+/// OAuth（VS Code GitHub Authentication）：等待本地回调并完成登录（返回保存后的账号）
 #[tauri::command]
 pub async fn github_copilot_oauth_login_complete(
     app: AppHandle,
@@ -133,7 +133,7 @@ pub async fn github_copilot_oauth_login_complete(
     Ok(account)
 }
 
-/// OAuth（Device Flow）：取消登录（login_id 为空时取消当前流程）
+/// OAuth（VS Code GitHub Authentication）：取消登录（login_id 为空时取消当前流程）
 #[tauri::command]
 pub fn github_copilot_oauth_login_cancel(login_id: Option<String>) -> Result<(), String> {
     logger::log_info(&format!(

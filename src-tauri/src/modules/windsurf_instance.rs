@@ -351,15 +351,43 @@ fn run_command_get_trimmed(program: &str, args: &[&str]) -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
-fn get_macos_safe_storage_password() -> Result<String, String> {
-    let candidates = [
+fn path_brand_prefers_windsurf(data_root: &Path) -> bool {
+    let text = data_root.to_string_lossy().to_lowercase();
+    text.contains("windsurf") && !text.contains("devin")
+}
+
+#[cfg(target_os = "macos")]
+fn get_macos_safe_storage_password(data_root: &Path) -> Result<String, String> {
+    // Windsurf 重命名为 Devin 后，Keychain 服务名变为 "Devin Safe Storage"。
+    // 本地实测账号字段为 "Devin" / "Devin Key"；旧安装仍可能是 "Windsurf Key"。
+    // 按 profile 目录品牌优先选 keychain，避免双装时用错密钥。
+    let devin_candidates = [
+        ("Devin Safe Storage", Some("Devin")),
+        ("Devin Safe Storage", Some("Devin Key")),
+        ("Devin Safe Storage", Some("devin")),
+        ("Devin Safe Storage", None),
+    ];
+    let windsurf_candidates = [
+        ("Windsurf Safe Storage", Some("Windsurf Key")),
         ("Windsurf Safe Storage", Some("Windsurf")),
         ("Windsurf Safe Storage", Some("windsurf")),
         ("Windsurf Safe Storage", Some("Windsurf Safe Storage")),
         ("Windsurf Safe Storage", None),
     ];
 
-    for (service, account) in candidates {
+    let ordered: Vec<(&str, Option<&str>)> = if path_brand_prefers_windsurf(data_root) {
+        windsurf_candidates
+            .into_iter()
+            .chain(devin_candidates.into_iter())
+            .collect()
+    } else {
+        devin_candidates
+            .into_iter()
+            .chain(windsurf_candidates.into_iter())
+            .collect()
+    };
+
+    for (service, account) in ordered {
         if let Some(account) = account {
             if let Some(password) = run_command_get_trimmed(
                 "security",
@@ -374,7 +402,7 @@ fn get_macos_safe_storage_password() -> Result<String, String> {
         }
     }
 
-    Err("读取 Windsurf Safe Storage 密钥失败".to_string())
+    Err("读取 Devin/Windsurf Safe Storage 密钥失败".to_string())
 }
 
 #[cfg(target_os = "linux")]
@@ -393,7 +421,7 @@ fn run_command_get_trimmed(program: &str, args: &[&str]) -> Option<String> {
 
 #[cfg(target_os = "linux")]
 fn get_linux_v11_key() -> Option<[u8; 16]> {
-    let app_names = ["windsurf", "Windsurf"];
+    let app_names = ["devin", "Devin", "windsurf", "Windsurf"];
     for app in app_names {
         if let Some(password) =
             run_command_get_trimmed("secret-tool", &["lookup", "application", app])
@@ -411,7 +439,7 @@ fn encrypt_secret_payload(
 ) -> Result<Vec<u8>, String> {
     #[cfg(not(target_os = "linux"))]
     let _ = preferred_prefix;
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     let _ = data_root;
 
     #[cfg(target_os = "windows")]
@@ -422,7 +450,7 @@ fn encrypt_secret_payload(
 
     #[cfg(target_os = "macos")]
     {
-        let password = get_macos_safe_storage_password()?;
+        let password = get_macos_safe_storage_password(data_root)?;
         let key = pbkdf2_sha1_key(&password, 1003);
         return encrypt_cbc_prefixed(V10_PREFIX, &key, plaintext);
     }
@@ -582,9 +610,11 @@ fn write_windsurf_auth_data(
 
     let login_key = format!("windsurf_auth-{}", account_label);
     let usage_key = format!("windsurf_auth-{}-usages", account_label);
+    // 本地 Devin 3.x 写入的 extensionName 为 "Devin"；旧 Windsurf 为 "Windsurf"。
+    // 统一写 Devin 以匹配当前客户端字段，旧客户端忽略该展示字段。
     let usage_value = serde_json::json!([{
         "extensionId": "codeium.windsurf",
-        "extensionName": "Windsurf",
+        "extensionName": "Devin",
         "scopes": [],
         "lastUsed": Utc::now().timestamp_millis()
     }]);
@@ -648,28 +678,117 @@ pub fn update_default_settings(
     Ok(updated)
 }
 
-pub fn get_default_windsurf_user_data_dir() -> Result<PathBuf, String> {
+/// 返回 Devin/Windsurf 用户数据目录候选（新品牌优先）。
+pub fn windsurf_user_data_dir_candidates() -> Result<Vec<PathBuf>, String> {
     #[cfg(target_os = "macos")]
     {
         let home = dirs::home_dir().ok_or("无法获取用户主目录")?;
-        return Ok(home.join("Library/Application Support/Windsurf"));
+        let base = home.join("Library/Application Support");
+        return Ok(vec![base.join("Devin"), base.join("Windsurf")]);
     }
 
     #[cfg(target_os = "windows")]
     {
         let appdata =
             std::env::var("APPDATA").map_err(|_| "无法获取 APPDATA 环境变量".to_string())?;
-        return Ok(PathBuf::from(appdata).join("Windsurf"));
+        let base = PathBuf::from(appdata);
+        return Ok(vec![base.join("Devin"), base.join("Windsurf")]);
     }
 
     #[cfg(target_os = "linux")]
     {
         let home = dirs::home_dir().ok_or("无法获取用户主目录")?;
-        return Ok(home.join(".config/Windsurf"));
+        let base = home.join(".config");
+        return Ok(vec![base.join("Devin"), base.join("Windsurf")]);
     }
 
     #[allow(unreachable_code)]
-    Err("Windsurf 多开实例仅支持 macOS、Windows 和 Linux".to_string())
+    Err("Windsurf 应用多开仅支持 macOS、Windows 和 Linux".to_string())
+}
+
+fn state_db_under_user_data_dir(user_data_dir: &Path) -> PathBuf {
+    user_data_dir
+        .join("User")
+        .join("globalStorage")
+        .join("state.vscdb")
+}
+
+fn state_db_score(db_path: &Path) -> i32 {
+    if !db_path.is_file() {
+        return 0;
+    }
+    let Ok(conn) = Connection::open(db_path) else {
+        // 文件存在但无法打开时，仍高于“无文件”
+        return 10;
+    };
+    let mut score = 10;
+    if let Ok(Some(raw)) = conn
+        .query_row(
+            "SELECT value FROM ItemTable WHERE key = ?1",
+            [WINDSURF_EXTENSION_STATE_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+    {
+        score += 20;
+        if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+            let has_installation_id = value
+                .get("codeium.installationId")
+                .and_then(Value::as_str)
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            if has_installation_id {
+                score += 100;
+            }
+        }
+    }
+    if let Ok(Some(_)) = conn
+        .query_row(
+            "SELECT value FROM ItemTable WHERE key = ?1",
+            [WINDSURF_AUTH_STATUS_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+    {
+        score += 30;
+    }
+    score
+}
+
+/// 在 Devin/Windsurf 候选目录中挑选最合适的默认用户数据目录。
+/// 优先级：含 installationId 的 state.vscdb > 含登录态的 state.vscdb > 任意 state.vscdb
+/// > 已存在目录 > 首个候选（Devin）。
+pub fn pick_preferred_windsurf_user_data_dir(candidates: &[PathBuf]) -> PathBuf {
+    if candidates.is_empty() {
+        return PathBuf::from("Devin");
+    }
+
+    let mut best_dir: Option<&PathBuf> = None;
+    let mut best_score = i32::MIN;
+    for dir in candidates {
+        let score = state_db_score(&state_db_under_user_data_dir(dir));
+        if score > best_score {
+            best_score = score;
+            best_dir = Some(dir);
+        }
+    }
+    if best_score > 0 {
+        if let Some(dir) = best_dir {
+            return dir.clone();
+        }
+    }
+
+    for dir in candidates {
+        if dir.is_dir() {
+            return dir.clone();
+        }
+    }
+    candidates[0].clone()
+}
+
+pub fn get_default_windsurf_user_data_dir() -> Result<PathBuf, String> {
+    let candidates = windsurf_user_data_dir_candidates()?;
+    Ok(pick_preferred_windsurf_user_data_dir(&candidates))
 }
 
 pub fn get_default_instances_root_dir() -> Result<PathBuf, String> {
@@ -693,7 +812,7 @@ pub fn get_default_instances_root_dir() -> Result<PathBuf, String> {
     }
 
     #[allow(unreachable_code)]
-    Err("Windsurf 多开实例仅支持 macOS、Windows 和 Linux".to_string())
+    Err("Windsurf 应用多开仅支持 macOS、Windows 和 Linux".to_string())
 }
 
 pub fn get_instance_defaults() -> Result<InstanceDefaults, String> {
@@ -1342,10 +1461,16 @@ pub fn collect_windsurf_process_entries() -> Vec<(u32, Option<String>)> {
 
             #[cfg(target_os = "windows")]
             let is_windsurf = name == "windsurf.exe"
+                || name == "devin.exe"
                 || exe_path.ends_with("\\windsurf.exe")
-                || (name == "electron.exe" && exe_path.contains("\\windsurf\\"));
+                || exe_path.ends_with("\\devin.exe")
+                || (name == "electron.exe"
+                    && (exe_path.contains("\\windsurf\\") || exe_path.contains("\\devin\\")));
             #[cfg(target_os = "linux")]
-            let is_windsurf = name.contains("windsurf") || exe_path.contains("/windsurf");
+            let is_windsurf = name.contains("windsurf")
+                || name.contains("devin")
+                || exe_path.contains("/windsurf")
+                || exe_path.contains("/devin");
 
             if !is_windsurf || is_helper_process(&name, &args_line) {
                 continue;
@@ -1380,7 +1505,10 @@ pub fn collect_windsurf_process_entries() -> Vec<(u32, Option<String>)> {
                     Err(_) => continue,
                 };
                 let lower = cmdline.to_lowercase();
-                if !lower.contains("windsurf.app/contents/") || lower.contains("--type=") {
+                // Devin.app 为官网新包；Windsurf.app 兼容旧安装。
+                let is_devin_or_windsurf = lower.contains("devin.app/contents/")
+                    || lower.contains("windsurf.app/contents/");
+                if !is_devin_or_windsurf || lower.contains("--type=") {
                     continue;
                 }
                 let dir = extract_user_data_dir_from_command_line(cmdline).and_then(|value| {
@@ -1483,6 +1611,8 @@ fn focus_window_by_pid(pid: u32) -> Result<(), String> {
 #[cfg(target_os = "windows")]
 fn focus_window_by_pid(pid: u32) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
+    let _spawn_guard = crate::modules::app_lifecycle::acquire_process_spawn_guard("PowerShell")
+        .map_err(|error| error.to_string())?;
     let command = format!(
         r#"$targetPid={pid};$h=[IntPtr]::Zero;for($i=0;$i -lt 20;$i++){{$p=Get-Process -Id $targetPid -ErrorAction Stop;$h=$p.MainWindowHandle;if ($h -ne 0) {{ break }};Start-Sleep -Milliseconds 150}};if ($h -eq 0) {{ throw 'MAIN_WINDOW_HANDLE_EMPTY' }};Add-Type @'
 using System;
@@ -1531,11 +1661,11 @@ pub fn focus_windsurf_instance(
 }
 
 fn normalize_custom_path(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
+    let normalized = modules::process::normalize_windows_user_facing_path(value);
+    if normalized.is_empty() {
         None
     } else {
-        Some(trimmed.to_string())
+        Some(normalized)
     }
 }
 
@@ -1549,15 +1679,42 @@ fn normalize_macos_app_root(path: &Path) -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
+fn read_macos_bundle_string(app_root: &Path, key: &str) -> Option<String> {
+    let plist = app_root.join("Contents").join("Info.plist");
+    let plist_str = plist.to_str()?;
+    let output = Command::new("plutil")
+        .args(["-extract", key, "raw", "-o", "-", plist_str])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn resolve_macos_exec_path(path_str: &str) -> Option<PathBuf> {
     let path = PathBuf::from(path_str);
     if let Some(app_root) = normalize_macos_app_root(&path) {
-        let exec_path = PathBuf::from(app_root)
-            .join("Contents")
-            .join("MacOS")
-            .join("Electron");
-        if exec_path.exists() {
-            return Some(exec_path);
+        let app_root_path = PathBuf::from(&app_root);
+        let macos_dir = app_root_path.join("Contents").join("MacOS");
+        // Devin 的 CFBundleExecutable 为 "Devin"；旧 Windsurf 多为 "Electron"。
+        if let Some(exec_name) = read_macos_bundle_string(&app_root_path, "CFBundleExecutable") {
+            let exec_path = macos_dir.join(exec_name);
+            if exec_path.exists() {
+                return Some(exec_path);
+            }
+        }
+        for name in ["Devin", "Electron", "Windsurf"] {
+            let exec_path = macos_dir.join(name);
+            if exec_path.exists() {
+                return Some(exec_path);
+            }
         }
     }
     if path.exists() {
@@ -1580,9 +1737,15 @@ fn detect_windsurf_exec_path() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         // On macOS, check well-known path first to avoid sysinfo TCC dialogs
-        let path = PathBuf::from("/Applications/Windsurf.app/Contents/MacOS/Electron");
-        if path.exists() {
-            return Some(path);
+        let candidates = [
+            "/Applications/Devin.app/Contents/MacOS/Devin",
+            "/Applications/Windsurf.app/Contents/MacOS/Electron",
+        ];
+        for candidate in candidates {
+            let path = PathBuf::from(candidate);
+            if path.exists() {
+                return Some(path);
+            }
         }
         // Fallback: try to find from running processes via ps
         for (pid, _) in collect_windsurf_process_entries() {
@@ -1622,18 +1785,12 @@ fn detect_windsurf_exec_path() -> Option<PathBuf> {
         {
             let mut candidates: Vec<PathBuf> = Vec::new();
             if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
-                candidates.push(
-                    Path::new(&local_appdata)
-                        .join("Programs")
-                        .join("Windsurf")
-                        .join("Windsurf.exe"),
-                );
-                candidates.push(
-                    Path::new(&local_appdata)
-                        .join("Programs")
-                        .join("Windsurf")
-                        .join("Electron.exe"),
-                );
+                let programs = Path::new(&local_appdata).join("Programs");
+                for folder in ["Devin", "Windsurf"] {
+                    for exe in ["Devin.exe", "Windsurf.exe", "Electron.exe"] {
+                        candidates.push(programs.join(folder).join(exe));
+                    }
+                }
             }
             for candidate in candidates {
                 if candidate.exists() {
@@ -1642,10 +1799,10 @@ fn detect_windsurf_exec_path() -> Option<PathBuf> {
             }
             if let Some(path) = modules::process::detect_windows_exec_path_by_signatures(
                 "windsurf",
-                &["Windsurf.exe", "Electron.exe"],
-                &["windsurf"],
-                &["windsurf", "codeium"],
-                &["windsurf", "codeium"],
+                &["Devin.exe", "Windsurf.exe", "Electron.exe"],
+                &["devin", "windsurf"],
+                &["devin", "windsurf", "codeium", "exafunction"],
+                &["devin", "windsurf", "codeium", "exafunction"],
             ) {
                 return Some(path);
             }
@@ -1653,7 +1810,12 @@ fn detect_windsurf_exec_path() -> Option<PathBuf> {
 
         #[cfg(target_os = "linux")]
         {
-            let candidates = ["/usr/bin/windsurf", "/opt/windsurf/windsurf"];
+            let candidates = [
+                "/usr/bin/devin",
+                "/opt/devin/devin",
+                "/usr/bin/windsurf",
+                "/opt/windsurf/windsurf",
+            ];
             for candidate in candidates {
                 let path = PathBuf::from(candidate);
                 if path.exists() {
@@ -1668,33 +1830,40 @@ fn detect_windsurf_exec_path() -> Option<PathBuf> {
 
 fn path_looks_like_windsurf(path: &Path) -> bool {
     let text = path.to_string_lossy().to_lowercase();
-    text.contains("windsurf")
+    text.contains("devin") || text.contains("windsurf")
 }
 
 fn normalize_windsurf_path_for_config(path: &Path) -> String {
     #[cfg(target_os = "macos")]
     {
-        return normalize_macos_app_root(path)
-            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        return normalize_macos_app_root(path).unwrap_or_else(|| {
+            modules::process::normalize_windows_user_facing_path(&path.to_string_lossy())
+        });
     }
     #[cfg(not(target_os = "macos"))]
     {
-        path.to_string_lossy().to_string()
+        modules::process::normalize_windows_user_facing_path(&path.to_string_lossy())
     }
 }
 
 pub fn detect_and_save_windsurf_launch_path(force: bool) -> Option<String> {
     let current = modules::config::get_user_config();
-    if !force && normalize_custom_path(&current.windsurf_app_path).is_some() {
-        return Some(current.windsurf_app_path);
+    if !force {
+        if let Some(configured) = normalize_custom_path(&current.windsurf_app_path) {
+            return Some(configured);
+        }
     }
 
     let detected = detect_windsurf_exec_path()?;
     let normalized = normalize_windsurf_path_for_config(&detected);
     if current.windsurf_app_path != normalized {
-        let mut next = current.clone();
-        next.windsurf_app_path = normalized.clone();
-        if let Err(err) = modules::config::save_user_config(&next) {
+        let path = normalized.clone();
+        if let Err(err) = modules::config::patch_user_config(move |config| {
+            if force || normalize_custom_path(&config.windsurf_app_path).is_none() {
+                config.windsurf_app_path = path;
+            }
+            Ok(())
+        }) {
             modules::logger::log_warn(&format!("保存 Windsurf 启动路径失败（已忽略）: {}", err));
         }
     }
@@ -1870,7 +2039,7 @@ pub fn start_windsurf_with_args_with_new_window(
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         let _ = (target, extra_args, use_new_window);
-        Err("Windsurf 多开实例仅支持 macOS、Windows 和 Linux".to_string())
+        Err("Windsurf 应用多开仅支持 macOS、Windows 和 Linux".to_string())
     }
 }
 
@@ -2151,21 +2320,22 @@ fn ensure_state_db_for_injection(profile_dir: &Path) -> Result<PathBuf, String> 
         return Ok(db_path);
     }
 
-    let default_dir = get_default_windsurf_user_data_dir()?;
-    let default_db = default_dir
-        .join("User")
-        .join("globalStorage")
-        .join("state.vscdb");
-    if default_db.exists() {
+    // 遍历 Devin/Windsurf 候选目录，按 installationId/登录态评分挑选复制源，
+    // 避免只读旧 Windsurf 路径，或误复制空的新 Devin DB。
+    let candidates = windsurf_user_data_dir_candidates()?;
+    let source_dir = pick_preferred_windsurf_user_data_dir(&candidates);
+    let source_db = state_db_under_user_data_dir(&source_dir);
+
+    if source_db.is_file() {
         let _ = ensure_profile_global_storage(profile_dir)?;
-        fs::copy(&default_db, &db_path).map_err(|e| format!("复制 state.vscdb 失败: {}", e))?;
+        fs::copy(&source_db, &db_path).map_err(|e| format!("复制 state.vscdb 失败: {}", e))?;
     }
 
     if !db_path.exists() {
         return Err("未找到 state.vscdb，请先勾选复制当前登录状态或先启动实例一次".to_string());
     }
 
-    let default_storage = default_dir
+    let default_storage = source_dir
         .join("User")
         .join("globalStorage")
         .join("storage.json");
@@ -2292,4 +2462,70 @@ pub fn inject_account_to_profile(profile_dir: &Path, account_id: &str) -> Result
     )?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pick_preferred_windsurf_user_data_dir, state_db_under_user_data_dir};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("cockpit-windsurf-test-{}-{}", name, nanos));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn pick_prefers_state_db_over_empty_devin_dir() {
+        let root = temp_dir("prefer-state");
+        let devin = root.join("Devin");
+        let windsurf = root.join("Windsurf");
+        fs::create_dir_all(&devin).unwrap();
+        fs::create_dir_all(state_db_under_user_data_dir(&windsurf).parent().unwrap()).unwrap();
+        // 写入最小可用 sqlite，state_db_score 至少 > 0
+        let db = state_db_under_user_data_dir(&windsurf);
+        {
+            use rusqlite::Connection;
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE ItemTable (key TEXT, value BLOB);
+                 INSERT INTO ItemTable VALUES ('codeium.windsurf', '{\"codeium.installationId\":\"id-1\"}');",
+            )
+            .unwrap();
+        }
+
+        let picked = pick_preferred_windsurf_user_data_dir(&[devin.clone(), windsurf.clone()]);
+        assert_eq!(picked, windsurf);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pick_prefers_existing_devin_dir_when_no_state_db() {
+        let root = temp_dir("prefer-devin-dir");
+        let devin = root.join("Devin");
+        let windsurf = root.join("Windsurf");
+        fs::create_dir_all(&devin).unwrap();
+        // windsurf path does not exist
+
+        let picked = pick_preferred_windsurf_user_data_dir(&[devin.clone(), windsurf.clone()]);
+        assert_eq!(picked, devin);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pick_falls_back_to_first_candidate_when_none_exist() {
+        let root = temp_dir("fallback");
+        let devin = root.join("Devin");
+        let windsurf = root.join("Windsurf");
+        let picked = pick_preferred_windsurf_user_data_dir(&[devin.clone(), windsurf]);
+        assert_eq!(picked, devin);
+        let _ = fs::remove_dir_all(root);
+    }
 }

@@ -5,6 +5,25 @@
   backdrop-filter: blur(10px);
 }
 
+/* Stack above the parent TagEditModal overlay */
+.tag-global-delete-confirm-overlay {
+  z-index: 10010;
+}
+
+.tag-global-delete-confirm-modal {
+  max-width: 440px;
+}
+
+.tag-global-delete-confirm-modal .modal-body p {
+  margin: 0;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+
+.tag-global-delete-confirm-modal .tag-edit-error {
+  margin-bottom: 12px;
+}
+
 [data-theme="dark"] .tag-edit-modal {
   background: linear-gradient(155deg, rgba(15, 23, 42, 0.94), rgba(30, 41, 59, 0.9));
   border-color: rgba(148, 163, 184, 0.24);

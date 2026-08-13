@@ -322,6 +322,91 @@
   flex-shrink: 0;
 }
 
+.qs-claude-scan-roots {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.qs-claude-scan-roots label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.qs-claude-scan-root-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.qs-claude-scan-roots-input {
+  width: 100%;
+  min-height: 0;
+}
+
+.qs-claude-candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.qs-claude-candidate-item {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.qs-claude-candidate-item:hover,
+.qs-claude-candidate-item.selected {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 9%, var(--bg-tertiary));
+}
+
+.qs-claude-candidate-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.qs-claude-candidate-badge {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.qs-claude-candidate-target {
+  margin-top: 5px;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.qs-claude-candidate-note {
+  margin-top: 5px;
+  color: var(--warning, #f59e0b);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 /* Buttons */
 .qs-btn {
   display: flex;

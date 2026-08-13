@@ -1,3 +1,7 @@
+use aes_gcm::aead::Aead;
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+use base64::{engine::general_purpose, Engine as _};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -7,10 +11,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-use crate::models::{
-    Account, AccountIndex, AccountSummary, DeviceProfile, DeviceProfileVersion, QuotaData,
-    QuotaErrorInfo, TokenData,
-};
+use crate::models::{Account, AccountIndex, AccountSummary, QuotaData, QuotaErrorInfo, TokenData};
 use crate::modules;
 
 static ACCOUNT_INDEX_LOCK: std::sync::LazyLock<Mutex<()>> =
@@ -32,30 +33,20 @@ const DEV_DATA_DIR: &str = ".antigravity_cockpit_dev";
 const DATA_DIR_ENV: &str = "COCKPIT_TOOLS_DATA_DIR";
 const PROFILE_ENV: &str = "COCKPIT_TOOLS_PROFILE";
 
-/// 对邮箱地址进行脱敏，仅保留首字符和域名，例如 "u***@example.com"
-#[inline]
-fn mask_email(email: &str) -> String {
-    if let Some(at_pos) = email.find('@') {
-        let local = &email[..at_pos];
-        let domain = &email[at_pos..];
-        let first = local
-            .chars()
-            .next()
-            .map(|c| c.to_string())
-            .unwrap_or_default();
-        format!("{}***{}", first, domain)
-    } else {
-        "***".to_string()
-    }
-}
 const ACCOUNTS_INDEX: &str = "accounts.json";
 const ACCOUNTS_DIR: &str = "accounts";
-const DELETED_ACCOUNT_FP_BINDINGS: &str = "deleted_account_fingerprint_bindings.json";
+const ACCOUNT_TOKEN_KEY_FILE: &str = "account-token.key";
+const ACCOUNT_TOKEN_ENCRYPTION_VERSION: u32 = 1;
+const ACCOUNT_TOKEN_ROTATION_SECONDS: i64 = 30 * 24 * 60 * 60;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct DeletedAccountFingerprintBindings {
-    #[serde(default)]
-    by_email: HashMap<String, String>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EncryptedTokenEnvelope {
+    version: u32,
+    algorithm: String,
+    key_id: String,
+    nonce: String,
+    ciphertext: String,
+    encrypted_at: i64,
 }
 
 #[derive(Clone)]
@@ -95,122 +86,150 @@ fn write_list_accounts_cache(accounts: &[Account]) {
     }
 }
 
-fn normalize_account_email_key(email: &str) -> String {
-    email.trim().to_lowercase()
+fn account_token_key_path() -> Result<PathBuf, String> {
+    Ok(get_data_dir()?.join(ACCOUNT_TOKEN_KEY_FILE))
 }
 
-fn get_deleted_account_fp_bindings_path() -> Result<PathBuf, String> {
-    Ok(get_data_dir()?.join(DELETED_ACCOUNT_FP_BINDINGS))
-}
-
-fn load_deleted_account_fp_bindings() -> Result<DeletedAccountFingerprintBindings, String> {
-    let path = get_deleted_account_fp_bindings_path()?;
-    if !path.exists() {
-        return Ok(DeletedAccountFingerprintBindings::default());
-    }
-
-    let content = fs::read_to_string(&path).map_err(|e| format!("读取指纹映射失败: {}", e))?;
-    if content.trim().is_empty() {
-        return Ok(DeletedAccountFingerprintBindings::default());
-    }
-
-    match serde_json::from_str::<DeletedAccountFingerprintBindings>(&content) {
-        Ok(bindings) => Ok(bindings),
-        Err(error) => {
-            match modules::atomic_write::quarantine_file(&path, "invalid-json") {
-                Ok(Some(backup_path)) => modules::logger::log_warn(&format!(
-                    "指纹映射文件损坏，已隔离并重置为空: path={}, backup={}, error={}",
-                    path.display(),
-                    backup_path.display(),
-                    error
-                )),
-                Ok(None) => modules::logger::log_warn(&format!(
-                    "指纹映射文件损坏，文件已不存在，重置为空: path={}, error={}",
-                    path.display(),
-                    error
-                )),
-                Err(backup_error) => modules::logger::log_warn(&format!(
-                    "指纹映射文件损坏，隔离失败，重置为空: path={}, parse_error={}, backup_error={}",
-                    path.display(),
-                    error,
-                    backup_error
-                )),
-            }
-            Ok(DeletedAccountFingerprintBindings::default())
+fn read_or_create_account_token_master_key() -> Result<[u8; 32], String> {
+    let key_path = account_token_key_path()?;
+    if key_path.exists() {
+        let raw = fs::read_to_string(&key_path)
+            .map_err(|e| format!("读取账号 token 加密密钥失败: {}", e))?;
+        let bytes = general_purpose::STANDARD
+            .decode(raw.trim())
+            .map_err(|e| format!("解析账号 token 加密密钥失败: {}", e))?;
+        if bytes.len() != 32 {
+            return Err("账号 token 加密密钥长度无效".to_string());
         }
-    }
-}
-
-fn save_deleted_account_fp_bindings(
-    bindings: &DeletedAccountFingerprintBindings,
-) -> Result<(), String> {
-    let path = get_deleted_account_fp_bindings_path()?;
-    let content =
-        serde_json::to_string_pretty(bindings).map_err(|e| format!("序列化指纹映射失败: {}", e))?;
-    crate::modules::atomic_write::write_string_atomic(&path, &content)
-        .map_err(|e| format!("保存指纹映射失败: {}", e))
-}
-
-fn remember_deleted_account_fingerprint(account: &Account) -> Result<(), String> {
-    let key = normalize_account_email_key(&account.email);
-    if key.is_empty() {
-        return Ok(());
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&bytes);
+        return Ok(key);
     }
 
-    let Some(fp_id) = account.fingerprint_id.as_ref() else {
-        return Ok(());
+    let mut key = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut key);
+    let encoded = general_purpose::STANDARD.encode(key);
+    crate::modules::atomic_write::write_string_atomic(&key_path, &encoded)
+        .map_err(|e| format!("写入账号 token 加密密钥失败: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600));
+    }
+    Ok(key)
+}
+
+fn account_token_cipher() -> Result<Aes256Gcm, String> {
+    let master_key = read_or_create_account_token_master_key()?;
+    Aes256Gcm::new_from_slice(&master_key).map_err(|e| format!("初始化账号 token 加密失败: {}", e))
+}
+
+fn encrypt_token_value(token: &TokenData) -> Result<EncryptedTokenEnvelope, String> {
+    let cipher = account_token_cipher()?;
+    let plaintext =
+        serde_json::to_vec(token).map_err(|e| format!("序列化账号 token 失败: {}", e))?;
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce_bytes), plaintext.as_ref())
+        .map_err(|e| format!("加密账号 token 失败: {:?}", e))?;
+    Ok(EncryptedTokenEnvelope {
+        version: ACCOUNT_TOKEN_ENCRYPTION_VERSION,
+        algorithm: "AES-256-GCM".to_string(),
+        key_id: "local-account-token-key-v1".to_string(),
+        nonce: general_purpose::STANDARD.encode(nonce_bytes),
+        ciphertext: general_purpose::STANDARD.encode(ciphertext),
+        encrypted_at: chrono::Utc::now().timestamp(),
+    })
+}
+
+fn decrypt_token_envelope(envelope: &EncryptedTokenEnvelope) -> Result<TokenData, String> {
+    if envelope.version != ACCOUNT_TOKEN_ENCRYPTION_VERSION {
+        return Err("账号 token 加密版本不受支持".to_string());
+    }
+    let cipher = account_token_cipher()?;
+    let nonce = general_purpose::STANDARD
+        .decode(envelope.nonce.trim())
+        .map_err(|e| format!("解析账号 token nonce 失败: {}", e))?;
+    if nonce.len() != 12 {
+        return Err("账号 token nonce 长度无效".to_string());
+    }
+    let ciphertext = general_purpose::STANDARD
+        .decode(envelope.ciphertext.trim())
+        .map_err(|e| format!("解析账号 token 密文失败: {}", e))?;
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+        .map_err(|e| format!("解密账号 token 失败: {:?}", e))?;
+    serde_json::from_slice::<TokenData>(&plaintext)
+        .map_err(|e| format!("解析账号 token 明文失败: {}", e))
+}
+
+fn should_rotate_token_envelope(envelope: &EncryptedTokenEnvelope) -> bool {
+    chrono::Utc::now().timestamp() - envelope.encrypted_at > ACCOUNT_TOKEN_ROTATION_SECONDS
+}
+
+fn serialize_account_for_storage(account: &Account) -> Result<String, String> {
+    let mut value =
+        serde_json::to_value(account).map_err(|e| format!("序列化账号数据失败: {}", e))?;
+    let Some(object) = value.as_object_mut() else {
+        return Err("账号数据结构无效".to_string());
     };
-
-    if crate::modules::fingerprint::get_fingerprint(fp_id).is_err() {
-        modules::logger::log_warn(&format!(
-            "删除账号时发现指纹不存在，跳过映射记录: email={}, fingerprint_id={}",
-            mask_email(&account.email),
-            fp_id
-        ));
-        return Ok(());
-    }
-
-    let mut bindings = load_deleted_account_fp_bindings()?;
-    bindings.by_email.insert(key, fp_id.clone());
-    save_deleted_account_fp_bindings(&bindings)?;
-    Ok(())
+    object.remove("token");
+    object.insert(
+        "token_encrypted".to_string(),
+        serde_json::to_value(encrypt_token_value(&account.token)?)
+            .map_err(|e| format!("序列化账号 token 密文失败: {}", e))?,
+    );
+    serde_json::to_string_pretty(&value).map_err(|e| format!("序列化账号数据失败: {}", e))
 }
 
-fn lookup_deleted_account_fingerprint(email: &str) -> Result<Option<String>, String> {
-    let key = normalize_account_email_key(email);
-    if key.is_empty() {
-        return Ok(None);
-    }
+fn deserialize_account_from_storage(
+    account_path: &PathBuf,
+    content: &str,
+) -> Result<Account, String> {
+    let mut value = serde_json::from_str::<serde_json::Value>(content)
+        .map_err(|e| format!("解析账号数据失败: {}", e))?;
+    let mut needs_migration = false;
+    let mut needs_rotation = false;
 
-    let bindings = load_deleted_account_fp_bindings()?;
-    let Some(fp_id) = bindings.by_email.get(&key).cloned() else {
-        return Ok(None);
-    };
-
-    if crate::modules::fingerprint::get_fingerprint(&fp_id).is_ok() {
-        Ok(Some(fp_id))
+    if value.get("token").is_none() {
+        let encrypted = value
+            .get("token_encrypted")
+            .cloned()
+            .ok_or_else(|| "账号数据缺少 token".to_string())?;
+        let envelope = serde_json::from_value::<EncryptedTokenEnvelope>(encrypted)
+            .map_err(|e| format!("解析账号 token 密文失败: {}", e))?;
+        let token = decrypt_token_envelope(&envelope)?;
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "token".to_string(),
+                serde_json::to_value(token).map_err(|e| format!("还原账号 token 失败: {}", e))?,
+            );
+        }
+        needs_rotation = should_rotate_token_envelope(&envelope);
     } else {
-        modules::logger::log_warn(&format!(
-            "账号重建时命中过期指纹映射，已忽略: email={}, fingerprint_id={}",
-            mask_email(email),
-            fp_id
-        ));
-        let _ = clear_deleted_account_fingerprint(email);
-        Ok(None)
-    }
-}
-
-fn clear_deleted_account_fingerprint(email: &str) -> Result<(), String> {
-    let key = normalize_account_email_key(email);
-    if key.is_empty() {
-        return Ok(());
+        needs_migration = true;
     }
 
-    let mut bindings = load_deleted_account_fp_bindings()?;
-    if bindings.by_email.remove(&key).is_some() {
-        save_deleted_account_fp_bindings(&bindings)?;
+    if let Some(object) = value.as_object_mut() {
+        object.remove("token_encrypted");
     }
-    Ok(())
+
+    let account =
+        serde_json::from_value::<Account>(value).map_err(|e| format!("解析账号数据失败: {}", e))?;
+
+    if needs_migration || needs_rotation {
+        let account_for_rewrite = account.clone();
+        modules::deferred_account_rewrite::schedule_account_rewrite_if_unchanged(
+            "antigravity",
+            account_for_rewrite.id.clone(),
+            account_path.clone(),
+            content.as_bytes(),
+            move || serialize_account_for_storage(&account_for_rewrite),
+        );
+    }
+
+    Ok(account)
 }
 
 /// 获取数据目录路径
@@ -238,6 +257,26 @@ pub fn resolve_data_dir() -> Result<PathBuf, String> {
 }
 
 pub fn get_data_dir() -> Result<PathBuf, String> {
+    // #816: tests can isolate storage via env without touching real user data.
+    // Prefer COCKPIT_TOOLS_TEST_DATA_DIR (community PR name); keep COCKPIT_TEST_DATA_DIR alias.
+    for key in [
+        "COCKPIT_TOOLS_TEST_DATA_DIR",
+        "COCKPIT_TEST_DATA_DIR",
+        "COCKPIT_TOOLS_DATA_DIR",
+    ] {
+        if let Ok(override_dir) = std::env::var(key) {
+            let override_dir = override_dir.trim();
+            if !override_dir.is_empty() {
+                let data_dir = PathBuf::from(override_dir);
+                if !data_dir.exists() {
+                    fs::create_dir_all(&data_dir)
+                        .map_err(|e| format!("创建测试数据目录失败: {}", e))?;
+                }
+                return Ok(data_dir);
+            }
+        }
+    }
+
     let data_dir = resolve_data_dir()?;
 
     if !data_dir.exists() {
@@ -397,8 +436,7 @@ pub fn load_account(account_id: &str) -> Result<Account, String> {
     let content =
         fs::read_to_string(&account_path).map_err(|e| format!("读取账号数据失败: {}", e))?;
 
-    crate::modules::atomic_write::parse_json_with_auto_restore::<Account>(&account_path, &content)
-        .map_err(|e| format!("解析账号数据失败: {}", e))
+    deserialize_account_from_storage(&account_path, &content)
 }
 
 /// 保存账号数据
@@ -406,8 +444,7 @@ pub fn save_account(account: &Account) -> Result<(), String> {
     let accounts_dir = get_accounts_dir()?;
     let account_path = accounts_dir.join(format!("{}.json", account.id));
 
-    let content =
-        serde_json::to_string_pretty(account).map_err(|e| format!("序列化账号数据失败: {}", e))?;
+    let content = serialize_account_for_storage(account)?;
 
     crate::modules::atomic_write::write_string_atomic(&account_path, &content)
         .map_err(|e| format!("保存账号数据失败: {}", e))?;
@@ -575,30 +612,6 @@ pub fn add_account(
     let mut account = Account::new(account_id.clone(), email.clone(), token);
     account.name = name.clone();
 
-    let reused_fp_id = match lookup_deleted_account_fingerprint(&email) {
-        Ok(fp_id) => fp_id,
-        Err(e) => {
-            modules::logger::log_warn(&format!(
-                "读取已删除账号指纹映射失败，回退为新建指纹: email={}, error={}",
-                mask_email(&email),
-                e
-            ));
-            None
-        }
-    };
-
-    if let Some(ref fp_id) = reused_fp_id {
-        account.fingerprint_id = Some(fp_id.clone());
-        modules::logger::log_info(&format!(
-            "账号复用已删除映射指纹: email={}, fingerprint_id={}",
-            mask_email(&email),
-            fp_id
-        ));
-    } else {
-        let fingerprint = crate::modules::fingerprint::generate_fingerprint(email.clone())?;
-        account.fingerprint_id = Some(fingerprint.id.clone());
-    }
-
     save_account(&account)?;
 
     index.accounts.push(AccountSummary {
@@ -610,16 +623,6 @@ pub fn add_account(
     });
 
     save_account_index(&index)?;
-
-    if reused_fp_id.is_some() {
-        if let Err(e) = clear_deleted_account_fingerprint(&email) {
-            modules::logger::log_warn(&format!(
-                "清理已删除账号指纹映射失败: email={}, error={}",
-                mask_email(&email),
-                e
-            ));
-        }
-    }
 
     Ok(account)
 }
@@ -661,8 +664,6 @@ pub fn upsert_account(
                 modules::logger::log_warn(&format!("账号文件缺失，正在重建: {}", e));
                 let mut account = Account::new(account_id.clone(), email.clone(), token);
                 account.name = name.clone();
-                let fingerprint = crate::modules::fingerprint::generate_fingerprint(email.clone())?;
-                account.fingerprint_id = Some(fingerprint.id.clone());
                 save_account(&account)?;
 
                 if let Some(idx_summary) = index.accounts.iter_mut().find(|s| s.id == account_id) {
@@ -686,17 +687,6 @@ pub fn delete_account(account_id: &str) -> Result<(), String> {
         .map_err(|e| format!("获取锁失败: {}", e))?;
     let mut index = load_account_index()?;
 
-    if let Ok(account) = load_account(account_id) {
-        if let Err(e) = remember_deleted_account_fingerprint(&account) {
-            modules::logger::log_warn(&format!(
-                "记录删除账号指纹映射失败: account_id={}, email={}, error={}",
-                account_id,
-                mask_email(&account.email),
-                e
-            ));
-        }
-    }
-
     let original_len = index.accounts.len();
     index.accounts.retain(|s| s.id != account_id);
 
@@ -714,7 +704,8 @@ pub fn delete_account(account_id: &str) -> Result<(), String> {
     let account_path = accounts_dir.join(format!("{}.json", account_id));
 
     if account_path.exists() {
-        fs::remove_file(&account_path).map_err(|e| format!("删除账号文件失败: {}", e))?;
+        crate::modules::atomic_write::remove_file_locked(&account_path)
+            .map_err(|e| format!("删除账号文件失败: {}", e))?;
     }
 
     Ok(())
@@ -730,17 +721,6 @@ pub fn delete_accounts(account_ids: &[String]) -> Result<(), String> {
     let accounts_dir = get_accounts_dir()?;
 
     for account_id in account_ids {
-        if let Ok(account) = load_account(account_id) {
-            if let Err(e) = remember_deleted_account_fingerprint(&account) {
-                modules::logger::log_warn(&format!(
-                    "批量删除时记录账号指纹映射失败: account_id={}, email={}, error={}",
-                    account_id,
-                    mask_email(&account.email),
-                    e
-                ));
-            }
-        }
-
         index.accounts.retain(|s| &s.id != account_id);
 
         if index.current_account_id.as_deref() == Some(account_id) {
@@ -749,7 +729,7 @@ pub fn delete_accounts(account_ids: &[String]) -> Result<(), String> {
 
         let account_path = accounts_dir.join(format!("{}.json", account_id));
         if account_path.exists() {
-            let _ = fs::remove_file(&account_path);
+            let _ = crate::modules::atomic_write::remove_file_locked(&account_path);
         }
     }
 
@@ -876,109 +856,6 @@ pub fn update_account_quota(account_id: &str, quota: QuotaData) -> Result<(), St
         let _ = modules::quota_cache::write_quota_cache("authorized", &account.email, quota);
     }
     Ok(())
-}
-
-/// 设备指纹信息（兼容旧 API）
-#[derive(Debug, Serialize)]
-pub struct DeviceProfiles {
-    pub current_storage: Option<DeviceProfile>,
-    pub bound_profile: Option<DeviceProfile>,
-    pub history: Vec<DeviceProfileVersion>,
-    pub baseline: Option<DeviceProfile>,
-}
-
-pub fn get_device_profiles(account_id: &str) -> Result<DeviceProfiles, String> {
-    let storage_path = crate::modules::device::get_storage_path()?;
-    let current = crate::modules::device::read_profile(&storage_path).ok();
-    let account = load_account(account_id)?;
-
-    // 获取账号绑定的指纹
-    let bound = account
-        .fingerprint_id
-        .as_ref()
-        .and_then(|fp_id| crate::modules::fingerprint::get_fingerprint(fp_id).ok())
-        .map(|fp| fp.profile);
-
-    // 获取原始指纹
-    let baseline = crate::modules::fingerprint::load_fingerprint_store()
-        .ok()
-        .and_then(|store| store.original_baseline)
-        .map(|fp| fp.profile);
-
-    Ok(DeviceProfiles {
-        current_storage: current,
-        bound_profile: bound,
-        history: Vec::new(), // 历史功能已移除
-        baseline,
-    })
-}
-
-/// 绑定设备指纹（兼容旧 API，现在会创建新指纹并绑定）
-pub fn bind_device_profile(account_id: &str, mode: &str) -> Result<DeviceProfile, String> {
-    let name = format!("自动生成 {}", chrono::Utc::now().format("%Y-%m-%d %H:%M"));
-
-    let fingerprint = match mode {
-        "capture" => crate::modules::fingerprint::capture_fingerprint(name)?,
-        "generate" => crate::modules::fingerprint::generate_fingerprint(name)?,
-        _ => return Err("mode 只能是 capture 或 generate".to_string()),
-    };
-
-    // 绑定到账号
-    let mut account = load_account(account_id)?;
-    account.fingerprint_id = Some(fingerprint.id.clone());
-    save_account(&account)?;
-
-    Ok(fingerprint.profile)
-}
-
-/// 使用指定的 profile 绑定（创建新指纹并绑定）
-pub fn bind_device_profile_with_profile(
-    account_id: &str,
-    profile: DeviceProfile,
-) -> Result<DeviceProfile, String> {
-    use crate::modules::fingerprint;
-
-    let name = format!("自动生成 {}", chrono::Utc::now().format("%Y-%m-%d %H:%M"));
-
-    // 创建新指纹
-    let mut store = fingerprint::load_fingerprint_store()?;
-    let fp = fingerprint::Fingerprint::new(name, profile.clone());
-    store.fingerprints.push(fp.clone());
-    fingerprint::save_fingerprint_store(&store)?;
-
-    // 绑定到账号
-    let mut account = load_account(account_id)?;
-    account.fingerprint_id = Some(fp.id.clone());
-    save_account(&account)?;
-
-    // 应用到系统
-    if let Ok(storage_path) = crate::modules::device::get_storage_path() {
-        let _ = crate::modules::device::write_profile(&storage_path, &fp.profile);
-    }
-
-    Ok(fp.profile)
-}
-
-/// 列出指纹版本（兼容旧 API）
-pub fn list_device_versions(account_id: &str) -> Result<DeviceProfiles, String> {
-    get_device_profiles(account_id)
-}
-
-/// 恢复指纹版本（兼容旧 API）
-pub fn restore_device_version(
-    _account_id: &str,
-    version_id: &str,
-) -> Result<DeviceProfile, String> {
-    // 直接应用指定的指纹
-    let fingerprint = crate::modules::fingerprint::get_fingerprint(version_id)?;
-    let _ = crate::modules::fingerprint::apply_fingerprint(version_id);
-    Ok(fingerprint.profile)
-}
-
-/// 删除历史指纹（兼容旧 API - 已废弃）
-
-pub fn delete_device_version(_account_id: &str, version_id: &str) -> Result<(), String> {
-    crate::modules::fingerprint::delete_fingerprint(version_id)
 }
 
 #[derive(Serialize)]
@@ -1592,7 +1469,7 @@ fn build_quota_alert_notification_text(payload: &QuotaAlertPayload) -> (String, 
         "windsurf" => "Windsurf",
         "kiro" => "Kiro",
         "cursor" => "Cursor",
-        "gemini" => "Gemini Cli",
+        "grok" => "Grok CLI",
         "codebuddy" => "CodeBuddy",
         "zed" => "Zed",
         _ => "Antigravity IDE",
@@ -2057,9 +1934,16 @@ pub async fn fetch_quota_with_fresh_token(
 }
 
 /// 内部切换账号函数（供 WebSocket 调用）
-/// 完整流程：Token刷新 + 关闭程序 + 注入 + 指纹同步 + 重启
+/// 完整流程：Token刷新 + 关闭程序 + 注入 + 重启
 pub async fn switch_account_internal(account_id: &str) -> Result<Account, String> {
     modules::logger::log_info("[Switch] 开始切换账号");
+
+    if !modules::config::get_user_config().antigravity_launch_on_switch {
+        modules::logger::log_info(
+            "[Switch] 切号启动 Antigravity IDE 已关闭，改为仅写入默认账号数据",
+        );
+        return switch_account_local_no_restart(account_id).await;
+    }
 
     // 路径缺失时不执行关闭/注入，避免破坏当前运行态。
     modules::process::ensure_antigravity_launch_path_configured()?;
@@ -2068,20 +1952,7 @@ pub async fn switch_account_internal(account_id: &str) -> Result<Account, String
     let mut account = prepare_account_for_injection(account_id).await?;
     modules::logger::log_info("[Switch] 正在切换到账号");
 
-    // 3. 写入设备指纹到 storage.json
-    if let Ok(storage_path) = modules::device::get_storage_path() {
-        if let Some(ref fp_id) = account.fingerprint_id {
-            // 优先使用绑定的指纹
-            if let Ok(fingerprint) = modules::fingerprint::get_fingerprint(fp_id) {
-                modules::logger::log_info("[Switch] 写入设备指纹");
-                let _ = modules::device::write_profile(&storage_path, &fingerprint.profile);
-                let _ =
-                    modules::db::write_service_machine_id(&fingerprint.profile.service_machine_id);
-            }
-        }
-    }
-
-    // 4. 更新工具内部状态
+    // 3. 更新工具内部状态
     set_current_account_id(account_id)?;
     account.update_last_used();
     save_account(&account)?;
@@ -2382,22 +2253,8 @@ pub async fn switch_account_dual_no_restart(
     }
 }
 
-fn apply_bound_fingerprint_for_switch(account: &Account) {
-    if let Ok(storage_path) = modules::device::get_storage_path() {
-        if let Some(ref fp_id) = account.fingerprint_id {
-            if let Ok(fingerprint) = modules::fingerprint::get_fingerprint(fp_id) {
-                modules::logger::log_info("[Switch] 写入设备指纹");
-                let _ = modules::device::write_profile(&storage_path, &fingerprint.profile);
-                let _ =
-                    modules::db::write_service_machine_id(&fingerprint.profile.service_machine_id);
-                let _ = modules::fingerprint::set_current_fingerprint_id(fp_id);
-            }
-        }
-    }
-}
-
 /// 本地切号（不关闭/不重启 Antigravity IDE）
-/// 流程：Token刷新 + 本地状态更新 + 指纹同步 + 默认实例注入
+/// 流程：Token刷新 + 本地状态更新 + 默认实例注入
 pub async fn switch_account_local_no_restart(account_id: &str) -> Result<Account, String> {
     modules::logger::log_info(&format!(
         "[Switch][NoRestart] 开始本地切号: account_id={}",
@@ -2420,8 +2277,6 @@ pub async fn switch_account_local_no_restart(account_id: &str) -> Result<Account
             e
         ));
     }
-
-    apply_bound_fingerprint_for_switch(&account);
 
     let default_dir = modules::instance::get_default_user_data_dir()?;
     modules::instance::inject_account_to_profile(&default_dir, account_id)?;

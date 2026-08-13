@@ -2,6 +2,7 @@ export interface CodexApiProviderPreset {
   id: string;
   name: string;
   baseUrls: string[];
+  modelCatalog?: string[];
   website?: string;
   apiKeyUrl?: string;
   isOfficial?: boolean;
@@ -13,6 +14,12 @@ export const CODEX_API_PROVIDER_CUSTOM_ID = "custom";
 export const COCKPIT_API_PROVIDER_ID = "cockpit_api";
 export const COCKPIT_API_PROVIDER_NAME = "Cockpit Api";
 export const COCKPIT_API_BASE_URL = "https://chongcodex.cn/v1";
+export const DEEPSEEK_API_PROVIDER_ID = "deepseek";
+export const DEEPSEEK_API_BASE_URL = "https://api.deepseek.com";
+export const DEEPSEEK_CODEX_MODEL_CATALOG = [
+  "deepseek-v4-flash",
+  "deepseek-v4-pro",
+] as const;
 
 const COCKPIT_API_HIDDEN_BASE_URLS = [COCKPIT_API_BASE_URL] as const;
 
@@ -166,9 +173,10 @@ export const CODEX_API_PROVIDER_PRESETS: readonly CodexApiProviderPreset[] = [
     isPartner: true,
   },
   {
-    id: "deepseek",
+    id: DEEPSEEK_API_PROVIDER_ID,
     name: "DeepSeek",
-    baseUrls: ["https://api.deepseek.com/v1"],
+    baseUrls: [DEEPSEEK_API_BASE_URL, `${DEEPSEEK_API_BASE_URL}/v1`],
+    modelCatalog: [...DEEPSEEK_CODEX_MODEL_CATALOG],
     website: "https://platform.deepseek.com/",
     apiKeyUrl: "https://platform.deepseek.com/api_keys",
   },
@@ -176,6 +184,7 @@ export const CODEX_API_PROVIDER_PRESETS: readonly CodexApiProviderPreset[] = [
     id: "moonshot",
     name: "Moonshot",
     baseUrls: ["https://api.moonshot.cn/v1"],
+    modelCatalog: ["kimi-k2.6"],
     website: "https://platform.moonshot.cn/",
   },
   {
@@ -183,6 +192,164 @@ export const CODEX_API_PROVIDER_PRESETS: readonly CodexApiProviderPreset[] = [
     name: "SiliconFlow",
     baseUrls: ["https://api.siliconflow.cn/v1"],
     website: "https://cloud.siliconflow.cn/",
+  },
+  {
+    id: "siliconflow_en",
+    name: "SiliconFlow en",
+    baseUrls: ["https://api.siliconflow.com/v1"],
+    website: "https://siliconflow.com/",
+  },
+  {
+    id: "zhipu_glm",
+    name: "Zhipu GLM",
+    baseUrls: ["https://open.bigmodel.cn/api/coding/paas/v4"],
+    modelCatalog: ["glm-5.1"],
+    website: "https://open.bigmodel.cn",
+    apiKeyUrl: "https://www.bigmodel.cn/claude-code?ic=RRVJPB5SII",
+  },
+  {
+    id: "zhipu_glm_en",
+    name: "Zhipu GLM en",
+    baseUrls: ["https://api.z.ai/api/coding/paas/v4"],
+    modelCatalog: ["glm-5.1"],
+    website: "https://z.ai",
+    apiKeyUrl: "https://z.ai/subscribe?ic=8JVLJQFSKB",
+  },
+  {
+    id: "volcengine_agentplan",
+    name: "火山Agentplan",
+    baseUrls: ["https://ark.cn-beijing.volces.com/api/coding/v3"],
+    website: "https://www.volcengine.com/product/ark",
+  },
+  {
+    id: "byteplus",
+    name: "BytePlus",
+    baseUrls: ["https://ark.ap-southeast.bytepluses.com/api/coding/v3"],
+    website: "https://www.byteplus.com/en/product/ark",
+  },
+  {
+    id: "doubaoseed",
+    name: "DouBaoSeed",
+    baseUrls: ["https://ark.cn-beijing.volces.com/api/v3"],
+    website: "https://www.volcengine.com/product/ark",
+  },
+  {
+    id: "qianfan_coding",
+    name: "Baidu Qianfan Coding Plan",
+    baseUrls: ["https://qianfan.baidubce.com/v2/coding"],
+    website: "https://qianfan.cloud.baidu.com/",
+  },
+  {
+    id: "bailian",
+    name: "Bailian",
+    baseUrls: ["https://dashscope.aliyuncs.com/compatible-mode/v1"],
+    website: "https://bailian.console.aliyun.com/",
+  },
+  {
+    id: "stepfun",
+    name: "StepFun",
+    baseUrls: ["https://api.stepfun.com/step_plan/v1"],
+    website: "https://platform.stepfun.com/",
+  },
+  {
+    id: "stepfun_en",
+    name: "StepFun en",
+    baseUrls: ["https://api.stepfun.ai/step_plan/v1"],
+    website: "https://platform.stepfun.ai/",
+  },
+  {
+    id: "modelscope",
+    name: "ModelScope",
+    baseUrls: ["https://api-inference.modelscope.cn/v1"],
+    website: "https://modelscope.cn/",
+  },
+  {
+    id: "longcat",
+    name: "Longcat",
+    baseUrls: ["https://api.longcat.chat/openai/v1"],
+    website: "https://longcat.chat/",
+  },
+  {
+    id: "minimax",
+    name: "MiniMax",
+    baseUrls: ["https://api.minimaxi.com/v1"],
+    modelCatalog: ["MiniMax-M3", "MiniMax-M2.7"],
+    website: "https://platform.minimaxi.com/docs",
+  },
+  {
+    id: "minimax_en",
+    name: "MiniMax en",
+    baseUrls: ["https://api.minimax.io/v1"],
+    modelCatalog: ["MiniMax-M3", "MiniMax-M2.7"],
+    website: "https://platform.minimax.io/docs",
+  },
+  {
+    id: "bailing",
+    name: "BaiLing",
+    baseUrls: ["https://api.tbox.cn/api/llm/v1"],
+    website: "https://www.tbox.cn/",
+  },
+  {
+    id: "xiaomi_mimo",
+    name: "Xiaomi MiMo",
+    baseUrls: ["https://api.xiaomimimo.com/v1"],
+    website: "https://www.xiaomimimo.com/",
+  },
+  {
+    id: "xiaomi_mimo_token_plan",
+    name: "Xiaomi MiMo Token Plan",
+    baseUrls: ["https://token-plan-cn.xiaomimimo.com/v1"],
+    website: "https://www.xiaomimimo.com/",
+  },
+  {
+    id: "novita",
+    name: "Novita AI",
+    baseUrls: ["https://api.novita.ai/openai/v1"],
+    website: "https://novita.ai/",
+  },
+  {
+    id: "nvidia",
+    name: "Nvidia",
+    baseUrls: ["https://integrate.api.nvidia.com/v1"],
+    website: "https://build.nvidia.com/",
+  },
+  {
+    id: "runapi",
+    name: "RunAPI",
+    baseUrls: ["https://runapi.co/v1"],
+    website: "https://runapi.co/",
+  },
+  {
+    id: "relaxycode",
+    name: "RelaxyCode",
+    baseUrls: ["https://www.relaxycode.com/v1"],
+    website: "https://www.relaxycode.com/",
+  },
+  {
+    id: "compshare_coding",
+    name: "Compshare Coding Plan",
+    baseUrls: ["https://cp.compshare.cn/v1"],
+    website: "https://www.compshare.cn",
+    apiKeyUrl:
+      "https://www.compshare.cn/coding-plan?ytag=GPU_YY_YX_git_cc-switch",
+  },
+  {
+    id: "lemondata",
+    name: "E-FlowCode",
+    baseUrls: ["https://api.lemondata.cc/v1", "https://e-flowcode.cc/v1"],
+    website: "https://e-flowcode.cc/",
+  },
+  {
+    id: "pipellm",
+    name: "PIPELLM",
+    baseUrls: ["https://cc-api.pipellm.ai/v1"],
+    website: "https://code.pipellm.ai/",
+  },
+  {
+    id: "therouter",
+    name: "TheRouter",
+    baseUrls: ["https://api.therouter.ai/v1"],
+    website: "https://therouter.ai/",
   },
 ];
 

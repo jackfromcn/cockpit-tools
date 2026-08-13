@@ -1046,7 +1046,7 @@ export function SettingsAccountTransferSection() {
 
       {showExportOptionsModal &&
         renderToBody(
-          <div className="modal-overlay" onClick={closeExportOptionsModal}>
+          <div className="modal-overlay">
             <div className="modal settings-transfer-modal" onClick={(event) => event.stopPropagation()}>
               <div className="modal-header">
                 <button className="btn btn-secondary icon-only" onClick={closeExportOptionsModal} title={t('common.back', '返回')} aria-label={t('common.back', '返回')}><ChevronLeft size={14} /></button>
@@ -1097,7 +1097,7 @@ export function SettingsAccountTransferSection() {
 
       {showImportModal &&
         renderToBody(
-          <div className="modal-overlay" onClick={closeImportModal}>
+          <div className="modal-overlay">
             <div className="modal settings-transfer-modal" onClick={(event) => event.stopPropagation()}>
               <div className="modal-header">
                 <button className="btn btn-secondary icon-only" onClick={closeImportModal} title={t('common.back', '返回')} aria-label={t('common.back', '返回')}><ChevronLeft size={14} /></button>
@@ -1231,7 +1231,7 @@ export function SettingsAccountTransferSection() {
 
       {showBackupManagerModal &&
         renderToBody(
-          <div className="modal-overlay" onClick={closeBackupManagerModal}>
+          <div className="modal-overlay">
             <div
               className="modal settings-transfer-modal settings-backup-modal"
               onClick={(event) => event.stopPropagation()}

@@ -2,7 +2,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -12,6 +12,7 @@ use crate::modules::{account, kiro_oauth, logger};
 const ACCOUNTS_INDEX_FILE: &str = "kiro_accounts.json";
 const ACCOUNTS_DIR: &str = "kiro_accounts";
 const LOCAL_AUTH_TOKEN_FILE_NAME: &str = "kiro-auth-token.json";
+const AWS_SSO_CLIENT_ID_HASH_LENGTH: usize = 40;
 const LOCAL_USAGE_DB_KEY: &str = "kiro.kiroAgent";
 const KIRO_QUOTA_ALERT_COOLDOWN_SECONDS: i64 = 10 * 60;
 
@@ -1411,6 +1412,66 @@ pub fn get_default_kiro_auth_token_path() -> Result<PathBuf, String> {
         .join(LOCAL_AUTH_TOKEN_FILE_NAME))
 }
 
+fn idc_client_registration_path(cache_dir: &Path, client_id_hash: &str) -> Result<PathBuf, String> {
+    let hash = client_id_hash;
+    let is_lower_hex = hash
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if hash.len() != AWS_SSO_CLIENT_ID_HASH_LENGTH || !is_lower_hex {
+        return Err("Kiro 本地授权文件中的 clientIdHash 格式无效".to_string());
+    }
+
+    Ok(cache_dir.join(format!("{}.json", hash)))
+}
+
+pub(crate) fn read_idc_client_registration_from_cache_dir(
+    auth_token: &Value,
+    cache_dir: &Path,
+) -> Result<Option<Value>, String> {
+    let Some(client_id_hash) = auth_token.get("clientIdHash") else {
+        return Ok(None);
+    };
+    let client_id_hash = client_id_hash
+        .as_str()
+        .ok_or_else(|| "Kiro 本地授权文件中的 clientIdHash 必须是字符串".to_string())?;
+    let path = idc_client_registration_path(cache_dir, client_id_hash)?;
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(format!(
+                "读取 Kiro IdC 客户端注册文件失败({}): {}",
+                path.display(),
+                err
+            ));
+        }
+    };
+    let parsed = serde_json::from_str::<Value>(&raw).map_err(|err| {
+        format!(
+            "解析 Kiro IdC 客户端注册文件失败({}): {}",
+            path.display(),
+            err
+        )
+    })?;
+    if !parsed.is_object() {
+        return Err(format!(
+            "解析 Kiro IdC 客户端注册文件失败({}): 根节点必须是对象",
+            path.display()
+        ));
+    }
+    Ok(Some(parsed))
+}
+
+pub(crate) fn read_local_idc_client_registration(
+    auth_token: &Value,
+) -> Result<Option<Value>, String> {
+    let auth_token_path = get_default_kiro_auth_token_path()?;
+    let cache_dir = auth_token_path
+        .parent()
+        .ok_or_else(|| "无法解析 AWS SSO 缓存目录".to_string())?;
+    read_idc_client_registration_from_cache_dir(auth_token, cache_dir)
+}
+
 pub fn read_local_auth_token_json() -> Result<Option<Value>, String> {
     let path = get_default_kiro_auth_token_path()?;
     if !path.exists() {
@@ -1462,5 +1523,95 @@ pub fn read_local_usage_snapshot() -> Result<Option<Value>, String> {
             Ok(Some(parsed))
         }
         None => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const CLIENT_ID_HASH: &str = "eb04fe0de39241e4fa17bec175f7540138ad1bd8";
+
+    fn create_cache_fixture(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "cockpit-tools-kiro-idc-{}-{}",
+            name,
+            std::process::id()
+        ));
+        if path.exists() {
+            fs::remove_dir_all(&path).expect("remove stale Kiro IdC fixture");
+        }
+        fs::create_dir_all(&path).expect("create Kiro IdC fixture");
+        path
+    }
+
+    #[test]
+    fn idc_registration_reads_only_the_file_named_by_client_id_hash() {
+        let cache_dir = create_cache_fixture("exact-hash");
+        fs::write(
+            cache_dir.join(format!("{}.json", CLIENT_ID_HASH)),
+            r#"{"clientId":"expected-client","clientSecret":"expected-secret"}"#,
+        )
+        .expect("write expected registration");
+        fs::write(
+            cache_dir.join("unrelated.json"),
+            r#"{"clientId":"wrong-client","clientSecret":"wrong-secret"}"#,
+        )
+        .expect("write decoy registration");
+
+        let registration = read_idc_client_registration_from_cache_dir(
+            &json!({"clientIdHash": CLIENT_ID_HASH}),
+            &cache_dir,
+        )
+        .expect("read registration")
+        .expect("registration should exist");
+
+        assert_eq!(
+            registration.get("clientId").and_then(Value::as_str),
+            Some("expected-client")
+        );
+        fs::remove_dir_all(cache_dir).expect("remove Kiro IdC fixture");
+    }
+
+    #[test]
+    fn idc_registration_does_not_scan_when_exact_hash_is_missing() {
+        let cache_dir = create_cache_fixture("no-scan");
+        fs::write(
+            cache_dir.join("unrelated.json"),
+            r#"{"clientId":"wrong-client","clientSecret":"wrong-secret"}"#,
+        )
+        .expect("write decoy registration");
+
+        let registration = read_idc_client_registration_from_cache_dir(
+            &json!({"clientIdHash": CLIENT_ID_HASH}),
+            &cache_dir,
+        )
+        .expect("missing exact registration is allowed");
+
+        assert!(registration.is_none());
+        fs::remove_dir_all(cache_dir).expect("remove Kiro IdC fixture");
+    }
+
+    #[test]
+    fn idc_registration_rejects_noncanonical_client_id_hashes() {
+        let cache_dir = create_cache_fixture("invalid-hash");
+        let invalid_hashes = [
+            "../eb04fe0de39241e4fa17bec175f7540138ad1bd8",
+            "EB04FE0DE39241E4FA17BEC175F7540138AD1BD8",
+            "eb04fe0de39241e4fa17bec175f7540138ad1bd8 ",
+            "eb04fe0de39241e4fa17bec175f7540138ad1bd",
+            "gb04fe0de39241e4fa17bec175f7540138ad1bd8",
+        ];
+
+        for hash in invalid_hashes {
+            let result = read_idc_client_registration_from_cache_dir(
+                &json!({"clientIdHash": hash}),
+                &cache_dir,
+            );
+            assert!(result.is_err(), "hash should be rejected: {}", hash);
+        }
+
+        fs::remove_dir_all(cache_dir).expect("remove Kiro IdC fixture");
     }
 }

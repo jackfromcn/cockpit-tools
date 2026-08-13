@@ -12,7 +12,7 @@ import {
 } from '../presentation/platformAccountPresentation';
 
 /**
- * GitHub Copilot 多开实例内容组件（不包含 header）
+ * GitHub Copilot 应用多开内容组件（不包含 header）
  * 用于嵌入到 GitHubCopilotAccountsPage 中
  */
 interface GitHubCopilotInstancesContentProps {
@@ -74,7 +74,7 @@ export function GitHubCopilotInstancesContent({
       unsupportedTitleKey="common.shared.instances.unsupported.title"
       unsupportedTitleDefault="暂不支持当前系统"
       unsupportedDescKey="githubCopilot.instances.unsupported.descPlatform"
-      unsupportedDescDefault="GitHub Copilot 多开实例仅支持 macOS、Windows 和 Linux。"
+      unsupportedDescDefault="GitHub Copilot 应用多开仅支持 macOS、Windows 和 Linux。"
     />
   );
 }

@@ -162,13 +162,26 @@ export async function initI18n(): Promise<void> {
 
   return initPromise;
 }
+
+export async function syncLanguage(lang: string): Promise<string> {
+  await initI18n();
+  const resolved = await ensureLanguageResources(lang);
+  if (i18n.language !== resolved) {
+    await i18n.changeLanguage(resolved);
+  }
+  try {
+    localStorage.setItem('app-language', resolved);
+  } catch {
+    // ignore localStorage write failures
+  }
+  return resolved;
+}
+
 /**
  * 切换语言
  */
 export async function changeLanguage(lang: string): Promise<void> {
-  const resolved = await ensureLanguageResources(lang);
-  await i18n.changeLanguage(resolved);
-  localStorage.setItem('app-language', resolved);
+  await syncLanguage(lang);
 }
 
 /**
